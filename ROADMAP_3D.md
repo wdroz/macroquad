@@ -1,6 +1,7 @@
 # 3D roadmap
 
-Enhancements since last fixer round: 1
+Enhancements since last fixer round: 2
+Fixer rounds since last game round: 0
 
 Source of truth for the unattended 3D enhancement bot on this fork. The goal is to make 3D games easier to build with macroquad: collision primitives, raycasting, simple rigid-body physics, collision response, a character controller, and spatial partitioning.
 
@@ -8,17 +9,21 @@ Macroquad stays a thin, beginner-friendly layer over `glam` (already re-exported
 
 ## How a round uses this file
 
-- The counter line above is authoritative.
-- If the counter is **below 5**, this is an **enhancement** round: implement **only** the first unchecked item, in the style of the surrounding code. Then tick it, append a dated log line, and increment the counter by 1.
+- The counter line above is authoritative. `Fixer rounds since last game round` is the second counter. Enhancement rounds leave it unchanged. When it is 2, the round is a game round instead of an enhancement or a fixer; a game round sets it back to 0.
+- If the counter is **below 5** and this is not a game round, this is an **enhancement** round: implement **only** the first unchecked item, in the style of the surrounding code. Then tick it, append a dated log line, and increment the counter by 1.
 - If the counter is **5 or more**, this is a **fixer** round: do not add a feature. Review the work logged since the previous fixer entry, fix bugs, doc gaps, missing tests, and API inconsistencies, then set the counter back to 0 and append a fixer log line.
 - Keep each enhancement small enough to review as one commit. Leave later items alone even if they would be easy to fold in.
 - Math primitives live in `macroquad::math` and show up through `use macroquad::prelude::*`. Types that need the GPU or the window (`draw_*`, camera unprojection) live next to the existing draw/camera code. Stateful worlds (rigid bodies, character controller, grids) can live in their own module once the pure queries they depend on exist.
 - Boxes and rays are axis-aligned in **world space**. Do not assume Y-up or Z-up; `Camera3D::up` is caller-defined. `draw_cube` / `draw_cube_wires` take a center and a full size; `Aabb::from_center_size` matches that.
 
+## Pain points from game rounds
+
+(none yet)
+
 ## Priorities
 
 - [x] **AABB** — `Aabb` in `macroquad::math`: min/max corners, `from_center_size` (same center and full size as `draw_cube`), `from_points`, containment, overlap, intersection, union, closest point, expand/normalize, and a slab `ray_intersect` returning `RayHit` (`t`, `point`, outward `normal`). Inclusive boundaries, same as `Rect`.
-- [ ] **Sphere** — `Sphere` in `macroquad::math` (center + radius, mirroring `Circle`). `contains`, overlaps sphere, overlaps `Aabb`, closest point, `ray_intersect` → `RayHit`. No solver and no new ray type yet.
+- [x] **Sphere** — `Sphere` in `macroquad::math` (center + radius, mirroring `Circle`). `contains`, overlaps sphere, overlaps `Aabb`, closest point, `ray_intersect` → `RayHit`. No solver and no new ray type yet.
 - [ ] **Ray** — `Ray` { origin, direction } with `point_at(t)`, normalization helper, and closest-hit queries against a slice of `Aabb` and a slice of `Sphere`, reusing `RayHit`. Reject `t < 0`. Do not unproject from the camera in this item.
 - [ ] **Plane** — `Plane` from unit normal + signed distance, and from three points. Signed distance, which-side test, closest point, `ray_intersect` → `RayHit`, and segment intersection (endpoints on opposite sides).
 - [ ] **Triangle** — `Triangle` { a, b, c }. Barycentric `contains`, plane of the triangle, AABB via `Aabb::from_points`, closest point, and Möller–Trumbore `ray_intersect` → `RayHit` (both winding orders count; provide a flag or separate method for backface culling).
@@ -41,3 +46,4 @@ Macroquad stays a thin, beginner-friendly layer over `glam` (already re-exported
 ## Log
 
 - 2026-10-17 — Enhancement: Created this roadmap and added `Aabb` / `RayHit` in `macroquad::math` (containment, overlap, intersection, union, closest point, slab ray). Example `examples/aabb_overlap.rs`. Counter 1.
+- 2026-10-17 — Enhancement: added `Sphere` in `macroquad::math` (contains, overlaps sphere and AABB, closest point, `ray_intersect` → `RayHit`). Example `examples/sphere_overlap.rs`. Counters: N=2, M=0.

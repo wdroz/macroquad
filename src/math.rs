@@ -1,17 +1,19 @@
 //! Math types and helpers.
 //!
 //! Consists of re-exported `glam` types with some additions, including 2D
-//! [`Rect`] / [`Circle`] and the 3D [`Aabb`].
+//! [`Rect`] / [`Circle`] and the 3D [`Aabb`] / [`Sphere`].
 
 pub use glam::*;
 
 mod aabb;
 mod circle;
 mod rect;
+mod sphere;
 
 pub use aabb::{Aabb, RayHit};
 pub use circle::Circle;
 pub use rect::{Rect, RectOffset};
+pub use sphere::Sphere;
 
 /// Converts 2d polar coordinates to 2d cartesian coordinates.
 pub fn polar_to_cartesian(rho: f32, theta: f32) -> Vec2 {
