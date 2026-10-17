@@ -15,6 +15,43 @@
 * Immediate mode UI library included.
 * Single command deploy for both WASM and Android.
 
+## Textured glTF scenes (fork feature)
+
+Enable `features = ["gltf"]` to use the CPU-only `GltfScene` parser and the
+`GltfModel` rendering adapter. `GltfModel::from_bytes(&bytes)` loads embedded
+PNG/JPEG/WebP base-color textures, applies node world transforms and normal
+matrices, and splits large index buffers into triangle-safe 16-bit chunks.
+Call it after macroquad starts, because it creates GPU textures. `model.draw()`
+submits the textured meshes with the current camera and material.
+
+```sh
+cargo run --features gltf --example gltf_textured
+cargo run --features gltf --example gltf_textured -- path/to/model.glb
+```
+
+`model.parts` exposes each mesh, source node/name, bounds, and surface metadata
+(alpha mode/cutoff, sidedness, emissive, metallic, roughness and transmission values), allowing
+applications to implement lighting and transparent draw ordering. The base
+color factor is already in the vertices at 8-bit precision; a shader can use
+`surface.base_color` for exact factors, including alpha-mask cutoff comparisons.
+The built-in drawing method does not
+implement PBR, skins, animations, morph targets, or alpha sorting. Only embedded
+GLB images are supported. The base-color texture selects its authored UV set;
+`KHR_texture_transform` offset, rotation, scale and UV-set override are applied.
+`EXT_texture_webp` is resolved in memory without modifying the source file;
+required unlit/emissive-strength metadata is preserved for custom shaders.
+Other unknown required extensions still fail validation. Image samplers preserve
+repeat/clamp modes and minification/magnification filters, generating mipmaps
+when requested (trilinear filtering when unspecified), preserving image pixels
+and dimensions. WebGL 1 / GLES 2 non-power-of-two textures fall back to linear
+clamp sampling; use WebGL 2 for full NPOT sampler behavior.
+`Texture2D::from_rgba8_mipmapped` also exposes managed mipmapped texture creation
+with preallocated mip levels for Metal.
+
+The default mesh chunk limits fit macroquad's default buffers. For larger
+chunks, pass `GltfMeshLimits` to `from_bytes_with_limits` and increase both
+`draw_call_vertex_capacity` and `draw_call_index_capacity` in the app's config.
+
 ## Supported Platforms
 
 * PC: Windows/Linux/macOS;

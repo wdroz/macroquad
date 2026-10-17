@@ -15,7 +15,7 @@ license = "MIT OR Apache-2.0"
 audio = ["quad-snd"]
 log-rs = ["log"]
 glam-serde = ["glam/serde"]
-gltf = ["dep:gltf"]
+gltf = ["dep:gltf", "dep:serde_json", "image/jpeg", "image/webp"]
 default = []
 
 [package.metadata.android]
@@ -37,7 +37,8 @@ fontdue = "0.9"
 backtrace = { version = "0.3.60", optional = true }
 log = { version = "0.4", optional = true }
 quad-snd = { version = "0.2", optional = true }
-gltf = { version = "1.4", optional = true, default-features = false, features = ["utils", "names", "extras"] }
+gltf = { version = "1.4", optional = true, default-features = false, features = ["utils", "names", "extras", "extensions"] }
+serde_json = { version = "1", optional = true }
 
 [dev-dependencies]
 macroquad-particles = { path = "./particles" }

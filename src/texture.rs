@@ -755,6 +755,37 @@ impl Texture2D {
         texture
     }
 
+    /// Create a managed RGBA8 texture with generated mipmaps and trilinear
+    /// minification. Mip levels are allocated before generation, including on
+    /// Metal. Use power-of-two dimensions when targeting WebGL 1 / GLES 2.
+    ///
+    /// Like `from_rgba8`, call this from a running macroquad application.
+    /// Updating the texture later does not regenerate its mipmaps automatically.
+    /// Calling `set_filter` disables mipmap sampling; use miniquad's separate
+    /// min/mag filter APIs to retain it.
+    pub fn from_rgba8_mipmapped(width: u16, height: u16, bytes: &[u8]) -> Texture2D {
+        assert_eq!(width as usize * height as usize * 4, bytes.len());
+        let texture = get_quad_context().new_texture_from_data_and_format(
+            bytes,
+            miniquad::TextureParams {
+                width: width as u32,
+                height: height as u32,
+                min_filter: FilterMode::Linear,
+                mag_filter: FilterMode::Linear,
+                mipmap_filter: miniquad::MipmapFilterMode::Linear,
+                allocate_mipmaps: true,
+                ..Default::default()
+            },
+        );
+        get_quad_context().texture_generate_mipmaps(texture);
+        let ctx = get_context();
+        let texture = Texture2D {
+            texture: ctx.textures.store_texture(texture),
+        };
+        ctx.texture_batcher.add_unbatched(&texture);
+        texture
+    }
+
     /// Uploads [Image] data to this texture.
     pub fn update(&self, image: &Image) {
         let ctx = get_quad_context();

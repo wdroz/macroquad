@@ -53,6 +53,8 @@ pub mod color;
 pub mod file;
 #[cfg(feature = "gltf")]
 pub mod gltf;
+#[cfg(feature = "gltf")]
+pub mod gltf_draw;
 pub mod input;
 pub mod material;
 pub mod math;

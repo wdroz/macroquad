@@ -4,6 +4,8 @@ pub use crate::camera::*;
 pub use crate::file::*;
 #[cfg(feature = "gltf")]
 pub use crate::gltf::*;
+#[cfg(feature = "gltf")]
+pub use crate::gltf_draw::*;
 pub use crate::input::*;
 pub use crate::material::*;
 pub use crate::math::*;
