@@ -166,7 +166,7 @@ With no path, the example shows the checkerboard. A path is loaded with `load_fi
 
 ## What the loader does not do yet
 
-- Capsule markers are ignored.
+- Capsule markers are ignored. `Capsule` in `macroquad::math` is the shape they will become; the loader does not build one yet.
 - A rotated `box` stays an `Aabb`. Build an `Obb` from `node.world` when you need the rotation.
 - There is no up-axis conversion after import.
 - Images are not stored on `GltfScene`. Only `GltfModel` uploads them, and only from a `.glb`.

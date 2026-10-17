@@ -1,9 +1,9 @@
 //! Math types and helpers.
 //!
 //! Consists of re-exported `glam` types with some additions, including 2D
-//! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Ray`],
-//! [`Plane`], and [`Triangle`]. The 3D types are unitless and do not assume an
-//! up axis. `docs/3d-guide.md` walks through them.
+//! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Capsule`],
+//! [`Ray`], [`Plane`], and [`Triangle`]. The 3D types are unitless and do not
+//! assume an up axis. `docs/3d-guide.md` walks through them.
 //!
 //! ```
 //! use macroquad::math::{Aabb, Ray, vec3, Vec3};
@@ -16,6 +16,7 @@
 pub use glam::*;
 
 mod aabb;
+mod capsule;
 mod circle;
 mod obb;
 mod plane;
@@ -25,6 +26,7 @@ mod sphere;
 mod triangle;
 
 pub use aabb::{Aabb, RayHit};
+pub use capsule::Capsule;
 pub use circle::Circle;
 pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};

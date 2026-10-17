@@ -11,6 +11,7 @@ cargo run --example ray_cast
 cargo run --example plane_hit
 cargo run --example triangle_hit
 cargo run --example obb_overlap
+cargo run --example capsule_overlap
 cargo run --features gltf --example gltf_textured
 ```
 
@@ -37,6 +38,10 @@ Left and right yaw a ray. `Ray::closest_triangle` keeps both winding orders. Edg
 ## `obb_overlap`
 
 Arrow keys move an oriented box. The box yaws on its own around Y. `Obb::from_world_matrix` takes the same full size a rotated `draw_cube` would. The example tests `overlaps_aabb`, `overlaps_sphere`, and `ray_intersect`, and draws its own wire outline. There is no `draw_obb` yet.
+
+## `capsule_overlap`
+
+Moves a vertical `Capsule` with the arrow keys. `a` and `b` are the inner segment; the rounded ends extend past them by `radius`. The capsule turns a different color when `overlaps_aabb` or `overlaps_sphere` hits. One ray reports `Capsule::ray_intersect`. The wires are the example's own spheres along the segment. There is no `draw_capsule_wires` yet.
 
 ## `gltf_textured`
 

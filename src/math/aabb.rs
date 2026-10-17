@@ -37,7 +37,9 @@ pub struct RayHit {
     /// points outward, leaving the box immediately. A [`Plane`](crate::math::Plane)
     /// has no interior, so a hit on it reports the plane normal, including when
     /// the origin already lies on the plane. A [`Triangle`](crate::math::Triangle)
-    /// does the same with its winding normal.
+    /// does the same with its winding normal. A [`Capsule`](crate::math::Capsule)
+    /// matches [`Sphere`](crate::math::Sphere): the normal is zero when the origin
+    /// is already inside.
     pub normal: Vec3,
 }
 

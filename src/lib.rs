@@ -20,10 +20,11 @@
 //!
 //! ## 3D collision and glTF
 //!
-//! [`math`] contains [`math::Aabb`], [`math::Sphere`], [`math::Ray`],
-//! [`math::Plane`], [`math::Triangle`], and [`math::Obb`]. They do not assume
-//! an up axis. The `gltf` feature parses a Blender glTF 2.0 export without a
-//! window and can draw a `.glb` once one is running. Guides: `docs/3d-guide.md`
+//! [`math`] contains [`math::Aabb`], [`math::Sphere`], [`math::Capsule`],
+//! [`math::Ray`], [`math::Plane`], [`math::Triangle`], and [`math::Obb`]. They
+//! do not assume an up axis. The `gltf` feature parses a Blender glTF 2.0
+//! export without a window and can draw a `.glb` once one is running. Guides:
+//! `docs/3d-guide.md`
 //! and `docs/blender-to-macroquad.md`.
 //!
 //! ```
