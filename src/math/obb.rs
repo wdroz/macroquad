@@ -20,6 +20,15 @@ use super::{Aabb, RayHit, Sphere};
 ///
 /// Boundaries are inclusive, matching [`Aabb`]: a point on a face is inside,
 /// and a box that only touches an [`Aabb`] or a [`Sphere`] overlaps it.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Obb, Quat, Vec3, vec3};
+///
+/// let box_ = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY);
+/// assert!(box_.contains(vec3(1.0, 0.0, 0.0)));
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Obb {
     /// Center of the box.
@@ -32,6 +41,15 @@ pub struct Obb {
 
 impl Obb {
     /// Creates a box from its center, half extents, and rotation.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Vec3, vec3};
+    ///
+    /// let box_ = Obb::new(Vec3::ZERO, vec3(1.0, 1.0, 1.0), Quat::IDENTITY);
+    /// assert!(!box_.contains(vec3(1.1, 0.0, 0.0)));
+    /// ```
     pub const fn new(center: Vec3, half_extents: Vec3, rotation: Quat) -> Obb {
         Obb {
             center,
@@ -48,6 +66,21 @@ impl Obb {
     /// `Mat4::from_scale_rotation_translation(full_size, rotation, center)`
     /// matches a rotated `draw_cube(center, full_size, ...)`. A negative
     /// scale stays a positive extent. Shear is not preserved.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Mat4, Obb, Quat, vec3};
+    ///
+    /// let world = Mat4::from_scale_rotation_translation(
+    ///     vec3(2.0, 4.0, 6.0),
+    ///     Quat::IDENTITY,
+    ///     vec3(1.0, 2.0, 3.0),
+    /// );
+    /// let box_ = Obb::from_world_matrix(world);
+    /// assert!((box_.center - vec3(1.0, 2.0, 3.0)).length() < 1e-5);
+    /// assert!((box_.half_extents - vec3(1.0, 2.0, 3.0)).length() < 1e-5);
+    /// ```
     pub fn from_world_matrix(world: Mat4) -> Obb {
         let (scale, rotation, translation) = world.to_scale_rotation_translation();
         Obb {
@@ -65,6 +98,16 @@ impl Obb {
     ///
     /// An empty box (a negative half extent) contains nothing. A non-finite
     /// point, center, extent, or rotation misses.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Vec3};
+    ///
+    /// let box_ = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY);
+    /// assert!(box_.contains(Vec3::ZERO));
+    /// assert!(!box_.contains(Vec3::new(2.0, 0.0, 0.0)));
+    /// ```
     pub fn contains(&self, point: Vec3) -> bool {
         let Some(local) = self.local_point(point) else {
             return false;
@@ -78,6 +121,15 @@ impl Obb {
     ///
     /// A point already inside is returned unchanged. An empty box, or a box
     /// whose rotation cannot be used, returns `center`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Vec3, vec3};
+    ///
+    /// let box_ = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY);
+    /// assert_eq!(box_.closest_point(vec3(4.0, 0.0, 0.0)), Vec3::X);
+    /// ```
     pub fn closest_point(&self, point: Vec3) -> Vec3 {
         let Some(rotation) = self.unit_rotation() else {
             return self.center;
@@ -105,6 +157,16 @@ impl Obb {
     /// axes, and their cross products. Assumes `aabb` is normalized (`min` <=
     /// `max` on every axis); an inverted box overlaps nothing. An empty
     /// oriented box overlaps nothing. A non-finite corner or rotation misses.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, Obb, Quat, Vec3, vec3};
+    ///
+    /// let box_ = Obb::new(vec3(1.5, 0.5, 0.5), Vec3::ONE, Quat::IDENTITY);
+    /// let crate_ = Aabb::from_min_max(Vec3::ZERO, Vec3::ONE);
+    /// assert!(box_.overlaps_aabb(&crate_));
+    /// ```
     pub fn overlaps_aabb(&self, aabb: &Aabb) -> bool {
         let Some(rotation) = self.pose() else {
             return false;
@@ -139,6 +201,16 @@ impl Obb {
     ///
     /// A negative sphere radius is empty and overlaps nothing, matching
     /// [`Sphere::overlaps`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Sphere, Vec3, vec3};
+    ///
+    /// let box_ = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY);
+    /// let ball = Sphere::new(vec3(1.5, 0.0, 0.0), 0.6);
+    /// assert!(box_.overlaps_sphere(&ball));
+    /// ```
     pub fn overlaps_sphere(&self, sphere: &Sphere) -> bool {
         if sphere.radius < 0.0 || !sphere.radius.is_finite() || !sphere.center.is_finite() {
             return false;
@@ -161,6 +233,18 @@ impl Obb {
     ///
     /// An empty box misses. A non-finite origin, direction, center, extent, or
     /// rotation misses.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Vec3, vec3};
+    ///
+    /// let box_ = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY);
+    /// let hit = box_.ray_intersect(vec3(-3.0, 0.0, 0.0), Vec3::X).unwrap();
+    /// assert_eq!(hit.t, 2.0);
+    /// assert_eq!(hit.point, -Vec3::X);
+    /// assert_eq!(hit.normal, -Vec3::X);
+    /// ```
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         let rotation = self.pose()?;
         if !origin.is_finite() || !direction.is_finite() {

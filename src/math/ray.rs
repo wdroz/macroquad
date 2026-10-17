@@ -12,6 +12,18 @@ use super::{Aabb, Plane, RayHit, Sphere, Triangle};
 /// Closest intersection of a [`Ray`] with one shape in a slice.
 ///
 /// `hit.t` is never negative. Equal distances keep the earlier index.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Aabb, Ray, vec3, Vec3};
+///
+/// let ray = Ray::new(vec3(0.0, 0.0, 5.0), -Vec3::Z);
+/// let boxes = [Aabb::from_min_max(vec3(-1.0, -1.0, 0.0), vec3(1.0, 1.0, 1.0))];
+/// let closest = ray.closest_aabb(&boxes).unwrap();
+/// assert_eq!(closest.index, 0);
+/// assert_eq!(closest.hit.t, 4.0);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ClosestHit {
     /// Index of the shape in the slice passed to the query.
@@ -33,6 +45,15 @@ pub struct ClosestHit {
 /// still uses [`Aabb::ray_intersect`] / [`Sphere::ray_intersect`] /
 /// [`Triangle::ray_intersect`] with `origin` and `direction`; the methods here
 /// scan a slice and keep the smallest non-negative `t`.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Ray, Vec3, vec3};
+///
+/// let ray = Ray::new(Vec3::ZERO, vec3(0.0, 0.0, -2.0));
+/// assert_eq!(ray.point_at(0.5), vec3(0.0, 0.0, -1.0));
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Ray {
     /// Start of the ray.
@@ -43,6 +64,15 @@ pub struct Ray {
 
 impl Ray {
     /// Creates a ray from its origin and direction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Ray, Vec3};
+    ///
+    /// let ray = Ray::new(Vec3::Y, -Vec3::Y);
+    /// assert_eq!(ray.origin, Vec3::Y);
+    /// ```
     pub const fn new(origin: Vec3, direction: Vec3) -> Ray {
         Ray { origin, direction }
     }
@@ -51,6 +81,15 @@ impl Ray {
     ///
     /// Negative `t` is behind the origin. This helper does not reject it;
     /// the closest-hit queries do.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Ray, Vec3, vec3};
+    ///
+    /// let ray = Ray::new(vec3(1.0, 2.0, 3.0), Vec3::X);
+    /// assert_eq!(ray.point_at(2.0), vec3(3.0, 2.0, 3.0));
+    /// ```
     pub const fn point_at(self, t: f32) -> Vec3 {
         vec3(
             self.origin.x + self.direction.x * t,
@@ -63,6 +102,15 @@ impl Ray {
     ///
     /// A zero or non-finite direction becomes [`Vec3::ZERO`] rather than NaN.
     /// The origin is unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Ray, Vec3, vec3};
+    ///
+    /// let ray = Ray::new(Vec3::ZERO, vec3(0.0, 0.0, 4.0)).normalized();
+    /// assert_eq!(ray.direction, Vec3::Z);
+    /// ```
     pub fn normalized(self) -> Ray {
         Ray {
             origin: self.origin,
@@ -74,6 +122,17 @@ impl Ray {
     ///
     /// Hits with `t < 0` are rejected. Ties keep the earlier index. Assumes
     /// each box is normalized (`min` <= `max` on every axis).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, Ray, vec3, Vec3};
+    ///
+    /// let ray = Ray::new(vec3(0.0, 0.0, 5.0), -Vec3::Z);
+    /// let boxes = [Aabb::from_min_max(vec3(-1.0, -1.0, 0.0), vec3(1.0, 1.0, 1.0))];
+    /// let closest = ray.closest_aabb(&boxes).unwrap();
+    /// assert_eq!(closest.hit.point, vec3(0.0, 0.0, 1.0));
+    /// ```
     pub fn closest_aabb(&self, boxes: &[Aabb]) -> Option<ClosestHit> {
         closest_hit(boxes, |aabb| {
             aabb.ray_intersect(self.origin, self.direction)
@@ -83,6 +142,18 @@ impl Ray {
     /// Closest hit against `spheres`, or [`None`] when every sphere is missed.
     ///
     /// Hits with `t < 0` are rejected. Ties keep the earlier index.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Ray, Sphere, Vec3, vec3};
+    ///
+    /// let ray = Ray::new(vec3(-3.0, 0.0, 0.0), Vec3::X);
+    /// let spheres = [Sphere::new(Vec3::ZERO, 1.0)];
+    /// let closest = ray.closest_sphere(&spheres).unwrap();
+    /// assert_eq!(closest.index, 0);
+    /// assert_eq!(closest.hit.point, -Vec3::X);
+    /// ```
     pub fn closest_sphere(&self, spheres: &[Sphere]) -> Option<ClosestHit> {
         closest_hit(spheres, |sphere| {
             sphere.ray_intersect(self.origin, self.direction)
@@ -93,6 +164,17 @@ impl Ray {
     ///
     /// Hits with `t < 0` are rejected. Ties keep the earlier index. Assumes
     /// each normal is a unit vector, same as [`Plane::ray_intersect`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Ray, Vec3, vec3};
+    ///
+    /// let ray = Ray::new(vec3(0.0, 3.0, 0.0), -Vec3::Y);
+    /// let planes = [Plane::new(Vec3::Y, 0.0)];
+    /// let closest = ray.closest_plane(&planes).unwrap();
+    /// assert_eq!(closest.hit.t, 3.0);
+    /// ```
     pub fn closest_plane(&self, planes: &[Plane]) -> Option<ClosestHit> {
         closest_hit(planes, |plane| {
             plane.ray_intersect(self.origin, self.direction)
@@ -103,6 +185,18 @@ impl Ray {
     ///
     /// Hits with `t < 0` are rejected. Ties keep the earlier index. Both
     /// winding orders count, same as [`Triangle::ray_intersect`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Ray, Triangle, Vec3, vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// let ray = Ray::new(vec3(0.2, 0.2, 2.0), -Vec3::Z);
+    /// let closest = ray.closest_triangle(&[triangle]).unwrap();
+    /// assert_eq!(closest.index, 0);
+    /// assert!((closest.hit.point - vec3(0.2, 0.2, 0.0)).length() < 1e-4);
+    /// ```
     pub fn closest_triangle(&self, triangles: &[Triangle]) -> Option<ClosestHit> {
         closest_hit(triangles, |triangle| {
             triangle.ray_intersect(self.origin, self.direction)

@@ -2,7 +2,7 @@
 
 Enhancements since last fixer round: 4
 Fixer rounds since last game round: 1
-Rounds since last documentation round: 10
+Rounds since last documentation round: 0
 
 Source of truth for the unattended 3D enhancement bot on this fork. The goal is to make 3D games easier to build with macroquad: collision primitives, raycasting, simple rigid-body physics, collision response, a character controller, and spatial partitioning. A second track loads a Blender scene exported as glTF 2.0 (meshes, materials, textures, node transforms, and collider / trigger / spawn markup) so a level does not have to be rebuilt by hand.
 
@@ -84,3 +84,4 @@ The checkboxes live in **Priorities**, interleaved with the collision items they
   Native scene verification also added managed `Texture2D::from_rgba8_mipmapped`, Metal mip allocation, and independent glTF min/mag filters. Original image dimensions/pixels are preserved; WebGL 1 / GLES 2 NPOT textures use a documented linear/clamp fallback. Minification and legacy-backend detection have CPU regression coverage.
   Browser verification fixed the bundled `quad_net` plugin's undeclared `register_plugin` assignment under strict mode. `node js/mq_js_bundle.test.cjs` evaluates the complete bundle with a mocked canvas and verifies all plugin registrations without a browser.
 - 2026-10-17 — Enhancement: added `Obb` in `macroquad::math` (center, half extents, unit quaternion). `contains`, `closest_point`, separating-axis `overlaps_aabb`, `overlaps_sphere`, and `ray_intersect` (the ray is transformed into box space and tested with `Aabb`). `from_world_matrix` treats the matrix scale as the full size, matching `draw_cube` / `Aabb::from_center_size`. A negative half extent is empty. Example `examples/obb_overlap.rs`. Counters: N=4, M=1, D=10.
+- 2026-10-17 — Documentation: rustdoc examples on the new 3D math types, glTF scene and draw types, and `Texture2D::from_rgba8_mipmapped`. Added `docs/3d-guide.md` (collision queries, plus the application-side physics and character movement the library does not provide yet), `docs/blender-to-macroquad.md`, and `examples/README.md`. Counters: N=4, M=1, D=0.

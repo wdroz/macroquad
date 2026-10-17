@@ -17,6 +17,22 @@
 //! * Minimal amount of dependencies: build after `cargo clean` takes only 16s on x230(~6years old laptop)
 //! * Immediate mode UI library included
 //! * Single command deploy for both WASM and Android [build instructions](https://github.com/not-fl3/miniquad/#building-examples)
+//!
+//! ## 3D collision and glTF
+//!
+//! [`math`] contains [`math::Aabb`], [`math::Sphere`], [`math::Ray`],
+//! [`math::Plane`], [`math::Triangle`], and [`math::Obb`]. They do not assume
+//! an up axis. The `gltf` feature parses a Blender glTF 2.0 export without a
+//! window and can draw a `.glb` once one is running. Guides: `docs/3d-guide.md`
+//! and `docs/blender-to-macroquad.md`.
+//!
+//! ```
+//! use macroquad::math::{Aabb, vec3};
+//!
+//! let crate_ = Aabb::from_center_size(vec3(0.0, 0.5, 0.0), vec3(1.0, 1.0, 1.0));
+//! assert!(crate_.contains(vec3(0.0, 0.5, 0.0)));
+//! ```
+//!
 //! # Example
 //! ```no_run
 //! use macroquad::prelude::*;

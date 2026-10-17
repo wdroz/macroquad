@@ -48,6 +48,13 @@ clamp sampling; use WebGL 2 for full NPOT sampler behavior.
 `Texture2D::from_rgba8_mipmapped` also exposes managed mipmapped texture creation
 with preallocated mip levels for Metal.
 
+`Aabb`, `Sphere`, `Ray`, `Plane`, `Triangle`, and `Obb` live in
+`macroquad::math` and the prelude. [docs/3d-guide.md](docs/3d-guide.md) covers
+those queries, and the small amount of physics and character movement a game
+can write with them today. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)
+is the export and loading tutorial. Bot-added examples are listed in
+[examples/README.md](examples/README.md).
+
 The default mesh chunk limits fit macroquad's default buffers. For larger
 chunks, pass `GltfMeshLimits` to `from_bytes_with_limits` and increase both
 `draw_call_vertex_capacity` and `draw_call_index_capacity` in the app's config.

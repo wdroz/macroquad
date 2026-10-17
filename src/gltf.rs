@@ -1,8 +1,23 @@
 //! glTF 2.0 scenes loaded from bytes.
 //!
 //! This module is behind the `gltf` feature. It parses `.glb` and `.gltf`
-//! documents into plain data. It does not open a window, create GPU resources,
-//! or read images. A later item turns these meshes into [`crate::models::Mesh`].
+//! documents into plain data. It does not open a window or create GPU resources.
+//! [`crate::gltf_draw::GltfModel`] turns a `.glb` into textured
+//! [`crate::models::Mesh`] chunks, and that type needs a running macroquad window.
+//!
+//! ```
+//! use macroquad::gltf::GltfScene;
+//!
+//! let scene = GltfScene::from_bytes(
+//!     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"player_spawn","translation":[1.0,2.0,3.0]}]}"#,
+//! )
+//! .unwrap();
+//! assert_eq!(scene.spawns.len(), 1);
+//! assert_eq!(
+//!     scene.spawns[0].position,
+//!     macroquad::math::vec3(1.0, 2.0, 3.0)
+//! );
+//! ```
 //!
 //! glTF is Y-up and right-handed, in meters. Blender is Z-up; its glTF exporter
 //! converts to Y-up, and this loader stores those axes as written. It does not
@@ -39,9 +54,23 @@ use crate::math::{Aabb, Sphere};
 ///
 /// Nodes are stored in preorder, parents before children. A document with no
 /// scenes yields empty `nodes` and `meshes`. Meshes that no loaded node
-/// references are left out. Images, skins, and animations are not loaded.
+/// references are left out. Images, skins, and animations are not loaded here.
+/// [`crate::gltf_draw::GltfModel`] decodes embedded images when it draws a `.glb`.
 /// [`Self::colliders`] and [`Self::spawns`] are the markers on those nodes,
 /// in the same preorder. See the module docs for the markup.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfScene;
+///
+/// let scene = GltfScene::from_bytes(
+///     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"room"}]}"#,
+/// )
+/// .unwrap();
+/// assert_eq!(scene.nodes[0].name.as_deref(), Some("room"));
+/// assert!(scene.meshes.is_empty());
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfScene {
     /// Nodes of the default scene, in preorder.
@@ -63,6 +92,26 @@ pub struct GltfScene {
 /// source is a matrix is decomposed into those three fields; `world` is built
 /// from the original matrix, so it still matches the file when the matrix
 /// does not decompose cleanly.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfNode;
+/// use macroquad::math::{Mat4, Quat, Vec3};
+///
+/// let node = GltfNode {
+///     name: Some("player_spawn".into()),
+///     parent: None,
+///     children: Vec::new(),
+///     translation: Vec3::new(4.0, 0.0, 1.0),
+///     rotation: Quat::IDENTITY,
+///     scale: Vec3::ONE,
+///     world: Mat4::from_translation(Vec3::new(4.0, 0.0, 1.0)),
+///     mesh: None,
+/// };
+/// let (_scale, _rotation, translation) = node.world.to_scale_rotation_translation();
+/// assert_eq!(translation, node.translation);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfNode {
     /// glTF name, or [`None`] when the node has none.
@@ -84,6 +133,18 @@ pub struct GltfNode {
 }
 
 /// A mesh referenced by one or more [`GltfNode`]s.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfMesh;
+///
+/// let mesh = GltfMesh {
+///     name: Some("tri".into()),
+///     primitives: Vec::new(),
+/// };
+/// assert_eq!(mesh.name.as_deref(), Some("tri"));
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfMesh {
     /// glTF mesh name, or [`None`] when the mesh has none.
@@ -102,6 +163,22 @@ pub struct GltfMesh {
 /// error. `base_color_factor` is the metallic-roughness factor, RGBA,
 /// defaulting to white when the material omits it. Normals and uvs, when
 /// present, have one entry per position.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfPrimitive;
+/// use macroquad::math::{vec2, vec3};
+///
+/// let primitive = GltfPrimitive {
+///     positions: vec![vec3(0.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0), vec3(0.0, 1.0, 0.0)],
+///     normals: vec![vec3(0.0, 0.0, 1.0); 3],
+///     uvs: vec![vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0)],
+///     indices: vec![0, 1, 2],
+///     base_color_factor: [1.0, 1.0, 1.0, 1.0],
+/// };
+/// assert_eq!(primitive.indices.len(), 3);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfPrimitive {
     /// `POSITION` values.
@@ -120,6 +197,22 @@ pub struct GltfPrimitive {
 ///
 /// A rotated `box` stays an [`Aabb`] sized by the world-matrix column lengths.
 /// It is not an oriented box. See the module docs.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfColliderShape;
+/// use macroquad::math::{Aabb, vec3};
+///
+/// let shape = GltfColliderShape::Aabb(Aabb::from_center_size(
+///     vec3(0.0, 1.0, 0.0),
+///     vec3(2.0, 1.0, 0.5),
+/// ));
+/// match shape {
+///     GltfColliderShape::Aabb(aabb) => assert_eq!(aabb.size(), vec3(2.0, 1.0, 0.5)),
+///     GltfColliderShape::Sphere(_) => panic!("expected a box"),
+/// }
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GltfColliderShape {
     /// Axis-aligned box. The size matches [`Aabb::from_center_size`].
@@ -129,6 +222,21 @@ pub enum GltfColliderShape {
 }
 
 /// A collider or trigger taken from one glTF node.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::{GltfCollider, GltfColliderShape};
+/// use macroquad::math::{Sphere, vec3};
+///
+/// let trigger = GltfCollider {
+///     node: 0,
+///     name: Some("goal_trigger".into()),
+///     trigger: true,
+///     shape: GltfColliderShape::Sphere(Sphere::new(vec3(0.0, 1.0, 0.0), 0.5)),
+/// };
+/// assert!(trigger.trigger);
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfCollider {
     /// Index into [`GltfScene::nodes`], which is not the index in the file
@@ -143,6 +251,20 @@ pub struct GltfCollider {
 }
 
 /// A spawn point taken from one glTF node.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfSpawn;
+/// use macroquad::math::vec3;
+///
+/// let spawn = GltfSpawn {
+///     node: 1,
+///     name: Some("player_spawn".into()),
+///     position: vec3(4.0, 0.0, 1.0),
+/// };
+/// assert_eq!(spawn.position, vec3(4.0, 0.0, 1.0));
+/// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfSpawn {
     /// Index into [`GltfScene::nodes`]. See [`GltfCollider::node`].
@@ -154,6 +276,15 @@ pub struct GltfSpawn {
 }
 
 /// Failure while reading a glTF document from bytes.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfScene;
+///
+/// let error = GltfScene::from_bytes(b"this is not gltf").unwrap_err();
+/// assert!(error.to_string().contains("could not be parsed"));
+/// ```
 #[derive(Debug)]
 pub struct GltfError {
     message: String,
@@ -183,6 +314,27 @@ impl GltfScene {
     /// are an error; see the module docs. A node that appears twice in that
     /// scene, including through a cycle, is an error. Markers are collected
     /// from the nodes that load; see the module docs.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::gltf::{GltfColliderShape, GltfScene};
+    /// use macroquad::math::vec3;
+    ///
+    /// let scene = GltfScene::from_bytes(
+    ///     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"nodes":[
+    ///         {"name":"crate_collider","translation":[0.0,1.0,0.0],"scale":[2.0,1.0,0.5],
+    ///          "extras":{"mq_shape":"box","mq_role":"collider"}},
+    ///         {"name":"player_spawn","translation":[4.0,0.0,1.0]}
+    ///     ]}"#,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(scene.spawns[0].position, vec3(4.0, 0.0, 1.0));
+    /// match scene.colliders[0].shape {
+    ///     GltfColliderShape::Aabb(aabb) => assert_eq!(aabb.size(), vec3(2.0, 1.0, 0.5)),
+    ///     GltfColliderShape::Sphere(_) => panic!("expected a box"),
+    /// }
+    /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<GltfScene, GltfError> {
         let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| {
             GltfError::new(format!("glTF document could not be parsed: {error}"))

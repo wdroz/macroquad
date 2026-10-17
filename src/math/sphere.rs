@@ -17,6 +17,15 @@ use super::{Aabb, RayHit};
 /// Boundaries are inclusive, matching [`Aabb`] and [`Rect`](crate::math::Rect):
 /// a point on the surface is inside, and two spheres that only touch overlap.
 /// This differs from [`Circle`](crate::math::Circle), whose tests are strict.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Sphere, vec3};
+///
+/// let ball = Sphere::new(vec3(0.0, 1.0, 0.0), 0.5);
+/// assert!(ball.contains(vec3(0.0, 1.0, 0.0)));
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Sphere {
     /// Center of the sphere.
@@ -27,11 +36,30 @@ pub struct Sphere {
 
 impl Sphere {
     /// Creates a sphere from its center and radius.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3};
+    ///
+    /// let ball = Sphere::new(Vec3::ZERO, 1.0);
+    /// assert_eq!(ball.radius, 1.0);
+    /// ```
     pub const fn new(center: Vec3, radius: f32) -> Sphere {
         Sphere { center, radius }
     }
 
     /// Translates the center by `offset`. The radius is unchanged.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let moved = Sphere::new(Vec3::ZERO, 1.0).offset(vec3(0.0, 2.0, 0.0));
+    /// assert_eq!(moved.center, vec3(0.0, 2.0, 0.0));
+    /// assert_eq!(moved.radius, 1.0);
+    /// ```
     pub const fn offset(self, offset: Vec3) -> Sphere {
         Sphere {
             center: vec3(
@@ -44,6 +72,16 @@ impl Sphere {
     }
 
     /// Returns true when `point` lies inside the sphere, including the surface.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let ball = Sphere::new(Vec3::ZERO, 1.0);
+    /// assert!(ball.contains(Vec3::X));
+    /// assert!(!ball.contains(vec3(1.1, 0.0, 0.0)));
+    /// ```
     pub const fn contains(&self, point: Vec3) -> bool {
         if self.radius < 0.0 {
             return false;
@@ -55,6 +93,16 @@ impl Sphere {
     ///
     /// A negative radius is empty and overlaps nothing, even when the other
     /// radius would cover this center.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let a = Sphere::new(Vec3::ZERO, 1.0);
+    /// let b = Sphere::new(vec3(2.0, 0.0, 0.0), 1.0);
+    /// assert!(a.overlaps(&b));
+    /// ```
     pub const fn overlaps(&self, other: &Sphere) -> bool {
         if self.radius < 0.0 || other.radius < 0.0 {
             return false;
@@ -66,6 +114,16 @@ impl Sphere {
     /// Returns true when this sphere and the box overlap, including a touch.
     ///
     /// Assumes the box is normalized (`min` <= `max` on every axis).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, Sphere, vec3};
+    ///
+    /// let ball = Sphere::new(vec3(2.0, 0.5, 0.5), 1.0);
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// assert!(ball.overlaps_aabb(&crate_));
+    /// ```
     pub fn overlaps_aabb(&self, aabb: &Aabb) -> bool {
         if self.radius < 0.0 {
             return false;
@@ -78,6 +136,15 @@ impl Sphere {
     ///
     /// A point already inside is returned unchanged. An empty sphere (negative
     /// radius) returns `center`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let ball = Sphere::new(Vec3::ZERO, 1.0);
+    /// assert_eq!(ball.closest_point(vec3(3.0, 0.0, 0.0)), Vec3::X);
+    /// ```
     pub fn closest_point(&self, point: Vec3) -> Vec3 {
         if self.radius <= 0.0 {
             return self.center;
@@ -104,6 +171,17 @@ impl Sphere {
     ///
     /// A non-finite origin, direction, center, or radius misses. An infinite
     /// radius misses: it is not a usable sphere.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let ball = Sphere::new(Vec3::ZERO, 1.0);
+    /// let hit = ball.ray_intersect(vec3(-2.0, 0.0, 0.0), Vec3::X).unwrap();
+    /// assert_eq!(hit.t, 1.0);
+    /// assert_eq!(hit.point, -Vec3::X);
+    /// ```
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         if !self.radius.is_finite() || self.radius < 0.0 {
             return None;

@@ -2,7 +2,16 @@
 //!
 //! Consists of re-exported `glam` types with some additions, including 2D
 //! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Ray`],
-//! [`Plane`], and [`Triangle`].
+//! [`Plane`], and [`Triangle`]. The 3D types are unitless and do not assume an
+//! up axis. `docs/3d-guide.md` walks through them.
+//!
+//! ```
+//! use macroquad::math::{Aabb, Ray, vec3, Vec3};
+//!
+//! let wall = Aabb::from_center_size(Vec3::ZERO, vec3(2.0, 2.0, 2.0));
+//! let shot = Ray::new(vec3(0.0, 0.0, 5.0), vec3(0.0, 0.0, -1.0));
+//! assert!(shot.closest_aabb(&[wall]).is_some());
+//! ```
 
 pub use glam::*;
 

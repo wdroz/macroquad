@@ -763,6 +763,20 @@ impl Texture2D {
     /// Updating the texture later does not regenerate its mipmaps automatically.
     /// Calling `set_filter` disables mipmap sampling; use miniquad's separate
     /// min/mag filter APIs to retain it.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use macroquad::prelude::*;
+    /// # #[macroquad::main("Mipmapped texture")]
+    /// # async fn main() {
+    /// let bytes = [
+    ///     255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+    /// ];
+    /// let texture = Texture2D::from_rgba8_mipmapped(2, 2, &bytes);
+    /// assert_eq!(texture.width(), 2.0);
+    /// # }
+    /// ```
     pub fn from_rgba8_mipmapped(width: u16, height: u16, bytes: &[u8]) -> Texture2D {
         assert_eq!(width as usize * height as usize * 4, bytes.len());
         let texture = get_quad_context().new_texture_from_data_and_format(

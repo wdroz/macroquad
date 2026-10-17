@@ -12,6 +12,17 @@ use super::RayHit;
 ///
 /// [`PlaneSide::Front`] is the half-space the normal points into
 /// (`signed_distance > 0`). [`PlaneSide::Coplanar`] is the plane itself.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Plane, PlaneSide, Vec3, vec3};
+///
+/// let ground = Plane::new(Vec3::Y, 0.0);
+/// assert_eq!(ground.side(vec3(0.0, 1.0, 0.0)), PlaneSide::Front);
+/// assert_eq!(ground.side(Vec3::ZERO), PlaneSide::Coplanar);
+/// assert_eq!(ground.side(vec3(0.0, -1.0, 0.0)), PlaneSide::Back);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlaneSide {
     /// `signed_distance > 0`. The normal points into this half-space.
@@ -33,6 +44,15 @@ pub enum PlaneSide {
 /// constructors produce a unit normal. Distance, side, closest-point, ray, and
 /// segment queries assume that unit length: a non-unit normal scales those
 /// distances and leaves the ray parameter `t` wrong.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Plane, Vec3, vec3};
+///
+/// let ground = Plane::new(Vec3::Y, 0.0);
+/// assert_eq!(ground.signed_distance(vec3(3.0, 2.0, -4.0)), 2.0);
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Plane {
     /// Unit normal. Query methods assume length 1. See the struct docs.
@@ -46,6 +66,15 @@ impl Plane {
     ///
     /// The values are stored as given. Pass a unit `normal`; this constructor
     /// does not normalize it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Vec3};
+    ///
+    /// let ground = Plane::new(Vec3::Y, 1.5);
+    /// assert_eq!(ground.distance, 1.5);
+    /// ```
     pub const fn new(normal: Vec3, distance: f32) -> Plane {
         Plane { normal, distance }
     }
@@ -54,6 +83,16 @@ impl Plane {
     ///
     /// `normal` is normalized. Returns [`None`] when `normal` is zero-length or
     /// non-finite, or when `point` is non-finite. The origin is a valid point.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Vec3, vec3};
+    ///
+    /// let plane = Plane::from_normal_point(Vec3::Y, vec3(0.0, 3.0, 0.0)).unwrap();
+    /// assert_eq!(plane.distance, 3.0);
+    /// assert!(Plane::from_normal_point(Vec3::ZERO, Vec3::ZERO).is_none());
+    /// ```
     pub fn from_normal_point(normal: Vec3, point: Vec3) -> Option<Plane> {
         let normal = unit_normal(normal)?;
         let distance = dot(normal, point);
@@ -68,6 +107,15 @@ impl Plane {
     /// The normal is `(b - a) × (c - a)`, normalized, so it follows the
     /// right-hand rule from `a → b` toward `a → c`. Returns [`None`] when the
     /// points are collinear, coincident, or non-finite.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Vec3};
+    ///
+    /// let plane = Plane::from_points(Vec3::ZERO, Vec3::X, Vec3::Z).unwrap();
+    /// assert_eq!(plane.normal, -Vec3::Y);
+    /// ```
     pub fn from_points(a: Vec3, b: Vec3, c: Vec3) -> Option<Plane> {
         let normal = unit_normal(cross(b - a, c - a))?;
         let distance = dot(normal, a);
@@ -81,6 +129,15 @@ impl Plane {
     ///
     /// Positive on the side `normal` points into, zero on the plane, negative
     /// on the other side. Assumes `normal` is a unit vector.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Vec3, vec3};
+    ///
+    /// let ground = Plane::new(Vec3::Y, 0.0);
+    /// assert_eq!(ground.signed_distance(vec3(1.0, -2.0, 0.0)), -2.0);
+    /// ```
     pub const fn signed_distance(&self, point: Vec3) -> f32 {
         dot(self.normal, point) - self.distance
     }
@@ -90,6 +147,15 @@ impl Plane {
     /// A point with signed distance zero is [`PlaneSide::Coplanar`], including
     /// the boundary, matching the inclusive tests on [`Aabb`](crate::math::Aabb)
     /// and [`Sphere`](crate::math::Sphere). Assumes `normal` is a unit vector.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, PlaneSide, Vec3};
+    ///
+    /// let ground = Plane::new(Vec3::Y, 0.0);
+    /// assert_eq!(ground.side(Vec3::Y), PlaneSide::Front);
+    /// ```
     pub fn side(&self, point: Vec3) -> PlaneSide {
         let distance = self.signed_distance(point);
         if distance > 0.0 {
@@ -105,6 +171,15 @@ impl Plane {
     ///
     /// A point already on the plane is returned unchanged. Assumes `normal` is
     /// a unit vector.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Vec3, vec3};
+    ///
+    /// let ground = Plane::new(Vec3::Y, 0.0);
+    /// assert_eq!(ground.closest_point(vec3(2.0, 5.0, -1.0)), vec3(2.0, 0.0, -1.0));
+    /// ```
     pub fn closest_point(&self, point: Vec3) -> Vec3 {
         let distance = self.signed_distance(point);
         vec3(
@@ -126,6 +201,20 @@ impl Plane {
     /// is a unit vector. A non-finite origin, direction, normal, or distance
     /// misses, and so does a zero normal: `Plane::new(Vec3::ZERO, 0.0)` would
     /// otherwise report every origin as a hit.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Vec3, vec3};
+    ///
+    /// let ground = Plane::new(Vec3::Y, 0.0);
+    /// let hit = ground
+    ///     .ray_intersect(vec3(1.0, 4.0, 2.0), -Vec3::Y)
+    ///     .unwrap();
+    /// assert_eq!(hit.t, 4.0);
+    /// assert_eq!(hit.point, vec3(1.0, 0.0, 2.0));
+    /// assert_eq!(hit.normal, Vec3::Y);
+    /// ```
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         if !origin.is_finite()
             || !direction.is_finite()
@@ -181,6 +270,21 @@ impl Plane {
     /// `start`. A segment that stays strictly on one side returns [`None`].
     /// Assumes `normal` is a unit vector. A zero or non-finite normal misses,
     /// matching [`Plane::ray_intersect`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Plane, Vec3, vec3};
+    ///
+    /// let ground = Plane::new(Vec3::Y, 0.0);
+    /// let point = ground
+    ///     .segment_intersect(vec3(0.0, 2.0, 0.0), vec3(0.0, -2.0, 0.0))
+    ///     .unwrap();
+    /// assert_eq!(point, Vec3::ZERO);
+    /// assert!(ground
+    ///     .segment_intersect(vec3(0.0, 1.0, 0.0), vec3(0.0, 2.0, 0.0))
+    ///     .is_none());
+    /// ```
     pub fn segment_intersect(&self, start: Vec3, end: Vec3) -> Option<Vec3> {
         if !start.is_finite()
             || !end.is_finite()

@@ -10,6 +10,19 @@ use glam::{vec3, Vec3};
 /// `point = origin + direction * t`. When `direction` is a unit vector, `t` is
 /// the distance from the origin. The same struct is shared by every primitive
 /// so callers can compare hits with `<` on `t`.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{vec3, RayHit, Vec3};
+///
+/// let hit = RayHit {
+///     t: 1.0,
+///     point: Vec3::ZERO,
+///     normal: -Vec3::X,
+/// };
+/// assert_eq!(hit.point, vec3(0.0, 0.0, 0.0));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct RayHit {
     /// Parametric time along the ray.
@@ -38,6 +51,15 @@ pub struct RayHit {
 /// This matches [`crate::models::draw_cube`] / [`crate::models::draw_cube_wires`]:
 /// [`Aabb::from_center_size`] uses the same center and full size those
 /// functions take, so a gameplay box and its wireframe stay in lockstep.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Aabb, vec3};
+///
+/// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+/// assert!(crate_.contains(vec3(1.0, 0.0, 1.0)));
+/// ```
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Aabb {
     /// Corner with the smaller coordinates on each axis.
@@ -51,6 +73,15 @@ impl Aabb {
     ///
     /// The corners are stored as given. Swap them with [`Aabb::normalized`]
     /// when a component of `min` is greater than `max`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// assert_eq!(crate_.max, vec3(1.0, 1.0, 1.0));
+    /// ```
     pub const fn from_min_max(min: Vec3, max: Vec3) -> Aabb {
         Aabb { min, max }
     }
@@ -60,6 +91,16 @@ impl Aabb {
     /// `size` is the full width, height, and depth, the same vector passed to
     /// `draw_cube`. Prefer non-negative components; a negative component flips
     /// that axis.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_center_size(vec3(0.0, 1.0, 0.0), vec3(2.0, 2.0, 2.0));
+    /// assert_eq!(crate_.min, vec3(-1.0, 0.0, -1.0));
+    /// assert_eq!(crate_.max, vec3(1.0, 2.0, 1.0));
+    /// ```
     pub const fn from_center_size(center: Vec3, size: Vec3) -> Aabb {
         Aabb {
             min: vec3(
@@ -78,6 +119,17 @@ impl Aabb {
     /// Builds the smallest box containing every point.
     ///
     /// Returns [`None`] when `points` is empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_points([vec3(0.0, 0.0, 0.0), vec3(2.0, -1.0, 4.0)]).unwrap();
+    /// assert_eq!(crate_.min, vec3(0.0, -1.0, 0.0));
+    /// assert_eq!(crate_.max, vec3(2.0, 0.0, 4.0));
+    /// assert!(Aabb::from_points([]).is_none());
+    /// ```
     pub fn from_points<I>(points: I) -> Option<Aabb>
     where
         I: IntoIterator<Item = Vec3>,
@@ -96,6 +148,15 @@ impl Aabb {
     }
 
     /// Center of the box.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(2.0, 4.0, 6.0));
+    /// assert_eq!(crate_.center(), vec3(1.0, 2.0, 3.0));
+    /// ```
     pub const fn center(self) -> Vec3 {
         vec3(
             (self.min.x + self.max.x) * 0.5,
@@ -105,6 +166,15 @@ impl Aabb {
     }
 
     /// Full size on each axis (`max - min`).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(2.0, 4.0, 6.0));
+    /// assert_eq!(crate_.size(), vec3(2.0, 4.0, 6.0));
+    /// ```
     pub const fn size(self) -> Vec3 {
         vec3(
             self.max.x - self.min.x,
@@ -114,6 +184,15 @@ impl Aabb {
     }
 
     /// Half the full size on each axis.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(2.0, 4.0, 6.0));
+    /// assert_eq!(crate_.half_extents(), vec3(1.0, 2.0, 3.0));
+    /// ```
     pub const fn half_extents(self) -> Vec3 {
         vec3(
             (self.max.x - self.min.x) * 0.5,
@@ -125,6 +204,16 @@ impl Aabb {
     /// Returns true when `point` lies inside the box, including the boundary.
     ///
     /// Assumes the box is normalized (`min` <= `max` on every axis).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// assert!(crate_.contains(vec3(1.0, 1.0, 1.0)));
+    /// assert!(!crate_.contains(vec3(1.1, 0.0, 0.0)));
+    /// ```
     pub const fn contains(&self, point: Vec3) -> bool {
         point.x >= self.min.x
             && point.x <= self.max.x
@@ -137,6 +226,16 @@ impl Aabb {
     /// Returns true when the two boxes overlap, including a shared face.
     ///
     /// Assumes both boxes are normalized.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let a = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// let b = Aabb::from_min_max(vec3(1.0, 0.0, 0.0), vec3(2.0, 1.0, 1.0));
+    /// assert!(a.overlaps(&b));
+    /// ```
     pub const fn overlaps(&self, other: &Aabb) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x
@@ -151,6 +250,18 @@ impl Aabb {
     /// Boxes that only touch along a face, edge, or corner produce a flat
     /// result whose size is zero on the touching axes. Assumes both boxes are
     /// normalized.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let a = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(2.0, 2.0, 2.0));
+    /// let b = Aabb::from_min_max(vec3(1.0, 1.0, 1.0), vec3(3.0, 3.0, 3.0));
+    /// let shared = a.intersect(b).unwrap();
+    /// assert_eq!(shared.min, vec3(1.0, 1.0, 1.0));
+    /// assert_eq!(shared.max, vec3(2.0, 2.0, 2.0));
+    /// ```
     pub const fn intersect(&self, other: Aabb) -> Option<Aabb> {
         let min = vec3(
             if self.min.x > other.min.x {
@@ -194,6 +305,18 @@ impl Aabb {
     }
 
     /// Smallest box that contains both inputs.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let a = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// let b = Aabb::from_min_max(vec3(2.0, -1.0, 0.0), vec3(3.0, 0.0, 1.0));
+    /// let both = a.combine_with(b);
+    /// assert_eq!(both.min, vec3(0.0, -1.0, 0.0));
+    /// assert_eq!(both.max, vec3(3.0, 1.0, 1.0));
+    /// ```
     pub const fn combine_with(self, other: Aabb) -> Aabb {
         Aabb {
             min: vec3(
@@ -234,6 +357,15 @@ impl Aabb {
     }
 
     /// Translates both corners by `offset`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// assert_eq!(crate_.offset(vec3(1.0, 2.0, 3.0)).min, vec3(1.0, 2.0, 3.0));
+    /// ```
     pub const fn offset(self, offset: Vec3) -> Aabb {
         Aabb {
             min: vec3(
@@ -253,6 +385,17 @@ impl Aabb {
     ///
     /// A negative margin shrinks it. The box is not re-normalized, so a large
     /// negative margin can invert it.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// let grown = crate_.expanded(0.5);
+    /// assert_eq!(grown.min, vec3(-0.5, -0.5, -0.5));
+    /// assert_eq!(grown.max, vec3(1.5, 1.5, 1.5));
+    /// ```
     pub const fn expanded(self, margin: f32) -> Aabb {
         Aabb {
             min: vec3(
@@ -269,6 +412,17 @@ impl Aabb {
     }
 
     /// Swaps inverted axes so `min` <= `max` on every component.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(1.0, 0.0, 3.0), vec3(0.0, 2.0, 1.0));
+    /// let fixed = crate_.normalized();
+    /// assert_eq!(fixed.min, vec3(0.0, 0.0, 1.0));
+    /// assert_eq!(fixed.max, vec3(1.0, 2.0, 3.0));
+    /// ```
     pub const fn normalized(self) -> Aabb {
         Aabb {
             min: vec3(
@@ -312,6 +466,15 @@ impl Aabb {
     ///
     /// A point already inside is returned unchanged. Assumes the box is
     /// normalized; otherwise the result is not meaningful.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// assert_eq!(crate_.closest_point(vec3(2.0, 0.5, -1.0)), vec3(1.0, 0.5, 0.0));
+    /// ```
     pub const fn closest_point(&self, point: Vec3) -> Vec3 {
         vec3(
             clamp_axis(point.x, self.min.x, self.max.x),
@@ -334,6 +497,20 @@ impl Aabb {
     ///
     /// A non-finite origin, direction, or corner misses. Assumes the box is
     /// normalized.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, vec3, Vec3};
+    ///
+    /// let crate_ = Aabb::from_min_max(vec3(0.0, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+    /// let hit = crate_
+    ///     .ray_intersect(vec3(-1.0, 0.5, 0.5), Vec3::X)
+    ///     .unwrap();
+    /// assert_eq!(hit.t, 1.0);
+    /// assert_eq!(hit.point, vec3(0.0, 0.5, 0.5));
+    /// assert_eq!(hit.normal, -Vec3::X);
+    /// ```
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         if !origin.is_finite()
             || !direction.is_finite()

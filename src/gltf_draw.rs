@@ -19,51 +19,177 @@ use crate::{
     texture::{FilterMode, Texture2D},
 };
 
-/// CPU-side material values, retained for custom rendering.
+/// CPU-side material values, retained for a custom shader.
+///
+/// [`GltfModel::draw`] does not apply these, except that the base-color
+/// factor is already written into each vertex color at 8-bit precision.
+/// The exact factor stays in [`GltfSurface::base_color`].
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf_draw::{GltfAlphaMode, GltfSurface};
+///
+/// let surface = GltfSurface {
+///     name: Some("blue".into()),
+///     base_color: [0.2, 0.4, 0.6, 1.0],
+///     emissive: [0.0, 0.0, 0.0],
+///     metallic: 0.0,
+///     roughness: 1.0,
+///     transmission: 0.0,
+///     alpha_mode: GltfAlphaMode::Opaque,
+///     alpha_cutoff: 0.5,
+///     double_sided: false,
+///     unlit: false,
+/// };
+/// assert_eq!(surface.base_color[3], 1.0);
+/// ```
 #[derive(Clone, Debug)]
 pub struct GltfSurface {
+    /// Material name, or [`None`] when the material has none.
     pub name: Option<String>,
+    /// Metallic-roughness base color factor, linear RGBA.
     pub base_color: [f32; 4],
+    /// Emissive factor, linear RGB, multiplied by `KHR_materials_emissive_strength`
+    /// when that extension is present. The strength defaults to 1.
     pub emissive: [f32; 3],
+    /// Metallic factor, 0 to 1.
     pub metallic: f32,
+    /// Roughness factor, 0 to 1.
     pub roughness: f32,
-    /// Scalar KHR_materials_transmission factor. No refraction is applied here.
+    /// `KHR_materials_transmission` factor, or 0 when the extension is absent.
+    /// No refraction is applied.
     pub transmission: f32,
+    /// Opaque, mask, or blend. [`GltfModel::draw`] does not sort or discard.
     pub alpha_mode: GltfAlphaMode,
+    /// Mask cutoff. glTF's default of 0.5 is used when the material omits it.
     pub alpha_cutoff: f32,
+    /// True when the material is double sided.
     pub double_sided: bool,
+    /// True when `KHR_materials_unlit` is present.
     pub unlit: bool,
 }
 
+/// How a material's alpha is meant to be used.
+///
+/// [`GltfModel::draw`] ignores this. Read [`GltfSurface::alpha_mode`] and
+/// draw mask or blend parts yourself.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf_draw::GltfAlphaMode;
+///
+/// let mode = GltfAlphaMode::Blend;
+/// assert!(matches!(mode, GltfAlphaMode::Blend));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GltfAlphaMode {
+    /// Alpha is ignored. This is the glTF default.
     Opaque,
+    /// Discard fragments below [`GltfSurface::alpha_cutoff`].
     Mask,
+    /// Composite with the framebuffer. Draw these after opaque parts.
     Blend,
 }
 
 /// One triangle-safe, 16-bit mesh chunk, already in scene world coordinates.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::color::colors::WHITE;
+/// use macroquad::gltf_draw::{GltfAlphaMode, GltfDrawMesh, GltfSurface};
+/// use macroquad::math::{Vec3, vec3};
+/// use macroquad::models::{Mesh, Vertex};
+///
+/// let part = GltfDrawMesh {
+///     mesh: Mesh {
+///         vertices: vec![Vertex::new(0.0, 0.0, 0.0, 0.0, 0.0, WHITE)],
+///         indices: vec![0],
+///         texture: None,
+///     },
+///     surface: GltfSurface {
+///         name: None,
+///         base_color: [1.0, 1.0, 1.0, 1.0],
+///         emissive: [0.0, 0.0, 0.0],
+///         metallic: 0.0,
+///         roughness: 1.0,
+///         transmission: 0.0,
+///         alpha_mode: GltfAlphaMode::Opaque,
+///         alpha_cutoff: 0.5,
+///         double_sided: false,
+///         unlit: true,
+///     },
+///     node: 0,
+///     name: "box".into(),
+///     path: "root/box".into(),
+///     center: Vec3::ZERO,
+///     bounds_min: Vec3::ZERO,
+///     bounds_max: vec3(1.0, 1.0, 0.0),
+/// };
+/// assert_eq!(part.path, "root/box");
+/// ```
 pub struct GltfDrawMesh {
+    /// Positions, normals, and uvs after the node world matrix. Vertex colors
+    /// hold the base-color factor at byte precision. `texture` is the
+    /// base-color image, or [`None`].
     pub mesh: Mesh,
+    /// Material values for this chunk. See [`GltfSurface`].
     pub surface: GltfSurface,
+    /// Index into the CPU scene's node list.
     pub node: usize,
-    /// Node name, falling back to mesh name. Useful for object picking.
+    /// Node name, falling back to the mesh name, then `"unnamed"`.
     pub name: String,
     /// Node and ancestor names joined by `/`.
     pub path: String,
+    /// Center of this chunk's positions.
     pub center: Vec3,
+    /// Minimum corner of this chunk's positions.
     pub bounds_min: Vec3,
+    /// Maximum corner of this chunk's positions.
     pub bounds_max: Vec3,
 }
 
-/// Chunk limits must not exceed the application's draw-call buffer capacity.
+/// Maximum vertices and indices in one [`GltfDrawMesh`].
+///
+/// Vertices must be in `3..=65535` because indices are `u16`. Indices must
+/// be at least 3. The limit should also fit
+/// [`crate::conf::Conf::draw_call_vertex_capacity`] and
+/// [`crate::conf::Conf::draw_call_index_capacity`].
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf_draw::GltfMeshLimits;
+///
+/// let limits = GltfMeshLimits {
+///     vertices: 3,
+///     indices: 3,
+/// };
+/// assert!(limits.vertices <= GltfMeshLimits::default().vertices);
+/// ```
 #[derive(Clone, Copy, Debug)]
 pub struct GltfMeshLimits {
+    /// Vertices kept in one chunk.
     pub vertices: usize,
+    /// Indices kept in one chunk.
     pub indices: usize,
 }
 
 impl Default for GltfMeshLimits {
+    /// 10_000 vertices and 5_000 indices, matching [`crate::conf::Conf`]'s
+    /// default draw-call capacities.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::gltf_draw::GltfMeshLimits;
+    ///
+    /// let limits = GltfMeshLimits::default();
+    /// assert_eq!(limits.vertices, 10_000);
+    /// assert_eq!(limits.indices, 5_000);
+    /// ```
     fn default() -> Self {
         // Fit macroquad's default buffers. Larger applications can explicitly
         // raise both these limits and Conf's draw_call_*_capacity settings.
@@ -74,29 +200,120 @@ impl Default for GltfMeshLimits {
     }
 }
 
+/// Counts from a [`GltfModel`] load.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf_draw::GltfModelStats;
+///
+/// let stats = GltfModelStats {
+///     nodes: 2,
+///     meshes: 1,
+///     draw_calls: 1,
+///     triangles: 2,
+///     textures: 1,
+/// };
+/// assert_eq!(stats.triangles, 2);
+/// assert_eq!(GltfModelStats::default().textures, 0);
+/// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GltfModelStats {
+    /// Nodes in the loaded scene, including empties.
     pub nodes: usize,
+    /// Meshes referenced by those nodes.
     pub meshes: usize,
+    /// Number of [`GltfDrawMesh`] chunks. Equal to `parts.len()`.
     pub draw_calls: usize,
+    /// Triangles across every chunk.
     pub triangles: usize,
+    /// Embedded base-color images uploaded to the GPU.
     pub textures: usize,
 }
 
+/// Textured chunks for one `.glb`, plus the combined bounds.
+///
+/// Build one with [`GltfModel::from_bytes`] inside a running macroquad
+/// application. [`GltfModel::draw`] submits every part. Read [`GltfModel::parts`]
+/// for alpha and lighting values that draw ignores.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf_draw::{GltfModel, GltfModelStats};
+/// use macroquad::math::Vec3;
+///
+/// let model = GltfModel {
+///     parts: Vec::new(),
+///     stats: GltfModelStats::default(),
+///     bounds_min: Vec3::ZERO,
+///     bounds_max: Vec3::ZERO,
+///     root_names: vec!["room".into()],
+/// };
+/// assert_eq!(model.root_names, vec!["room".to_string()]);
+/// ```
 pub struct GltfModel {
+    /// One 16-bit chunk per entry, in node preorder.
     pub parts: Vec<GltfDrawMesh>,
+    /// Counts from the load.
     pub stats: GltfModelStats,
+    /// Minimum corner of every part, or zero when there are no parts.
     pub bounds_min: Vec3,
+    /// Maximum corner of every part, or zero when there are no parts.
     pub bounds_max: Vec3,
+    /// Name of each root node. The fallback matches [`GltfDrawMesh::name`].
     pub root_names: Vec<String>,
 }
 
 impl GltfModel {
-    /// Load a self-contained binary glTF, creating GPU textures.
+    /// Load a binary `.glb` and upload its embedded images.
+    ///
+    /// Call this from a running macroquad application. `.gltf` JSON and
+    /// external image URIs are errors. Chunks use [`GltfMeshLimits::default`].
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    ///
+    /// #[macroquad::main("Textured glTF")]
+    /// async fn main() {
+    ///     let model = GltfModel::from_bytes(include_bytes!(
+    ///         "../examples/assets/textured_quad.glb"
+    ///     ))
+    ///     .expect("checkerboard");
+    ///     assert!(model.stats.textures > 0);
+    /// }
+    /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         Self::from_bytes_with_limits(bytes, GltfMeshLimits::default())
     }
 
+    /// [`GltfModel::from_bytes`] with an explicit chunk size.
+    ///
+    /// `limits.vertices` must be in `3..=65535` and `limits.indices` must be
+    /// at least 3. Raise [`crate::conf::Conf`]'s draw-call capacities when
+    /// the limit is larger than the default.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    ///
+    /// #[macroquad::main("Textured glTF")]
+    /// async fn main() {
+    ///     let limits = GltfMeshLimits {
+    ///         vertices: 10_000,
+    ///         indices: 5_000,
+    ///     };
+    ///     let model = GltfModel::from_bytes_with_limits(
+    ///         include_bytes!("../examples/assets/textured_quad.glb"),
+    ///         limits,
+    ///     )
+    ///     .expect("checkerboard");
+    ///     assert!(!model.parts.is_empty());
+    /// }
+    /// ```
     pub fn from_bytes_with_limits(bytes: &[u8], limits: GltfMeshLimits) -> Result<Self, String> {
         validate_limits(limits)?;
         let (scene, document, binary) = prepare_glb(bytes)?;
@@ -349,6 +566,21 @@ impl GltfModel {
     /// Submit textured meshes with their base color, using the current material
     /// and camera. Applications implementing alpha or lighting should inspect
     /// `parts`. The base-color factor is already in each vertex's color field.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    ///
+    /// #[macroquad::main("Textured glTF")]
+    /// async fn main() {
+    ///     let model = GltfModel::from_bytes(include_bytes!(
+    ///         "../examples/assets/textured_quad.glb"
+    ///     ))
+    ///     .expect("checkerboard");
+    ///     model.draw();
+    /// }
+    /// ```
     pub fn draw(&self) {
         for part in &self.parts {
             draw_mesh(&part.mesh);

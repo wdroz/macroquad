@@ -19,6 +19,15 @@ use super::{Aabb, Plane, RayHit};
 /// Boundaries are inclusive, matching [`Aabb`](crate::math::Aabb) and
 /// [`Plane`](crate::math::Plane): a corner, an edge, and a coplanar point in
 /// the interior are inside.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{Triangle, Vec3, vec3};
+///
+/// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+/// assert!(triangle.contains(vec3(0.25, 0.25, 0.0)));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Triangle {
     /// First corner. The winding starts here.
@@ -33,6 +42,15 @@ impl Triangle {
     /// Creates a triangle from three corners.
     ///
     /// The winding `a → b → c` is the right-hand rule for [`Triangle::plane`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Triangle, Vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// assert_eq!(triangle.a, Vec3::ZERO);
+    /// ```
     pub const fn new(a: Vec3, b: Vec3, c: Vec3) -> Triangle {
         Triangle { a, b, c }
     }
@@ -42,6 +60,15 @@ impl Triangle {
     /// The normal follows `(b - a) × (c - a)`, the same rule as
     /// [`Plane::from_points`](crate::math::Plane::from_points). Returns
     /// [`None`] when the corners are collinear, coincident, or non-finite.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Triangle, Vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// assert_eq!(triangle.plane().unwrap().normal, Vec3::Z);
+    /// ```
     pub fn plane(self) -> Option<Plane> {
         Plane::from_points(self.a, self.b, self.c)
     }
@@ -49,6 +76,16 @@ impl Triangle {
     /// Smallest axis-aligned box containing the three corners.
     ///
     /// Built with [`Aabb::from_points`](crate::math::Aabb::from_points).
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Triangle, Vec3, vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// assert_eq!(triangle.aabb().min, Vec3::ZERO);
+    /// assert_eq!(triangle.aabb().max, vec3(1.0, 1.0, 0.0));
+    /// ```
     pub fn aabb(self) -> Aabb {
         match Aabb::from_points([self.a, self.b, self.c]) {
             Some(aabb) => aabb,
@@ -64,6 +101,16 @@ impl Triangle {
     /// The point must be on the plane. A point above the triangle is outside,
     /// even when its projection would land inside. A zero-area triangle
     /// contains nothing.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Triangle, Vec3, vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// assert!(triangle.contains(vec3(0.25, 0.25, 0.0)));
+    /// assert!(!triangle.contains(vec3(0.25, 0.25, 0.1)));
+    /// ```
     pub fn contains(self, point: Vec3) -> bool {
         let Some(plane) = self.plane() else {
             return false;
@@ -81,6 +128,16 @@ impl Triangle {
     ///
     /// A point already in the triangle is returned unchanged. A non-finite
     /// input returns `a`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Triangle, Vec3, vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// assert_eq!(triangle.closest_point(vec3(0.25, 0.25, 0.0)), vec3(0.25, 0.25, 0.0));
+    /// assert_eq!(triangle.closest_point(vec3(-1.0, 0.0, 0.0)), Vec3::ZERO);
+    /// ```
     pub fn closest_point(self, point: Vec3) -> Vec3 {
         if !point.is_finite() || !self.a.is_finite() || !self.b.is_finite() || !self.c.is_finite() {
             return self.a;
@@ -155,6 +212,20 @@ impl Triangle {
     /// parallel to the plane misses when the origin is outside the triangle.
     /// A zero-area triangle misses. A non-finite origin, direction, or corner
     /// misses.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Triangle, Vec3, vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// let hit = triangle
+    ///     .ray_intersect(vec3(0.2, 0.2, 1.0), -Vec3::Z)
+    ///     .unwrap();
+    /// assert!((hit.t - 1.0).abs() < 1e-4);
+    /// assert!((hit.point - vec3(0.2, 0.2, 0.0)).length() < 1e-4);
+    /// assert!((hit.normal - Vec3::Z).length() < 1e-4);
+    /// ```
     pub fn ray_intersect(self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         self.intersect(origin, direction, false)
     }
@@ -165,6 +236,20 @@ impl Triangle {
     /// (`normal · direction > 0`). The front face, where the ray travels
     /// against that normal, is kept. A ray that starts in the triangle is
     /// kept unless it points strictly out through the front.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Triangle, Vec3, vec3};
+    ///
+    /// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+    /// assert!(triangle
+    ///     .ray_intersect_cull_backface(vec3(0.2, 0.2, 1.0), -Vec3::Z)
+    ///     .is_some());
+    /// assert!(triangle
+    ///     .ray_intersect_cull_backface(vec3(0.2, 0.2, -1.0), Vec3::Z)
+    ///     .is_none());
+    /// ```
     pub fn ray_intersect_cull_backface(self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         self.intersect(origin, direction, true)
     }
