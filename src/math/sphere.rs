@@ -52,11 +52,14 @@ impl Sphere {
     }
 
     /// Returns true when the two spheres overlap, including a shared point.
+    ///
+    /// A negative radius is empty and overlaps nothing, even when the other
+    /// radius would cover this center.
     pub const fn overlaps(&self, other: &Sphere) -> bool {
-        let reach = self.radius + other.radius;
-        if reach < 0.0 {
+        if self.radius < 0.0 || other.radius < 0.0 {
             return false;
         }
+        let reach = self.radius + other.radius;
         distance_squared(self.center, other.center) <= reach * reach
     }
 
@@ -98,8 +101,14 @@ impl Sphere {
     /// when the origin is on the surface and `direction` points outward (or is
     /// zero). An origin on the surface with `direction` pointing inward or
     /// tangent reports `t == 0` and the outward normal.
+    ///
+    /// A non-finite origin, direction, center, or radius misses. An infinite
+    /// radius misses: it is not a usable sphere.
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
-        if self.radius < 0.0 {
+        if !self.radius.is_finite() || self.radius < 0.0 {
+            return None;
+        }
+        if !self.center.is_finite() || !origin.is_finite() || !direction.is_finite() {
             return None;
         }
 
@@ -169,6 +178,9 @@ impl Sphere {
         } else {
             (point - self.center).normalize_or_zero()
         };
+        if !t.is_finite() || !point.is_finite() || !normal.is_finite() {
+            return None;
+        }
         Some(RayHit { t, point, normal })
     }
 }
@@ -218,6 +230,9 @@ mod tests {
         assert!(sphere.overlaps(&inside));
         assert!(inside.overlaps(&sphere));
         assert!(!sphere.overlaps(&Sphere::new(vec3(0.5, 0.0, 0.0), -2.0)));
+        // A negative radius is empty even when the other sphere covers its center.
+        assert!(!Sphere::new(Vec3::ZERO, -0.25).overlaps(&Sphere::new(Vec3::ZERO, 10.0)));
+        assert!(!Sphere::new(Vec3::ZERO, 10.0).overlaps(&Sphere::new(Vec3::ZERO, -0.25)));
 
         let moved = sphere.offset(vec3(0.0, 3.0, 0.0));
         assert_vec3_close(moved.center, vec3(0.0, 3.0, 0.0));
@@ -291,6 +306,21 @@ mod tests {
             .ray_intersect(vec3(2.0, 0.0, 0.0), Vec3::ZERO)
             .is_none());
         assert!(Sphere::new(Vec3::ZERO, -1.0)
+            .ray_intersect(vec3(-2.0, 0.0, 0.0), Vec3::X)
+            .is_none());
+        assert!(sphere
+            .ray_intersect(vec3(f32::NAN, 0.0, 0.0), Vec3::X)
+            .is_none());
+        assert!(sphere
+            .ray_intersect(Vec3::ZERO, vec3(f32::NAN, 0.0, 0.0))
+            .is_none());
+        assert!(sphere
+            .ray_intersect(vec3(-2.0, 0.0, 0.0), vec3(f32::INFINITY, 0.0, 0.0))
+            .is_none());
+        assert!(Sphere::new(vec3(f32::NAN, 0.0, 0.0), 1.0)
+            .ray_intersect(vec3(-2.0, 0.0, 0.0), Vec3::X)
+            .is_none());
+        assert!(Sphere::new(Vec3::ZERO, f32::INFINITY)
             .ray_intersect(vec3(-2.0, 0.0, 0.0), Vec3::X)
             .is_none());
     }

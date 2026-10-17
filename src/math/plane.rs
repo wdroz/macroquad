@@ -52,8 +52,8 @@ impl Plane {
 
     /// Plane through `point` with the given normal.
     ///
-    /// `normal` is normalized. Returns [`None`] when `normal` or `point` is
-    /// zero-length, non-finite, or otherwise cannot form a unit normal.
+    /// `normal` is normalized. Returns [`None`] when `normal` is zero-length or
+    /// non-finite, or when `point` is non-finite. The origin is a valid point.
     pub fn from_normal_point(normal: Vec3, point: Vec3) -> Option<Plane> {
         let normal = unit_normal(normal)?;
         let distance = dot(normal, point);
@@ -123,23 +123,29 @@ impl Plane {
     /// When the origin already lies on the plane, the hit is at `t == 0` with
     /// that same normal, including a zero or parallel direction. A ray parallel
     /// to the plane misses when the origin is off the plane. Assumes `normal`
-    /// is a unit vector.
+    /// is a unit vector. A non-finite origin, direction, normal, or distance
+    /// misses, and so does a zero normal: `Plane::new(Vec3::ZERO, 0.0)` would
+    /// otherwise report every origin as a hit.
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
-        if !origin.is_finite() || !self.normal.is_finite() || !self.distance.is_finite() {
+        if !origin.is_finite()
+            || !direction.is_finite()
+            || !self.normal.is_finite()
+            || !self.distance.is_finite()
+            || dot(self.normal, self.normal) == 0.0
+        {
             return None;
         }
 
         let origin_distance = self.signed_distance(origin);
+        if !origin_distance.is_finite() {
+            return None;
+        }
         if origin_distance == 0.0 {
             return Some(RayHit {
                 t: 0.0,
                 point: origin,
                 normal: self.normal,
             });
-        }
-
-        if !direction.is_finite() {
-            return None;
         }
 
         let denom = dot(self.normal, direction);
@@ -152,13 +158,17 @@ impl Plane {
             return None;
         }
 
+        let point = vec3(
+            origin.x + direction.x * t,
+            origin.y + direction.y * t,
+            origin.z + direction.z * t,
+        );
+        if !point.is_finite() {
+            return None;
+        }
         Some(RayHit {
             t,
-            point: vec3(
-                origin.x + direction.x * t,
-                origin.y + direction.y * t,
-                origin.z + direction.z * t,
-            ),
+            point,
             normal: self.normal,
         })
     }
@@ -169,9 +179,15 @@ impl Plane {
     /// Endpoints on opposite sides count, and so does an endpoint that lies on
     /// the plane. When the whole segment lies on the plane, the result is
     /// `start`. A segment that stays strictly on one side returns [`None`].
-    /// Assumes `normal` is a unit vector.
+    /// Assumes `normal` is a unit vector. A zero or non-finite normal misses,
+    /// matching [`Plane::ray_intersect`].
     pub fn segment_intersect(&self, start: Vec3, end: Vec3) -> Option<Vec3> {
-        if !start.is_finite() || !end.is_finite() {
+        if !start.is_finite()
+            || !end.is_finite()
+            || !self.normal.is_finite()
+            || !self.distance.is_finite()
+            || dot(self.normal, self.normal) == 0.0
+        {
             return None;
         }
 
@@ -301,6 +317,11 @@ mod tests {
         assert!(Plane::from_normal_point(Vec3::ZERO, Vec3::X).is_none());
         assert!(Plane::from_normal_point(vec3(f32::NAN, 0.0, 0.0), Vec3::ZERO).is_none());
         assert!(Plane::from_normal_point(Vec3::X, vec3(f32::INFINITY, 0.0, 0.0)).is_none());
+
+        let through_origin = Plane::from_normal_point(Vec3::Y, Vec3::ZERO).unwrap();
+        assert_vec3_close(through_origin.normal, Vec3::Y);
+        assert!(through_origin.distance.abs() < 1e-5);
+        assert_eq!(through_origin.side(Vec3::ZERO), PlaneSide::Coplanar);
     }
 
     #[test]
@@ -436,5 +457,12 @@ mod tests {
         assert!(xy_plane()
             .ray_intersect(vec3(f32::INFINITY, 0.0, 0.0), Vec3::Z)
             .is_none());
+        // On the plane, a non-finite direction is still not a ray.
+        assert!(xy_plane()
+            .ray_intersect(Vec3::ZERO, vec3(f32::NAN, 0.0, 0.0))
+            .is_none());
+        let degenerate = Plane::new(Vec3::ZERO, 0.0);
+        assert!(degenerate.ray_intersect(Vec3::X, Vec3::Y).is_none());
+        assert!(degenerate.segment_intersect(Vec3::ZERO, Vec3::X).is_none());
     }
 }

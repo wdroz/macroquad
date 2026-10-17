@@ -1,12 +1,12 @@
 //! Rays in 3D.
 //!
 //! A ray is an origin and a direction in world space. It does not assume a
-//! particular up axis, matching [`Aabb`](crate::math::Aabb) and
-//! [`Sphere`](crate::math::Sphere).
+//! particular up axis, matching [`Aabb`](crate::math::Aabb),
+//! [`Sphere`](crate::math::Sphere), and [`Plane`](crate::math::Plane).
 
 use glam::{vec3, Vec3};
 
-use super::{Aabb, RayHit, Sphere};
+use super::{Aabb, Plane, RayHit, Sphere};
 
 /// Closest intersection of a [`Ray`] with one shape in a slice.
 ///
@@ -30,8 +30,8 @@ pub struct ClosestHit {
 ///
 /// Hits with `t < 0` are behind the origin and are rejected. A single shape
 /// still uses [`Aabb::ray_intersect`] / [`Sphere::ray_intersect`] with
-/// `origin` and `direction`; the methods here scan a slice and keep the
-/// smallest non-negative `t`.
+/// `origin` and `direction`; the methods here scan a slice of boxes, spheres,
+/// or planes and keep the smallest non-negative `t`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Ray {
     /// Start of the ray.
@@ -85,6 +85,16 @@ impl Ray {
     pub fn closest_sphere(&self, spheres: &[Sphere]) -> Option<ClosestHit> {
         closest_hit(spheres, |sphere| {
             sphere.ray_intersect(self.origin, self.direction)
+        })
+    }
+
+    /// Closest hit against `planes`, or [`None`] when every plane is missed.
+    ///
+    /// Hits with `t < 0` are rejected. Ties keep the earlier index. Assumes
+    /// each normal is a unit vector, same as [`Plane::ray_intersect`].
+    pub fn closest_plane(&self, planes: &[Plane]) -> Option<ClosestHit> {
+        closest_hit(planes, |plane| {
+            plane.ray_intersect(self.origin, self.direction)
         })
     }
 }
@@ -247,5 +257,27 @@ mod tests {
 
         let boxes = [Aabb::from_center_size(vec3(4.0, 0.0, 0.0), Vec3::ONE)];
         assert!(ray.closest_aabb(&boxes).is_none());
+    }
+
+    #[test]
+    fn closest_plane_picks_the_nearer_plane_and_keeps_an_earlier_tie() {
+        let ray = Ray::new(vec3(0.0, 2.0, 0.0), -Vec3::Y);
+        let planes = [
+            Plane::new(Vec3::Y, 0.0),
+            Plane::new(Vec3::Y, 1.0),
+            Plane::new(Vec3::Z, 5.0),
+        ];
+        let closest = ray.closest_plane(&planes).unwrap();
+        assert_eq!(closest.index, 1);
+        assert!((closest.hit.t - 1.0).abs() < 1e-5);
+        assert_vec3_close(closest.hit.point, vec3(0.0, 1.0, 0.0));
+        assert_eq!(closest.hit.normal, Vec3::Y);
+
+        let tied = [Plane::new(Vec3::Y, 0.0), Plane::new(Vec3::Y, 0.0)];
+        assert_eq!(ray.closest_plane(&tied).unwrap().index, 0);
+        assert!(ray.closest_plane(&[]).is_none());
+        assert!(Ray::new(vec3(0.0, 2.0, 0.0), Vec3::Y)
+            .closest_plane(&[Plane::new(Vec3::Y, 0.0)])
+            .is_none());
     }
 }

@@ -331,8 +331,17 @@ impl Aabb {
     /// a zero normal. The same `t == 0` / zero-normal result is returned when
     /// the origin is on the boundary and `direction` points outward.
     ///
-    /// Assumes the box is normalized.
+    /// A non-finite origin, direction, or corner misses. Assumes the box is
+    /// normalized.
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
+        if !origin.is_finite()
+            || !direction.is_finite()
+            || !self.min.is_finite()
+            || !self.max.is_finite()
+        {
+            return None;
+        }
+
         let mut range = RayRange {
             t_min: 0.0,
             t_max: f32::INFINITY,
@@ -345,14 +354,21 @@ impl Aabb {
         {
             return None;
         }
+        if !range.t_min.is_finite() {
+            return None;
+        }
 
+        let point = vec3(
+            origin.x + direction.x * range.t_min,
+            origin.y + direction.y * range.t_min,
+            origin.z + direction.z * range.t_min,
+        );
+        if !point.is_finite() {
+            return None;
+        }
         Some(RayHit {
             t: range.t_min,
-            point: vec3(
-                origin.x + direction.x * range.t_min,
-                origin.y + direction.y * range.t_min,
-                origin.z + direction.z * range.t_min,
-            ),
+            point,
             normal: range.normal,
         })
     }
@@ -556,6 +572,18 @@ mod tests {
         assert!(aabb
             .ray_intersect(vec3(5.0, 1.0, 1.0), Vec3::ZERO)
             .is_none());
+        assert!(aabb
+            .ray_intersect(vec3(f32::NAN, 1.0, 1.0), Vec3::X)
+            .is_none());
+        // A NaN component used to be ignored, reporting a hit at the origin.
+        assert!(aabb
+            .ray_intersect(vec3(-1.0, 1.0, 1.0), vec3(f32::NAN, 0.0, 0.0))
+            .is_none());
+        assert!(aabb
+            .ray_intersect(vec3(-1.0, 1.0, 1.0), vec3(f32::INFINITY, 0.0, 0.0))
+            .is_none());
+        let broken = Aabb::from_min_max(vec3(f32::NAN, 0.0, 0.0), vec3(1.0, 1.0, 1.0));
+        assert!(broken.ray_intersect(Vec3::ZERO, Vec3::X).is_none());
     }
 
     #[test]

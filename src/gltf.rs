@@ -12,8 +12,10 @@
 //! place in the scene. External buffer file URIs are rejected: the bytes passed
 //! to [`GltfScene::from_bytes`] must be a `.glb` or a `.gltf` whose buffers are
 //! `data:` URIs. That keeps parsing free of filesystem and window access.
+//! A buffer longer than its declared `byteLength` is truncated. Only triangle
+//! primitives are loaded, and a node index used more than once is an error.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::{Mat4, Quat, Vec2, Vec3};
 
@@ -71,9 +73,11 @@ pub struct GltfMesh {
 /// `positions`, `normals`, and `uvs` are parallel when the accessor is
 /// present. Missing normals or the first texture-coordinate set produce an
 /// empty list, not generated data. A primitive with no index accessor gets
-/// `0..positions.len()` so every primitive is indexed. `base_color_factor` is
-/// the metallic-roughness factor, RGBA, defaulting to white when the material
-/// omits it.
+/// `0..positions.len()` so every primitive is indexed. The index count is a
+/// multiple of 3, and every index is in range. Other primitive modes are an
+/// error. `base_color_factor` is the metallic-roughness factor, RGBA,
+/// defaulting to white when the material omits it. Normals and uvs, when
+/// present, have one entry per position.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfPrimitive {
     /// `POSITION` values.
@@ -115,7 +119,8 @@ impl GltfScene {
     ///
     /// The default scene is loaded. When `scene` is omitted, the first scene
     /// is used. No scene means an empty [`GltfScene`]. External buffer files
-    /// are an error; see the module docs.
+    /// are an error; see the module docs. A node that appears twice in that
+    /// scene, including through a cycle, is an error.
     pub fn from_bytes(bytes: &[u8]) -> Result<GltfScene, GltfError> {
         let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| {
             GltfError::new(format!("glTF document could not be parsed: {error}"))
@@ -133,6 +138,7 @@ impl GltfScene {
             meshes: Vec::new(),
         };
         let mut mesh_of = HashMap::new();
+        let mut seen_nodes = HashSet::new();
         for root in scene.nodes() {
             append_node(
                 &mut loaded,
@@ -141,6 +147,7 @@ impl GltfScene {
                 Mat4::IDENTITY,
                 &buffers,
                 &mut mesh_of,
+                &mut seen_nodes,
             )?;
         }
         Ok(loaded)
@@ -151,7 +158,7 @@ fn load_buffers(gltf: &gltf::Gltf) -> Result<Vec<Vec<u8>>, GltfError> {
     let mut blob = gltf.blob.clone();
     let mut buffers = Vec::new();
     for buffer in gltf.buffers() {
-        let data = match buffer.source() {
+        let mut data = match buffer.source() {
             gltf::buffer::Source::Bin => blob.take().ok_or_else(|| {
                 GltfError::new(format!(
                     "glTF buffer {} needs the binary chunk, which is missing",
@@ -168,6 +175,9 @@ fn load_buffers(gltf: &gltf::Gltf) -> Result<Vec<Vec<u8>>, GltfError> {
                 buffer.length()
             )));
         }
+        // GLB pads the binary chunk to 4 bytes. Accessors must not read that
+        // padding, so the slice stops at the declared length.
+        data.truncate(buffer.length());
         buffers.push(data);
     }
     Ok(buffers)
@@ -239,7 +249,14 @@ fn append_node(
     parent_world: Mat4,
     buffers: &[Vec<u8>],
     mesh_of: &mut HashMap<usize, usize>,
+    seen_nodes: &mut HashSet<usize>,
 ) -> Result<usize, GltfError> {
+    if !seen_nodes.insert(node.index()) {
+        return Err(GltfError::new(format!(
+            "glTF node {} appears more than once in the scene graph",
+            node.index()
+        )));
+    }
     let (translation, rotation, scale, local) = local_transform(node);
     let world = parent_world * local;
     let mesh = match node.mesh() {
@@ -268,6 +285,7 @@ fn append_node(
             world,
             buffers,
             mesh_of,
+            seen_nodes,
         )?);
     }
     loaded.nodes[index].children = child_indices;
@@ -328,6 +346,13 @@ fn load_primitive(
     primitive: &gltf::Primitive<'_>,
     buffers: &[Vec<u8>],
 ) -> Result<GltfPrimitive, GltfError> {
+    if primitive.mode() != gltf::mesh::Mode::Triangles {
+        return Err(GltfError::new(format!(
+            "glTF mesh {mesh_index} primitive {primitive_index} uses {:?}; only triangles are loaded",
+            primitive.mode()
+        )));
+    }
+
     let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice));
     let positions: Vec<Vec3> = reader
         .read_positions()
@@ -338,18 +363,47 @@ fn load_primitive(
         })?
         .map(Vec3::from)
         .collect();
-    let normals = reader
+    let normals: Vec<Vec3> = reader
         .read_normals()
         .map(|normals| normals.map(Vec3::from).collect())
         .unwrap_or_default();
-    let uvs = reader
+    let uvs: Vec<Vec2> = reader
         .read_tex_coords(0)
         .map(|coords| coords.into_f32().map(Vec2::from).collect())
         .unwrap_or_default();
-    let indices = match reader.read_indices() {
+    let indices: Vec<u32> = match reader.read_indices() {
         Some(indices) => indices.into_u32().collect(),
         None => (0..positions.len() as u32).collect(),
     };
+    if !indices.len().is_multiple_of(3) {
+        return Err(GltfError::new(format!(
+            "glTF mesh {mesh_index} primitive {primitive_index} has {} indices, which is not a multiple of 3",
+            indices.len()
+        )));
+    }
+    if indices
+        .iter()
+        .any(|index| *index as usize >= positions.len())
+    {
+        return Err(GltfError::new(format!(
+            "glTF mesh {mesh_index} primitive {primitive_index} has an index outside its {} positions",
+            positions.len()
+        )));
+    }
+    if !(normals.is_empty() || normals.len() == positions.len()) {
+        return Err(GltfError::new(format!(
+            "glTF mesh {mesh_index} primitive {primitive_index} has {} normals for {} positions",
+            normals.len(),
+            positions.len()
+        )));
+    }
+    if !(uvs.is_empty() || uvs.len() == positions.len()) {
+        return Err(GltfError::new(format!(
+            "glTF mesh {mesh_index} primitive {primitive_index} has {} uvs for {} positions",
+            uvs.len(),
+            positions.len()
+        )));
+    }
     Ok(GltfPrimitive {
         positions,
         normals,
@@ -518,5 +572,101 @@ mod tests {
         let error = GltfScene::from_bytes(external).unwrap_err();
         let message = error.to_string();
         assert!(message.contains("external"), "message was {message}");
+    }
+
+    fn glb(json: &str, bin: &[u8]) -> Vec<u8> {
+        fn pad(mut data: Vec<u8>, alignment: usize, byte: u8) -> Vec<u8> {
+            while !data.len().is_multiple_of(alignment) {
+                data.push(byte);
+            }
+            data
+        }
+
+        let json_chunk = pad(json.as_bytes().to_vec(), 4, b' ');
+        let bin_chunk = pad(bin.to_vec(), 4, 0);
+        let total = 12 + 8 + json_chunk.len() + 8 + bin_chunk.len();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json_chunk.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json_chunk);
+        out.extend_from_slice(&(bin_chunk.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"BIN\0");
+        out.extend_from_slice(&bin_chunk);
+        out
+    }
+
+    fn error_contains(bytes: &[u8], needle: &str) {
+        let message = GltfScene::from_bytes(bytes).unwrap_err().to_string();
+        assert!(message.contains(needle), "message was {message}");
+    }
+
+    #[test]
+    fn a_node_used_twice_or_a_cycle_is_an_error() {
+        error_contains(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,0]}],"nodes":[{"name":"a"}]}"#,
+            "more than once",
+        );
+        error_contains(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"children":[1]},{"children":[0]}]}"#,
+            "more than once",
+        );
+    }
+
+    #[test]
+    fn matrix_node_keeps_a_reflection_on_the_world_matrix() {
+        let scene = GltfScene::from_bytes(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"mirror","matrix":[-1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1]}]}"#,
+        )
+        .unwrap();
+        let mirror = &scene.nodes[0];
+        assert_vec3_close(mirror.world.transform_point3(Vec3::X), -Vec3::X);
+        assert_vec3_close(mirror.world.transform_point3(Vec3::ZERO), Vec3::ZERO);
+    }
+
+    #[test]
+    fn omitted_material_is_white_and_bad_primitives_fail() {
+        let json = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],"bufferViews":[{"buffer":0,"byteLength":36}],"buffers":[{"byteLength":36}]}"#;
+        let scene = GltfScene::from_bytes(&glb(json, &[0; 36])).unwrap();
+        assert_eq!(
+            scene.meshes[0].primitives[0].base_color_factor,
+            [1.0, 1.0, 1.0, 1.0]
+        );
+        assert_eq!(scene.meshes[0].primitives[0].indices, vec![0, 1, 2]);
+
+        let lines = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"mode":1}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],"bufferViews":[{"buffer":0,"byteLength":24}],"buffers":[{"byteLength":24}]}"#;
+        error_contains(&glb(lines, &[0; 24]), "only triangles");
+
+        // Three positions, one normal.
+        let mut mismatched = vec![0u8; 48];
+        mismatched[..12].fill(0);
+        let mismatched_json = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]},{"bufferView":1,"componentType":5126,"count":1,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":12}],"buffers":[{"byteLength":48}]}"#;
+        error_contains(&glb(mismatched_json, &mismatched), "normals");
+
+        // Indices 0, 1, 3 against 3 positions. UNSIGNED_SHORT.
+        let mut indices = vec![0u8; 42];
+        indices[36] = 0;
+        indices[37] = 0;
+        indices[38] = 1;
+        indices[39] = 0;
+        indices[40] = 3;
+        indices[41] = 0;
+        let indexed = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]},{"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6}],"buffers":[{"byteLength":42}]}"#;
+        error_contains(&glb(indexed, &indices), "outside");
+    }
+
+    #[test]
+    fn a_view_past_the_declared_buffer_length_is_not_read_from_padding() {
+        // The chunk is long enough for 3 positions, but byteLength stops at 4.
+        let json = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],"bufferViews":[{"buffer":0,"byteLength":36}],"buffers":[{"byteLength":4}]}"#;
+        let message = GltfScene::from_bytes(&glb(json, &[0; 36]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            !message.contains("Missing data"),
+            "failed before the buffer length was checked: {message}"
+        );
     }
 }
