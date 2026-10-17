@@ -23,7 +23,8 @@ pub struct RayHit {
     /// this is also zero when the origin lies on the boundary and the ray
     /// points outward, leaving the box immediately. A [`Plane`](crate::math::Plane)
     /// has no interior, so a hit on it reports the plane normal, including when
-    /// the origin already lies on the plane.
+    /// the origin already lies on the plane. A [`Triangle`](crate::math::Triangle)
+    /// does the same with its winding normal.
     pub normal: Vec3,
 }
 
