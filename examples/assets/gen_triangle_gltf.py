@@ -2,8 +2,11 @@
 """Write examples/assets/triangle.gltf and triangle.glb.
 
 The scene is a parent, a scaled mesh child, a rotated child, a second node
-sharing that mesh, a matrix node, and one node left out of the scene. Regenerate
-with this script. Tests load the committed bytes and do not run Python.
+sharing that mesh, a matrix node, a box-collider empty, a spawn empty, and one
+node left out of the scene. The collider is marked with node extras
+(`mq_shape`, `mq_role`). The spawn is marked with a `_spawn` name suffix.
+Regenerate with this script. Tests load the committed bytes and do not run
+Python.
 """
 
 import base64
@@ -41,14 +44,21 @@ def document(buffer_uri, byte_length):
     return {
         "asset": {"version": "2.0", "generator": "macroquad examples/assets/gen_triangle_gltf.py"},
         "scene": 0,
-        "scenes": [{"name": "sample", "nodes": [0, 4]}],
+        "scenes": [{"name": "sample", "nodes": [0, 4, 7]}],
         "nodes": [
-            {"name": "root", "translation": [1, 2, 3], "children": [1, 2, 3]},
+            {"name": "root", "translation": [1, 2, 3], "children": [1, 2, 3, 6]},
             {"name": "box", "translation": [0, 1, 0], "scale": [2, 2, 2], "mesh": 0},
             {"name": "spin", "rotation": [0, half, 0, half]},
             {"name": "box_copy", "mesh": 0},
             {"name": "marker", "matrix": marker},
             {"name": "hidden", "translation": [9, 9, 9]},
+            {
+                "name": "crate_collider",
+                "translation": [1, 0, 0],
+                "scale": [2, 1, 0.5],
+                "extras": {"mq_shape": "box", "mq_role": "collider"},
+            },
+            {"name": "player_spawn", "translation": [8, 0, 1]},
         ],
         "meshes": [
             {

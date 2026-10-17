@@ -37,7 +37,7 @@ fontdue = "0.9"
 backtrace = { version = "0.3.60", optional = true }
 log = { version = "0.4", optional = true }
 quad-snd = { version = "0.2", optional = true }
-gltf = { version = "1.4", optional = true, default-features = false, features = ["utils", "names"] }
+gltf = { version = "1.4", optional = true, default-features = false, features = ["utils", "names", "extras"] }
 
 [dev-dependencies]
 macroquad-particles = { path = "./particles" }
