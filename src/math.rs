@@ -1,12 +1,15 @@
 //! Math types and helpers.
 //!
-//! Consists of re-exported `glam` types with some additions.
+//! Consists of re-exported `glam` types with some additions, including 2D
+//! [`Rect`] / [`Circle`] and the 3D [`Aabb`].
 
 pub use glam::*;
 
+mod aabb;
 mod circle;
 mod rect;
 
+pub use aabb::{Aabb, RayHit};
 pub use circle::Circle;
 pub use rect::{Rect, RectOffset};
 
