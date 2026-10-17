@@ -1,7 +1,8 @@
 # 3D roadmap
 
-Enhancements since last fixer round: 3
+Enhancements since last fixer round: 4
 Fixer rounds since last game round: 0
+Rounds since last documentation round: 4
 
 Source of truth for the unattended 3D enhancement bot on this fork. The goal is to make 3D games easier to build with macroquad: collision primitives, raycasting, simple rigid-body physics, collision response, a character controller, and spatial partitioning. A second track loads a Blender scene exported as glTF 2.0 (meshes, materials, textures, node transforms, and collider / trigger / spawn markup) so a level does not have to be rebuilt by hand.
 
@@ -9,9 +10,12 @@ Macroquad stays a thin, beginner-friendly layer over `glam` (already re-exported
 
 ## How a round uses this file
 
-- The counter line above is authoritative. `Fixer rounds since last game round` is the second counter. Enhancement rounds leave it unchanged. When it is 2, the round is a game round instead of an enhancement or a fixer; a game round sets it back to 0.
-- If the counter is **below 5** and this is not a game round, this is an **enhancement** round: implement **only** the first unchecked item, in the style of the surrounding code. Then tick it, append a dated log line, and increment the counter by 1.
-- If the counter is **5 or more**, this is a **fixer** round: do not add a feature. Review the work logged since the previous fixer entry, fix bugs, doc gaps, missing tests, and API inconsistencies, then set N back to 0, increase M by 1, and append a fixer log line.
+The three counter lines above are authoritative: **N** enhancements since the last fixer round, **M** fixer rounds since the last game round, and **D** rounds since the last documentation round. If the D line is missing, initialize it to the number of log entries modulo 11 before choosing the round.
+
+- If **D is 10**, this is a **documentation** round. No features and no behavior changes. Bring rustdoc (short examples on every new public type and function), `docs/3d-guide.md`, a step-by-step Blender-to-macroquad tutorial, and `examples/README.md` up to date with the public API. `cargo doc` must build without new warnings and doctests must pass. Then set D to 0 and append a log line.
+- Otherwise if **M is 2**, this is a **game** round. Build a small playable 3D game under `examples/games/` using only the public API. Record pain points, promote the most important into Priorities, set M to 0, increase D by 1, and append a log line. Leave N unchanged.
+- Otherwise if **N is 5**, this is a **fixer** round. Do not add a feature. Review the work logged since the previous fixer entry, fix bugs, doc gaps, missing tests, and API inconsistencies, set N to 0, increase M by 1, increase D by 1, and append a fixer log line.
+- Otherwise this is an **enhancement** round: implement **only** the first unchecked item, in the style of the surrounding code. Then tick it, append a dated log line, increment N by 1, and increment D by 1. Leave M unchanged.
 - Keep each enhancement small enough to review as one commit. Leave later items alone even if they would be easy to fold in.
 - Math primitives live in `macroquad::math` and show up through `use macroquad::prelude::*`. Types that need the GPU or the window (`draw_*`, camera unprojection) live next to the existing draw/camera code. Stateful worlds (rigid bodies, character controller, grids) can live in their own module once the pure queries they depend on exist.
 - Boxes and rays are axis-aligned in **world space**. Do not assume Y-up or Z-up; `Camera3D::up` is caller-defined. `draw_cube` / `draw_cube_wires` take a center and a full size; `Aabb::from_center_size` matches that.
@@ -41,7 +45,7 @@ The checkboxes live in **Priorities**, interleaved with the collision items they
 - [x] **AABB** — `Aabb` in `macroquad::math`: min/max corners, `from_center_size` (same center and full size as `draw_cube`), `from_points`, containment, overlap, intersection, union, closest point, expand/normalize, and a slab `ray_intersect` returning `RayHit` (`t`, `point`, outward `normal`). Inclusive boundaries, same as `Rect`.
 - [x] **Sphere** — `Sphere` in `macroquad::math` (center + radius, mirroring `Circle`). `contains`, overlaps sphere, overlaps `Aabb`, closest point, `ray_intersect` → `RayHit`. No solver and no new ray type yet.
 - [x] **Ray** — `Ray` { origin, direction } with `point_at(t)`, normalization helper, and closest-hit queries against a slice of `Aabb` and a slice of `Sphere`, reusing `RayHit`. Reject `t < 0`. Do not unproject from the camera in this item.
-- [ ] **Plane** — `Plane` from unit normal + signed distance, and from three points. Signed distance, which-side test, closest point, `ray_intersect` → `RayHit`, and segment intersection (endpoints on opposite sides).
+- [x] **Plane** — `Plane` from unit normal + signed distance, and from three points. Signed distance, which-side test, closest point, `ray_intersect` → `RayHit`, and segment intersection (endpoints on opposite sides).
 - [ ] **glTF scene** — feature `gltf`. Parse `.glb` / `.gltf` bytes into a `GltfScene`: nodes (name, parent, local translation / rotation / scale, world `Mat4`) and meshes (positions, indices, uvs, normals, per-primitive base-color factor). No images, no GPU, no colliders. Ship a tiny checked-in file under `examples/assets/` and unit-test the hierarchy against it. Axes as in the Blender asset track.
 - [ ] **Triangle** — `Triangle` { a, b, c }. Barycentric `contains`, plane of the triangle, AABB via `Aabb::from_points`, closest point, and Möller–Trumbore `ray_intersect` → `RayHit` (both winding orders count; provide a flag or separate method for backface culling).
 - [ ] **glTF markers** — read `extras` and name suffixes (see the Blender asset track) into colliders (`Aabb`, `Sphere`), triggers (same shapes, flagged), and spawn points (`Vec3` + name). Ignore `capsule` until the later shape item. Extend the sample asset with one box collider empty and one spawn. Unit-test without a window.
@@ -71,3 +75,4 @@ The checkboxes live in **Priorities**, interleaved with the collision items they
 - 2026-10-17 — Enhancement: Created this roadmap and added `Aabb` / `RayHit` in `macroquad::math` (containment, overlap, intersection, union, closest point, slab ray). Example `examples/aabb_overlap.rs`. Counter 1.
 - 2026-10-17 — Enhancement: added `Sphere` in `macroquad::math` (contains, overlaps sphere and AABB, closest point, `ray_intersect` → `RayHit`). Example `examples/sphere_overlap.rs`. Counters: N=2, M=0.
 - 2026-10-17 — Enhancement: added `Ray` / `ClosestHit` in `macroquad::math` (`point_at`, `normalized`, `closest_aabb`, `closest_sphere`; reject `t < 0`). Example `examples/ray_cast.rs`. Interleaved the Blender glTF track into Priorities. Counters: N=3, M=0.
+- 2026-10-17 — Enhancement: added `Plane` / `PlaneSide` in `macroquad::math` (`new`, `from_normal_point`, `from_points`, signed distance, side, closest point, `ray_intersect` → `RayHit`, `segment_intersect`). Example `examples/plane_hit.rs`. Initialized D from 3 log entries (`3 % 11`). Counters: N=4, M=0, D=4.

@@ -21,7 +21,9 @@ pub struct RayHit {
     /// Zero when the origin is already inside the shape and the query reports
     /// the origin itself (`t == 0`) without an entering face. For an [`Aabb`]
     /// this is also zero when the origin lies on the boundary and the ray
-    /// points outward, leaving the box immediately.
+    /// points outward, leaving the box immediately. A [`Plane`](crate::math::Plane)
+    /// has no interior, so a hit on it reports the plane normal, including when
+    /// the origin already lies on the plane.
     pub normal: Vec3,
 }
 
