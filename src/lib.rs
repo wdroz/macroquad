@@ -51,6 +51,8 @@ pub mod audio;
 pub mod camera;
 pub mod color;
 pub mod file;
+#[cfg(feature = "gltf")]
+pub mod gltf;
 pub mod input;
 pub mod material;
 pub mod math;

@@ -1,8 +1,8 @@
 # 3D roadmap
 
-Enhancements since last fixer round: 4
+Enhancements since last fixer round: 5
 Fixer rounds since last game round: 0
-Rounds since last documentation round: 4
+Rounds since last documentation round: 5
 
 Source of truth for the unattended 3D enhancement bot on this fork. The goal is to make 3D games easier to build with macroquad: collision primitives, raycasting, simple rigid-body physics, collision response, a character controller, and spatial partitioning. A second track loads a Blender scene exported as glTF 2.0 (meshes, materials, textures, node transforms, and collider / trigger / spawn markup) so a level does not have to be rebuilt by hand.
 
@@ -46,7 +46,7 @@ The checkboxes live in **Priorities**, interleaved with the collision items they
 - [x] **Sphere** — `Sphere` in `macroquad::math` (center + radius, mirroring `Circle`). `contains`, overlaps sphere, overlaps `Aabb`, closest point, `ray_intersect` → `RayHit`. No solver and no new ray type yet.
 - [x] **Ray** — `Ray` { origin, direction } with `point_at(t)`, normalization helper, and closest-hit queries against a slice of `Aabb` and a slice of `Sphere`, reusing `RayHit`. Reject `t < 0`. Do not unproject from the camera in this item.
 - [x] **Plane** — `Plane` from unit normal + signed distance, and from three points. Signed distance, which-side test, closest point, `ray_intersect` → `RayHit`, and segment intersection (endpoints on opposite sides).
-- [ ] **glTF scene** — feature `gltf`. Parse `.glb` / `.gltf` bytes into a `GltfScene`: nodes (name, parent, local translation / rotation / scale, world `Mat4`) and meshes (positions, indices, uvs, normals, per-primitive base-color factor). No images, no GPU, no colliders. Ship a tiny checked-in file under `examples/assets/` and unit-test the hierarchy against it. Axes as in the Blender asset track.
+- [x] **glTF scene** — feature `gltf`. Parse `.glb` / `.gltf` bytes into a `GltfScene`: nodes (name, parent, local translation / rotation / scale, world `Mat4`) and meshes (positions, indices, uvs, normals, per-primitive base-color factor). No images, no GPU, no colliders. Ship a tiny checked-in file under `examples/assets/` and unit-test the hierarchy against it. Axes as in the Blender asset track.
 - [ ] **Triangle** — `Triangle` { a, b, c }. Barycentric `contains`, plane of the triangle, AABB via `Aabb::from_points`, closest point, and Möller–Trumbore `ray_intersect` → `RayHit` (both winding orders count; provide a flag or separate method for backface culling).
 - [ ] **glTF markers** — read `extras` and name suffixes (see the Blender asset track) into colliders (`Aabb`, `Sphere`), triggers (same shapes, flagged), and spawn points (`Vec3` + name). Ignore `capsule` until the later shape item. Extend the sample asset with one box collider empty and one spawn. Unit-test without a window.
 - [ ] **glTF draw** — build macroquad `Mesh` values from a `GltfScene`, vertex-colored from the base-color factor. Lives next to `models` because it needs the GPU. Example draws the sample. Marker empties have no mesh, so they are not drawn.
@@ -76,3 +76,4 @@ The checkboxes live in **Priorities**, interleaved with the collision items they
 - 2026-10-17 — Enhancement: added `Sphere` in `macroquad::math` (contains, overlaps sphere and AABB, closest point, `ray_intersect` → `RayHit`). Example `examples/sphere_overlap.rs`. Counters: N=2, M=0.
 - 2026-10-17 — Enhancement: added `Ray` / `ClosestHit` in `macroquad::math` (`point_at`, `normalized`, `closest_aabb`, `closest_sphere`; reject `t < 0`). Example `examples/ray_cast.rs`. Interleaved the Blender glTF track into Priorities. Counters: N=3, M=0.
 - 2026-10-17 — Enhancement: added `Plane` / `PlaneSide` in `macroquad::math` (`new`, `from_normal_point`, `from_points`, signed distance, side, closest point, `ray_intersect` → `RayHit`, `segment_intersect`). Example `examples/plane_hit.rs`. Initialized D from 3 log entries (`3 % 11`). Counters: N=4, M=0, D=4.
+- 2026-10-17 — Enhancement: added `GltfScene` behind the `gltf` feature. `from_bytes` loads the default scene's nodes (name, parent, children, local TRS, world matrix) and the meshes they use (positions, indices, uvs, normals, per-primitive base color). No images and no GPU. Axes stay glTF Y-up. Sample `examples/assets/triangle.gltf` and `triangle.glb`. Counters: N=5, M=0, D=5.
