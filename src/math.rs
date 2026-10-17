@@ -1,13 +1,14 @@
 //! Math types and helpers.
 //!
 //! Consists of re-exported `glam` types with some additions, including 2D
-//! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Sphere`], [`Ray`], [`Plane`],
-//! and [`Triangle`].
+//! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Ray`],
+//! [`Plane`], and [`Triangle`].
 
 pub use glam::*;
 
 mod aabb;
 mod circle;
+mod obb;
 mod plane;
 mod ray;
 mod rect;
@@ -16,6 +17,7 @@ mod triangle;
 
 pub use aabb::{Aabb, RayHit};
 pub use circle::Circle;
+pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};
 pub use rect::{Rect, RectOffset};
