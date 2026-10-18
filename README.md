@@ -15,6 +15,16 @@
 * Immediate mode UI library included.
 * Single command deploy for both WASM and Android.
 
+## Default alpha compositing (fork fix)
+
+The default drawing and built-in UI pipelines preserve source-over alpha independently of
+RGB blending: `A_out = A_source + A_destination * (1 - A_source)`. This keeps
+antialiased text and translucent UI opaque when drawn over an opaque canvas,
+so WebGL page compositing matches native rendering. Transparent render targets
+still accumulate coverage correctly. Custom materials continue to use exactly
+the `PipelineParams` supplied to `load_material`; their blend settings are not
+overridden. The GPU regression is `cargo test --test default_alpha_blending`.
+
 ## Textured glTF scenes (fork feature)
 
 Enable `features = ["gltf"]` to use the CPU-only `GltfScene` parser and the

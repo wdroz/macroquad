@@ -1304,6 +1304,13 @@ pub(crate) mod ui_context {
                                 BlendFactor::Value(BlendValue::SourceAlpha),
                                 BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
                             )),
+                            // Match the default drawing pipeline: glyph
+                            // coverage must not reduce opaque canvas alpha.
+                            alpha_blend: Some(BlendState::new(
+                                Equation::Add,
+                                BlendFactor::One,
+                                BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+                            )),
                             ..Default::default()
                         },
                         ..Default::default()

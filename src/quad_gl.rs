@@ -408,6 +408,14 @@ impl PipelinesStorage {
                 BlendFactor::Value(BlendValue::SourceAlpha),
                 BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
             )),
+            // RGB uses straight source colors; coverage must use source-over
+            // independently. Reusing SourceAlpha here squares glyph/shape
+            // coverage and punches transparency into an opaque WebGL canvas.
+            alpha_blend: Some(BlendState::new(
+                Equation::Add,
+                BlendFactor::One,
+                BlendFactor::OneMinusValue(BlendValue::SourceAlpha),
+            )),
             ..Default::default()
         };
 
