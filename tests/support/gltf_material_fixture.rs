@@ -7,6 +7,9 @@ use macroquad::prelude::*;
 #[path = "gltf_lighting_fixture.rs"]
 mod lighting;
 
+#[path = "gltf_selected_part_fixture.rs"]
+mod selected_parts;
+
 #[derive(Clone, Copy, Debug)]
 enum Geometry {
     Cpu,
@@ -597,6 +600,7 @@ pub async fn run() {
     );
     unsafe { get_internal_gl().quad_gl.pop_model_matrix() };
 
+    selected_parts::run(&mut renderer, &target, &camera);
     lighting::run(&mut renderer, &target, &camera);
 
     // Drawing restores the default material: subsequent ordinary drawing must

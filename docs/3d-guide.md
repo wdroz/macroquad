@@ -369,6 +369,29 @@ collection. Instance transforms must be finite and affine. The current
 low-level model stack at `draw` is included in both positions and sorting;
 the camera/target must stay consistent with the view passed to `begin`.
 
+For visibility filtering or independently moving a chunk, use `submit_part`
+with a borrowed `GltfDrawMesh`, or `submit_retained_part` with a borrowed
+`RetainedGltfDrawMesh`. Keep one loaded model and omit hidden parts:
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn selected<'a>(frame: &mut GltfMaterialFrame<'a>, model: &'a RetainedGltfModel) -> Result<(), String> {
+for part in &model.parts {
+    if part.name == "collected_cell" { continue; }
+    let offset = if part.name == "gate" { Vec3::Y * 2. } else { Vec3::ZERO };
+    frame.submit_retained_part(part, Mat4::from_translation(offset))?;
+}
+# Ok(()) }
+```
+
+These calls borrow the existing chunk without cloning model metadata or
+geometry; retained draws reuse uploaded buffers. The additional affine matrix
+acts on already baked scene coordinates, so rotation around a chosen pivot
+still needs `T(pivot) * R * T(-pivot)`. No rest pose or automatic pivot is
+inferred. Selected parts share factors, lighting, validation and stable global
+transparency sorting with whole-model submissions in the same frame. Submitting
+a model and one of its parts draws that part twice; omission is caller controlled.
+
 Opaque and masked chunks draw first with depth testing and depth writes. Opaque
 alpha is ignored. Mask fragments below the exact floating-point cutoff are
 discarded; surviving fragments are opaque and write depth. Blended chunks then

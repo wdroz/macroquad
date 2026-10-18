@@ -133,7 +133,8 @@ pub struct GltfMaterialStats {
 /// Opt-in material renderer with optional diffuse lighting for glTF models.
 ///
 /// Construct inside a running macroquad application. Set a camera with a depth
-/// buffer, begin one collection, submit **all** model instances, then draw it.
+/// buffer, begin one collection, submit **all** visible models or selected
+/// parts, then draw it.
 /// Opaque and mask chunks precede a globally sorted blend pass. Only chunk
 /// centers are sorted: intersecting triangles, overlapping bounds and concave
 /// transparent meshes can still composite incorrectly. Split geometry or use
@@ -269,9 +270,11 @@ impl GltfMaterialRenderer {
 
 /// Borrowed collection of instances for a single material pass sequence.
 ///
-/// Models and the renderer stay borrowed until the collection is drawn or
-/// dropped, so their resources cannot disappear during submission. Submission
-/// performs no uploads or rendering. Call [`Self::draw`] to finish.
+/// Submitted models or parts and the renderer stay borrowed until the
+/// collection is drawn or dropped, so their resources cannot disappear during
+/// submission. Submission performs no uploads or rendering. Call [`Self::draw`]
+/// to finish. Whole-model and selected-part calls share the same stable global
+/// transparency order; repeated submissions intentionally draw repeated copies.
 ///
 /// ```no_run
 /// use macroquad::prelude::*;
@@ -341,12 +344,52 @@ impl<'a> GltfMaterialFrame<'a> {
     /// ```
     pub fn submit(&mut self, model: &'a GltfModel, transform: Mat4) -> Result<(), String> {
         check_transform(transform)?;
-        self.draws.extend(model.parts.iter().map(|part| Draw {
-            part: Part::Cpu(part),
-            transform,
-            depth: 0.0,
-            normal_transform: Mat4::IDENTITY,
-        }));
+        self.draws.extend(
+            model
+                .parts
+                .iter()
+                .map(|part| Draw::new(Part::Cpu(part), transform)),
+        );
+        Ok(())
+    }
+
+    /// Collects one borrowed CPU chunk with an additional affine transform.
+    ///
+    /// Omit hidden or culled chunks and submit visible ones independently.
+    /// The chunk's geometry, metadata and material factors are not cloned or
+    /// changed. Positions are already in baked scene coordinates: `transform`
+    /// applies after them, followed by the parent model matrix active at
+    /// [`Self::draw`]. Supply any rotation pivot yourself, for example
+    /// `T(pivot) * R * T(-pivot)` to rotate around a baked scene position.
+    ///
+    /// Non-finite or projective transforms return an error and append nothing,
+    /// as with [`Self::submit`]. Centers/bounds must describe any application
+    /// edits to the geometry. CPU draw-call capacity limits still apply.
+    /// All selected chunks share transparency sorting with whole-model calls.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn example<'a>(frame: &mut GltfMaterialFrame<'a>, model: &'a GltfModel) -> Result<(), String> {
+    /// for part in model.parts.iter().filter(|part| part.name != "hidden") {
+    ///     frame.submit_part(part, Mat4::from_translation(Vec3::X))?;
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// The part must remain alive until the frame is drawn or dropped:
+    ///
+    /// ```compile_fail,E0505
+    /// use macroquad::prelude::*;
+    /// fn example(renderer: &mut GltfMaterialRenderer, part: GltfDrawMesh) {
+    ///     let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+    ///     frame.submit_part(&part, Mat4::IDENTITY).unwrap();
+    ///     drop(part);
+    ///     frame.draw();
+    /// }
+    /// ```
+    pub fn submit_part(&mut self, part: &'a GltfDrawMesh, transform: Mat4) -> Result<(), String> {
+        check_transform(transform)?;
+        self.draws.push(Draw::new(Part::Cpu(part), transform));
         Ok(())
     }
 
@@ -367,12 +410,52 @@ impl<'a> GltfMaterialFrame<'a> {
         transform: Mat4,
     ) -> Result<(), String> {
         check_transform(transform)?;
-        self.draws.extend(model.parts.iter().map(|part| Draw {
-            part: Part::Retained(part),
-            transform,
-            depth: 0.0,
-            normal_transform: Mat4::IDENTITY,
-        }));
+        self.draws.extend(
+            model
+                .parts
+                .iter()
+                .map(|part| Draw::new(Part::Retained(part), transform)),
+        );
+        Ok(())
+    }
+
+    /// Collects one borrowed retained chunk without copying metadata or geometry.
+    ///
+    /// Drawing reuses the existing GPU buffers without new geometry uploads.
+    /// As with [`Self::submit_part`], omit hidden chunks, supply an additional
+    /// transform in baked scene coordinates and provide any pivot yourself.
+    /// Non-finite or projective transforms return an error and append nothing.
+    /// CPU parts, retained parts and whole models share one transparency order
+    /// and the same material-factor and lighting behavior.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn example<'a>(frame: &mut GltfMaterialFrame<'a>, model: &'a RetainedGltfModel) -> Result<(), String> {
+    /// for part in &model.parts {
+    ///     let offset = if part.name == "gate" { Vec3::Y } else { Vec3::ZERO };
+    ///     frame.submit_retained_part(part, Mat4::from_translation(offset))?;
+    /// }
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// The part remains borrowed even though its buffers are shared:
+    ///
+    /// ```compile_fail,E0505
+    /// use macroquad::prelude::*;
+    /// fn example(renderer: &mut GltfMaterialRenderer, part: RetainedGltfDrawMesh) {
+    ///     let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+    ///     frame.submit_retained_part(&part, Mat4::IDENTITY).unwrap();
+    ///     drop(part);
+    ///     frame.draw();
+    /// }
+    /// ```
+    pub fn submit_retained_part(
+        &mut self,
+        part: &'a RetainedGltfDrawMesh,
+        transform: Mat4,
+    ) -> Result<(), String> {
+        check_transform(transform)?;
+        self.draws.push(Draw::new(Part::Retained(part), transform));
         Ok(())
     }
 
@@ -570,6 +653,17 @@ struct Draw<'a> {
     transform: Mat4,
     depth: f32,
     normal_transform: Mat4,
+}
+
+impl<'a> Draw<'a> {
+    fn new(part: Part<'a>, transform: Mat4) -> Self {
+        Self {
+            part,
+            transform,
+            depth: 0.0,
+            normal_transform: Mat4::IDENTITY,
+        }
+    }
 }
 
 fn is_affine(matrix: Mat4) -> bool {
@@ -811,6 +905,119 @@ fragment float4 fragmentShader(RasterizerData in [[stage_in]],
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Collection must be headless: neither the unused unmanaged texture nor
+    // the empty pipeline list may be touched before a frame is drawn.
+    fn collection_renderer() -> GltfMaterialRenderer {
+        GltfMaterialRenderer {
+            materials: Vec::new(),
+            white: Texture2D::unmanaged(miniquad::TextureId::from_raw_id(miniquad::RawId::OpenGl(
+                0,
+            ))),
+            _not_send_sync: std::marker::PhantomData,
+        }
+    }
+
+    fn collection_model() -> GltfModel {
+        let part = |name: &str| GltfDrawMesh {
+            mesh: crate::models::Mesh {
+                vertices: vec![
+                    crate::models::Vertex::new(0., 0., 0., 0., 0., crate::color::WHITE),
+                    crate::models::Vertex::new(1., 0., 0., 0., 0., crate::color::WHITE),
+                    crate::models::Vertex::new(0., 1., 0., 0., 0., crate::color::WHITE),
+                ],
+                indices: vec![0, 1, 2],
+                texture: None,
+            },
+            emissive_texture: None,
+            surface: GltfSurface {
+                name: None,
+                base_color: [0.123, 0.456, 0.789, 0.234],
+                emissive: [0.345, 0.567, 0.891],
+                metallic: 0.3,
+                roughness: 0.7,
+                transmission: 0.0,
+                alpha_mode: GltfAlphaMode::Blend,
+                alpha_cutoff: 0.5,
+                double_sided: false,
+                unlit: false,
+            },
+            node: 0,
+            name: name.to_owned(),
+            path: name.to_owned(),
+            center: Vec3::new(0.5, 0.5, 0.0),
+            bounds_min: Vec3::ZERO,
+            bounds_max: Vec3::new(1.0, 1.0, 0.0),
+        };
+        GltfModel {
+            parts: vec![part("visible"), part("hidden"), part("moving")],
+            stats: super::super::GltfModelStats::default(),
+            bounds_min: Vec3::ZERO,
+            bounds_max: Vec3::ONE,
+            root_names: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn selected_cpu_parts_borrow_existing_data_and_mix_with_whole_models() {
+        let mut renderer = collection_renderer();
+        let model = collection_model();
+        let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+        let moving = Mat4::from_translation(Vec3::X);
+        frame.submit_part(&model.parts[0], Mat4::IDENTITY).unwrap();
+        frame.submit_part(&model.parts[2], moving).unwrap();
+        assert_eq!(frame.draws.len(), 2);
+        for (draw, source) in frame.draws.iter().zip([&model.parts[0], &model.parts[2]]) {
+            let Part::Cpu(part) = &draw.part else {
+                panic!("expected the existing CPU chunk");
+            };
+            // Borrow the actual chunk, retaining exact factors and sharing its
+            // metadata/geometry, rather than cloning into a temporary subset.
+            assert!(std::ptr::eq(*part, source));
+            assert!(std::ptr::eq(draw.part.surface(), &source.surface));
+            assert_ne!(part.name, "hidden");
+        }
+        assert_eq!(frame.draws[0].transform, Mat4::IDENTITY);
+        assert_eq!(frame.draws[1].transform, moving);
+        assert_eq!(model.parts[2].mesh.vertices[0].position, Vec3::ZERO);
+
+        // Whole-model and duplicate part calls append to the same collection.
+        frame.submit(&model, Mat4::IDENTITY).unwrap();
+        frame.submit_part(&model.parts[2], Mat4::IDENTITY).unwrap();
+        assert_eq!(frame.draws.len(), 6);
+        let Part::Cpu(part) = &frame.draws[3].part else {
+            panic!("expected the whole model's second chunk");
+        };
+        assert!(std::ptr::eq(*part, &model.parts[1]));
+        // Dropping an undrawn collection must also remain headless.
+        drop(frame);
+    }
+
+    #[test]
+    fn invalid_selected_cpu_transform_keeps_previous_submissions() {
+        let mut renderer = collection_renderer();
+        let model = collection_model();
+        let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+        let transform = Mat4::from_translation(Vec3::Y);
+        frame.submit_part(&model.parts[0], transform).unwrap();
+        for invalid in [
+            Mat4::NAN,
+            Mat4::ZERO,
+            Mat4::from_scale(Vec3::splat(f32::INFINITY)),
+            Mat4::perspective_rh_gl(1., 1., 0.1, 100.),
+        ] {
+            assert!(frame.submit_part(&model.parts[2], invalid).is_err());
+            assert!(frame.submit(&model, invalid).is_err());
+            assert_eq!(frame.draws.len(), 1);
+            assert_eq!(frame.draws[0].transform, transform);
+        }
+        // Singular affine transforms remain valid at submission time; the
+        // existing lighting policy decides whether they can be drawn.
+        frame
+            .submit_part(&model.parts[2], Mat4::from_scale(Vec3::ZERO))
+            .unwrap();
+        assert_eq!(frame.draws.len(), 2);
+    }
 
     #[test]
     fn lighting_validates_colors_and_normalizes_both_world_directions() {
