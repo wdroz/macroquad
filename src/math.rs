@@ -6,8 +6,9 @@
 //! those shapes. [`SweepHit`] is the time of impact of a moving [`Aabb`]
 //! against a static [`Aabb`], or a moving [`Sphere`] against a static [`Aabb`]
 //! or [`Obb`]. [`slide_sphere`] moves a sphere along
-//! [`Aabb`] and [`Obb`] faces. The 3D types are unitless and do not assume an
-//! up axis.
+//! [`Aabb`] and [`Obb`] faces. [`slide_sphere_solids`] does the same and also
+//! slides against [`Sphere`] and [`Capsule`] solids. The 3D types are unitless
+//! and do not assume an up axis.
 //! `docs/3d-guide.md` walks through them.
 //!
 //! ```
@@ -43,7 +44,7 @@ pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};
 pub use rect::{Rect, RectOffset};
-pub use slide::slide_sphere;
+pub use slide::{slide_sphere, slide_sphere_solids};
 pub use sphere::Sphere;
 pub use sweep::SweepHit;
 pub use triangle::Triangle;

@@ -71,7 +71,8 @@ with preallocated mip levels for Metal.
 `Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, and `Obb` live in
 `macroquad::math` and the prelude. `Contact` describes an overlapping pair,
 `SweepHit` is a moving box or sphere against one static box, and
-`slide_sphere` keeps the leftover motion along a face. There is no rigid-body
+`slide_sphere` keeps the leftover motion along a face, and
+`slide_sphere_solids` does the same against spheres and capsules. There is no rigid-body
 world and no character controller. [docs/3d-guide.md](docs/3d-guide.md) covers
 the queries and the application code a game writes for gravity and a capsule
 on a floor. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)

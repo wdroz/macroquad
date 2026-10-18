@@ -253,9 +253,19 @@ assert!((moved.x - 1.0).abs() < 1e-4);
 assert!((moved.y - 0.5).abs() < 1e-4);
 ```
 
+`slide_sphere_solids(center, radius, delta, aabbs, obbs, spheres, capsules)` is that move with static spheres and capsules added. `slide_sphere` is the same call with those two slices empty, and its arguments stay as they are. A sphere that only touches a rock still strafes. A vertical capsule stops a horizontal step on its round hull. Copying the capsule into an `Aabb` first makes that hull a square and blocks steps the capsule misses. A center that starts inside a sphere is pushed out from the other center, or along `Vec3::X` when the centers coincide. A center that lies on a capsule's inner segment is pushed out along the world axis most perpendicular to that segment, X before Y before Z.
+
+```rust
+use macroquad::math::{slide_sphere_solids, Capsule, vec3};
+
+let column = Capsule::new(vec3(0.0, 0.0, 0.0), vec3(0.0, 2.0, 0.0), 0.45);
+let moved = slide_sphere_solids(vec3(-2.0, 1.0, 0.0), 0.4, vec3(3.0, 0.0, 0.0), &[], &[], &[], &[column]);
+assert!((moved.x + 0.85).abs() < 1e-3);
+```
+
 ## Physics
 
-The library does not integrate velocity, apply gravity, or solve contacts. There is no `RigidBody` type. A game keeps the velocity and calls `slide_sphere` for a sphere against boxes. Gravity is added to the velocity first. The slide keeps the part of the step that lies on a face, so a resting sphere still strafes and a wall removes only the component into the wall. Restitution and mass are not applied. `Contact` describes an overlap that already exists; it does not move either shape.
+The library does not integrate velocity, apply gravity, or solve contacts. There is no `RigidBody` type. A game keeps the velocity and calls `slide_sphere` for a sphere against boxes, or `slide_sphere_solids` when a solid is a sphere or a capsule. Gravity is added to the velocity first. The slide keeps the part of the step that lies on a face, so a resting sphere still strafes and a wall removes only the component into the wall. Restitution and mass are not applied. `Contact` describes an overlap that already exists; it does not move either shape.
 
 This is application code, not a macroquad type. The floor is one of the solids. A downward step that the slide refuses clears the vertical speed. A step in open air keeps it.
 

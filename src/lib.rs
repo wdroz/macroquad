@@ -26,7 +26,8 @@
 //! [`math::Contact`] describes an overlap. [`math::SweepHit`] is a moving box
 //! against a static box, or a moving sphere against a static box or an
 //! oriented box. [`math::slide_sphere`] keeps the motion
-//! along a face. Wireframes are [`models::draw_aabb`], [`models::draw_obb`],
+//! along a face. [`math::slide_sphere_solids`] also slides against spheres
+//! and capsules. Wireframes are [`models::draw_aabb`], [`models::draw_obb`],
 //! [`models::draw_capsule_wires`], [`models::draw_triangle_wires`],
 //! [`models::draw_ray`], and [`models::draw_plane_wires`]. The queries and
 //! these wireframes do not assume an up axis. [`models::draw_plane`] stays

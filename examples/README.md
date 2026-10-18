@@ -14,6 +14,7 @@ cargo run --example obb_overlap
 cargo run --example capsule_overlap
 cargo run --example sweep_hit
 cargo run --example sweep_obb
+cargo run --example slide_solids
 cargo run --example picking_ray
 cargo run --example frustum_cull
 cargo run --example debug_draw
@@ -58,6 +59,10 @@ Moves a box and a sphere with the arrow keys into one wall. `Aabb::sweep` and `S
 ## `sweep_obb`
 
 Moves a sphere with the arrow keys into a yawed cover. `Sphere::sweep_obb` stops it at `SweepHit::t` and the example keeps the leftover motion along `normal`. The cover's thin half-extent is 0.225, so a discrete overlap test can jump it; the sweep still reports the face. A pure touch is not an impact. Escape quits.
+
+## `slide_solids`
+
+Moves a sphere with the arrow keys. `slide_sphere_solids` slides it on a floor `Aabb`, past a `Sphere` rock, and around a vertical `Capsule` column. A step that only touches a solid keeps going. The sphere turns red when the step is shortened. Escape quits.
 
 ## `picking_ray`
 

@@ -1,12 +1,13 @@
-//! Move a sphere so it stops on a box and keeps the motion along that face.
+//! Move a sphere so it stops on a solid and keeps the motion along that face.
 //!
 //! [`Aabb`] and [`Sphere`] overlap tests are inclusive, so a sphere sitting on
 //! a floor already counts as overlapping. [`slide_sphere`] treats that touch
 //! as a surface to slide on. The caller does not pass a smaller radius.
+//! [`slide_sphere_solids`] is the same move against spheres and capsules too.
 
 use glam::{vec3, Vec3};
 
-use super::{Aabb, Obb};
+use super::{Aabb, Capsule, Obb, Sphere};
 
 /// How far two contact times can be and still be the same hit.
 const TIME_SLOP: f32 = 1e-5;
@@ -41,6 +42,8 @@ struct SlideHit {
 /// applied as a free move. A non-finite `center` or `delta` is left where it
 /// is. An inverted [`Aabb`] and an empty or unusable [`Obb`] are ignored, the
 /// same as their overlap queries. There is no gravity and no rigid body here.
+/// Static spheres and capsules are [`slide_sphere_solids`]. This function does
+/// not grow a parameter list for them.
 ///
 /// # Example
 ///
@@ -78,6 +81,71 @@ struct SlideHit {
 /// assert_eq!(velocity.y, 0.0);
 /// ```
 pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs: &[Obb]) -> Vec3 {
+    slide_sphere_solids(center, radius, delta, aabbs, obbs, &[], &[])
+}
+
+/// Moves a sphere by `delta` and slides it along boxes, spheres, and capsules.
+///
+/// The returned value is the new center. [`slide_sphere`] is this function
+/// with empty `spheres` and `capsules` slices, and its parameter list is
+/// unchanged. The rules are the same: the sphere stops on a surface and the
+/// leftover motion stays on that face. A sphere that merely touches a shape
+/// (the gap equals the sum of the radii, or `radius` against a box) still
+/// moves along it.
+///
+/// When `center` starts inside a solid, it is pushed out before `delta` is
+/// applied. A box uses that box's shortest axis, as [`slide_sphere`] does. A
+/// sphere pushes from the other center, or along [`Vec3::X`] when the centers
+/// coincide. A capsule pushes from the closest point on the inner segment.
+/// A center that lies on that segment uses the world axis most perpendicular
+/// to it, X before Y before Z. The push is long enough that the moving sphere
+/// sits on the surface.
+///
+/// A negative or non-finite moving radius does not collide, and a finite
+/// `delta` is applied as a free move. A non-finite `center` or `delta` is
+/// left where it is. An empty box, an empty oriented box, and a sphere or
+/// capsule with a negative or non-finite radius are ignored. There is no
+/// gravity and no rigid body here.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::math::{slide_sphere_solids, Capsule, vec3};
+///
+/// let column = Capsule::new(vec3(0.0, 0.0, 0.0), vec3(0.0, 2.0, 0.0), 0.45);
+/// let moved = slide_sphere_solids(
+///     vec3(-2.0, 1.0, 0.0),
+///     0.4,
+///     vec3(3.0, 0.0, 0.0),
+///     &[],
+///     &[],
+///     &[],
+///     &[column],
+/// );
+/// assert!((moved.x + 0.85).abs() < 1e-3);
+/// assert!((moved.y - 1.0).abs() < 1e-3);
+/// ```
+///
+/// A sphere that only touches another sphere keeps a sideways step.
+///
+/// ```
+/// use macroquad::math::{slide_sphere_solids, Sphere, vec3};
+///
+/// let rock = Sphere::new(vec3(0.0, 0.5, 0.0), 0.5);
+/// let resting = vec3(-0.9, 0.5, 0.0);
+/// let moved = slide_sphere_solids(resting, 0.4, vec3(0.0, 0.0, 1.0), &[], &[], &[rock], &[]);
+/// assert!((moved.x - resting.x).abs() < 1e-4);
+/// assert!((moved.z - 1.0).abs() < 1e-4);
+/// ```
+pub fn slide_sphere_solids(
+    center: Vec3,
+    radius: f32,
+    delta: Vec3,
+    aabbs: &[Aabb],
+    obbs: &[Obb],
+    spheres: &[Sphere],
+    capsules: &[Capsule],
+) -> Vec3 {
     if !center.is_finite() || !delta.is_finite() {
         return center;
     }
@@ -85,7 +153,13 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
         return center + delta;
     }
 
-    let mut position = resolve_penetration(center, radius, aabbs, obbs);
+    let solids = SlideSolids {
+        aabbs,
+        obbs,
+        spheres,
+        capsules,
+    };
+    let mut position = resolve_penetration(center, radius, &solids);
     if !position.is_finite() {
         return center;
     }
@@ -96,7 +170,7 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
             remaining = Vec3::ZERO;
             break;
         }
-        let Some(hit) = first_hit(position, radius, remaining, aabbs, obbs) else {
+        let Some(hit) = first_hit(position, radius, remaining, &solids) else {
             position += remaining;
             remaining = Vec3::ZERO;
             break;
@@ -125,7 +199,7 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
     // if the rest is clear. A tangent that still meets a shape later stays
     // put, so the sphere does not tunnel through the next solid.
     if remaining.length_squared() > TIME_SLOP * TIME_SLOP {
-        match first_hit(position, radius, remaining, aabbs, obbs) {
+        match first_hit(position, radius, remaining, &solids) {
             None => position += remaining,
             Some(hit) if hit.t <= TIME_SLOP => {
                 let into = remaining.dot(hit.normal);
@@ -133,7 +207,7 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
                     remaining -= hit.normal * into;
                 }
                 if remaining.length_squared() > TIME_SLOP * TIME_SLOP
-                    && first_hit(position, radius, remaining, aabbs, obbs).is_none()
+                    && first_hit(position, radius, remaining, &solids).is_none()
                 {
                     position += remaining;
                 }
@@ -144,28 +218,41 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
     position
 }
 
-fn resolve_penetration(center: Vec3, radius: f32, aabbs: &[Aabb], obbs: &[Obb]) -> Vec3 {
+struct SlideSolids<'a> {
+    aabbs: &'a [Aabb],
+    obbs: &'a [Obb],
+    spheres: &'a [Sphere],
+    capsules: &'a [Capsule],
+}
+
+fn resolve_penetration(center: Vec3, radius: f32, solids: &SlideSolids<'_>) -> Vec3 {
     let mut center = center;
     for _ in 0..8 {
         let mut best: Option<Vec3> = None;
         let mut best_len = 0.0;
-        for aabb in aabbs {
-            if let Some(push) = push_out_aabb(center, radius, aabb) {
-                let len = push.length_squared();
-                if len > best_len {
-                    best = Some(push);
-                    best_len = len;
-                }
-            }
+        for aabb in solids.aabbs {
+            consider_push(
+                &mut best,
+                &mut best_len,
+                push_out_aabb(center, radius, aabb),
+            );
         }
-        for obb in obbs {
-            if let Some(push) = push_out_obb(center, radius, obb) {
-                let len = push.length_squared();
-                if len > best_len {
-                    best = Some(push);
-                    best_len = len;
-                }
-            }
+        for obb in solids.obbs {
+            consider_push(&mut best, &mut best_len, push_out_obb(center, radius, obb));
+        }
+        for sphere in solids.spheres {
+            consider_push(
+                &mut best,
+                &mut best_len,
+                push_out_sphere(center, radius, sphere),
+            );
+        }
+        for capsule in solids.capsules {
+            consider_push(
+                &mut best,
+                &mut best_len,
+                push_out_capsule(center, radius, capsule),
+            );
         }
         let Some(push) = best else {
             break;
@@ -176,6 +263,17 @@ fn resolve_penetration(center: Vec3, radius: f32, aabbs: &[Aabb], obbs: &[Obb]) 
         center += push;
     }
     center
+}
+
+fn consider_push(best: &mut Option<Vec3>, best_len: &mut f32, push: Option<Vec3>) {
+    let Some(push) = push else {
+        return;
+    };
+    let len = push.length_squared();
+    if len > *best_len {
+        *best = Some(push);
+        *best_len = len;
+    }
 }
 
 fn push_out_aabb(center: Vec3, radius: f32, aabb: &Aabb) -> Option<Vec3> {
@@ -241,15 +339,9 @@ fn shortest_axis_push(center: Vec3, radius: f32, min: Vec3, max: Vec3) -> Vec3 {
     best
 }
 
-fn first_hit(
-    center: Vec3,
-    radius: f32,
-    delta: Vec3,
-    aabbs: &[Aabb],
-    obbs: &[Obb],
-) -> Option<SlideHit> {
+fn first_hit(center: Vec3, radius: f32, delta: Vec3, solids: &SlideSolids<'_>) -> Option<SlideHit> {
     let mut best: Option<SlideHit> = None;
-    for aabb in aabbs {
+    for aabb in solids.aabbs {
         if usable_aabb(aabb) {
             consider(
                 &mut best,
@@ -258,10 +350,24 @@ fn first_hit(
             );
         }
     }
-    for obb in obbs {
+    for obb in solids.obbs {
         consider(
             &mut best,
             cast_sphere_obb(center, radius, delta, obb),
+            delta,
+        );
+    }
+    for sphere in solids.spheres {
+        consider(
+            &mut best,
+            cast_sphere_sphere(center, radius, delta, sphere),
+            delta,
+        );
+    }
+    for capsule in solids.capsules {
+        consider(
+            &mut best,
+            cast_sphere_capsule(center, radius, delta, capsule),
             delta,
         );
     }
@@ -290,6 +396,131 @@ fn consider(best: &mut Option<SlideHit>, hit: Option<SlideHit>, delta: Vec3) {
     if replace {
         *best = Some(hit);
     }
+}
+
+fn push_out_sphere(center: Vec3, radius: f32, sphere: &Sphere) -> Option<Vec3> {
+    if !usable_sphere(sphere) {
+        return None;
+    }
+    let reach = radius + sphere.radius;
+    radial_push(center - sphere.center, reach, Vec3::X)
+}
+
+fn push_out_capsule(center: Vec3, radius: f32, capsule: &Capsule) -> Option<Vec3> {
+    if !usable_capsule(capsule) {
+        return None;
+    }
+    let reach = radius + capsule.radius;
+    let on_segment = closest_on_segment(capsule.a, capsule.b, center);
+    radial_push(
+        center - on_segment,
+        reach,
+        perpendicular_to_segment(capsule.a, capsule.b),
+    )
+}
+
+/// Push `center` out to `reach` along `offset`.
+///
+/// `fallback` is the direction when `offset` is too short to normalize. A
+/// distance already at or past `reach` is a touch or a miss, not a push.
+fn radial_push(offset: Vec3, reach: f32, fallback: Vec3) -> Option<Vec3> {
+    if !reach.is_finite() || reach < 0.0 || !offset.is_finite() {
+        return None;
+    }
+    let dist_sq = offset.length_squared();
+    if dist_sq >= reach * reach {
+        return None;
+    }
+    let push = if dist_sq <= 1e-12 {
+        fallback * reach
+    } else {
+        let dist = dist_sq.sqrt();
+        offset * ((reach - dist) / dist)
+    };
+    if push.is_finite() {
+        Some(push)
+    } else {
+        None
+    }
+}
+
+/// World axis most perpendicular to `b - a`, X before Y before Z on a tie.
+///
+/// A segment with no length is not an axis, so the result is [`Vec3::X`].
+fn perpendicular_to_segment(a: Vec3, b: Vec3) -> Vec3 {
+    let axis = b - a;
+    let len_sq = axis.length_squared();
+    if !len_sq.is_finite() || len_sq <= PLANE_SLOP * PLANE_SLOP {
+        return Vec3::X;
+    }
+    let axis = axis / len_sq.sqrt();
+    let ax = axis.x.abs();
+    let ay = axis.y.abs();
+    let az = axis.z.abs();
+    let seed = if ay < ax {
+        if az < ay {
+            Vec3::Z
+        } else {
+            Vec3::Y
+        }
+    } else if az < ax {
+        Vec3::Z
+    } else {
+        Vec3::X
+    };
+    let perp = seed - axis * seed.dot(axis);
+    let perp_len_sq = perp.length_squared();
+    if !perp_len_sq.is_finite() || perp_len_sq <= 1e-12 {
+        Vec3::X
+    } else {
+        perp / perp_len_sq.sqrt()
+    }
+}
+
+fn closest_on_segment(a: Vec3, b: Vec3, point: Vec3) -> Vec3 {
+    let ab = b - a;
+    let len_sq = ab.length_squared();
+    if !len_sq.is_finite() || len_sq <= PLANE_SLOP * PLANE_SLOP {
+        return a;
+    }
+    let t = ((point - a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    a + ab * t
+}
+
+fn cast_sphere_sphere(center: Vec3, radius: f32, delta: Vec3, sphere: &Sphere) -> Option<SlideHit> {
+    if !usable_sphere(sphere) {
+        return None;
+    }
+    cast_corner(center, radius + sphere.radius, delta, sphere.center)
+}
+
+fn cast_sphere_capsule(
+    center: Vec3,
+    radius: f32,
+    delta: Vec3,
+    capsule: &Capsule,
+) -> Option<SlideHit> {
+    if !usable_capsule(capsule) {
+        return None;
+    }
+    let reach = radius + capsule.radius;
+    let mut best: Option<SlideHit> = None;
+    consider(
+        &mut best,
+        cast_edge(center, reach, delta, capsule.a, capsule.b),
+        delta,
+    );
+    consider(
+        &mut best,
+        cast_corner(center, reach, delta, capsule.a),
+        delta,
+    );
+    consider(
+        &mut best,
+        cast_corner(center, reach, delta, capsule.b),
+        delta,
+    );
+    best
 }
 
 fn cast_sphere_obb(center: Vec3, radius: f32, delta: Vec3, obb: &Obb) -> Option<SlideHit> {
@@ -442,6 +673,17 @@ fn accept_radial(
     Some(SlideHit { t, normal })
 }
 
+fn usable_sphere(sphere: &Sphere) -> bool {
+    sphere.radius.is_finite() && sphere.radius >= 0.0 && sphere.center.is_finite()
+}
+
+fn usable_capsule(capsule: &Capsule) -> bool {
+    capsule.radius.is_finite()
+        && capsule.radius >= 0.0
+        && capsule.a.is_finite()
+        && capsule.b.is_finite()
+}
+
 fn usable_aabb(aabb: &Aabb) -> bool {
     aabb.min.is_finite()
         && aabb.max.is_finite()
@@ -495,7 +737,7 @@ fn aabb_corners(aabb: &Aabb) -> [Vec3; 8] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math::{Quat, Sphere, Vec3};
+    use crate::math::{Capsule, Quat, Sphere, Vec3};
 
     fn assert_close(left: Vec3, right: Vec3) {
         let delta = left - right;
@@ -699,5 +941,276 @@ mod tests {
             (end - start).length() > 0.5,
             "corner ate the whole move: {end:?}"
         );
+    }
+
+    fn cinder_column() -> Capsule {
+        Capsule::new(vec3(-1.6, 0.45, -2.4), vec3(-1.6, 1.55, -2.4), 0.45)
+    }
+
+    fn cinder_rock() -> Sphere {
+        Sphere::new(vec3(2.6, 0.5, 1.2), 0.5)
+    }
+
+    #[test]
+    fn a_floor_strafe_still_goes_through_slide_sphere() {
+        let floor = Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(10.0, 1.0, 10.0));
+        let radius = 0.5;
+        let resting = vec3(0.2, radius, -0.3);
+        let delta = vec3(1.25, -0.4, -0.5);
+        let through_slide = slide_sphere(resting, radius, delta, &[floor], &[]);
+        let through_solids = slide_sphere_solids(resting, radius, delta, &[floor], &[], &[], &[]);
+        assert_close(through_slide, resting + vec3(1.25, 0.0, -0.5));
+        assert_close(through_solids, through_slide);
+    }
+
+    #[test]
+    fn a_touching_sphere_keeps_a_strafe_and_drops_the_inward_step() {
+        let rock = Sphere::new(Vec3::ZERO, 0.5);
+        let radius = 0.4;
+        let resting = vec3(0.9, 0.0, 0.0);
+        assert!(Sphere::new(resting, radius).overlaps(&rock));
+
+        let sideways = slide_sphere_solids(
+            resting,
+            radius,
+            vec3(0.0, 0.25, 1.25),
+            &[],
+            &[],
+            &[rock],
+            &[],
+        );
+        assert_close(sideways, resting + vec3(0.0, 0.25, 1.25));
+
+        let into = slide_sphere_solids(
+            resting,
+            radius,
+            vec3(-0.5, 0.0, 1.25),
+            &[],
+            &[],
+            &[rock],
+            &[],
+        );
+        assert_close(into, resting + vec3(0.0, 0.0, 1.25));
+        // The tangent plane leaves a round rock. The inward step is gone.
+        let gap = (into - rock.center).length() - rock.radius - radius;
+        assert!(gap > -1e-3, "sank into the rock: gap {gap}");
+    }
+
+    #[test]
+    fn a_capsule_column_stops_a_horizontal_move() {
+        let column = Capsule::new(Vec3::ZERO, vec3(0.0, 2.0, 0.0), 0.45);
+        let radius = 0.4;
+        let start = vec3(-2.0, 1.0, 0.0);
+        let end = slide_sphere_solids(start, radius, vec3(4.0, 0.5, 0.0), &[], &[], &[], &[column]);
+        assert_close(end, vec3(-0.85, 1.5, 0.0));
+        let gap = (-end.x) - column.radius - radius;
+        assert!(gap.abs() < 1e-3, "left the column: gap {gap}");
+    }
+
+    #[test]
+    fn cinder_court_column_and_rock_block_a_pass_through() {
+        let radius = 0.4;
+        let column = cinder_column();
+        let rock = cinder_rock();
+        // 0.35 outside the surface. Delta 1.9 puts the column's midpoint gap
+        // at -0.60; delta 2.0 puts the rock's at -0.65. `slide_sphere` never
+        // sees either solid, so those steps used to finish on start + delta.
+        let column_start = vec3(-2.8, 1.0, -2.4);
+        let column_delta = vec3(1.9, 0.0, 0.0);
+        let column_mid = column_start + column_delta * 0.5;
+        let column_gap = (column_mid - vec3(-1.6, column_mid.y, -2.4)).length() - 0.45 - radius;
+        assert!((column_gap + 0.60).abs() < 1e-4, "gap {column_gap}");
+
+        let rock_start = vec3(1.35, 0.5, 1.2);
+        let rock_delta = vec3(2.0, 0.0, 0.0);
+        let rock_mid = rock_start + rock_delta * 0.5;
+        let rock_gap = (rock_mid - rock.center).length() - rock.radius - radius;
+        assert!((rock_gap + 0.65).abs() < 1e-4, "gap {rock_gap}");
+
+        let stopped_column = slide_sphere_solids(
+            column_start,
+            radius,
+            column_delta,
+            &[],
+            &[],
+            &[rock],
+            &[column],
+        );
+        assert_close(stopped_column, vec3(-2.45, 1.0, -2.4));
+        assert!(
+            (stopped_column - (column_start + column_delta)).length() > 1.0,
+            "column did not block: {stopped_column:?}"
+        );
+
+        let stopped_rock =
+            slide_sphere_solids(rock_start, radius, rock_delta, &[], &[], &[rock], &[column]);
+        assert_close(stopped_rock, vec3(1.7, 0.5, 1.2));
+        assert!((stopped_rock - (rock_start + rock_delta)).length() > 1.0);
+    }
+
+    #[test]
+    fn a_round_column_does_not_block_like_its_square_stand_in() {
+        let column = cinder_column();
+        let radius = 0.4;
+        let axis = vec3(-1.6, 1.0, -2.4);
+        // Beside the expanded box's face: the square stand-in reaches 0.85
+        // from the axis, and the cylinder only reaches about 0.72 here.
+        let start = axis + vec3(1.1, 0.0, 0.45);
+        let delta = vec3(-0.3, 0.0, 0.0);
+        let end = slide_sphere_solids(start, radius, delta, &[], &[], &[], &[column]);
+        assert_close(end, start + delta);
+        assert!(!column.overlaps_sphere(&Sphere::new(end, radius)));
+
+        let square = Aabb::from_points([column.a, column.b])
+            .unwrap()
+            .expanded(column.radius);
+        let blocked = slide_sphere(start, radius, delta, &[square], &[]);
+        assert!(
+            (blocked.x - (start.x + delta.x)).abs() > 0.04,
+            "the aabb stand-in should catch this corner, got {blocked:?}"
+        );
+    }
+
+    #[test]
+    fn a_center_inside_a_sphere_or_capsule_is_pushed_out() {
+        let rock = Sphere::new(Vec3::ZERO, 1.0);
+        let radius = 0.5;
+        let buried = vec3(0.2, 0.0, 0.0);
+        let pushed = slide_sphere_solids(buried, radius, Vec3::ZERO, &[], &[], &[rock], &[]);
+        assert_close(pushed, vec3(1.5, 0.0, 0.0));
+
+        let coincident =
+            slide_sphere_solids(Vec3::ZERO, radius, Vec3::ZERO, &[], &[], &[rock], &[]);
+        assert_close(coincident, vec3(1.5, 0.0, 0.0));
+
+        let then_in =
+            slide_sphere_solids(buried, radius, vec3(-0.4, 0.0, 0.3), &[], &[], &[rock], &[]);
+        assert_close(then_in, vec3(1.5, 0.0, 0.3));
+
+        let column = Capsule::new(Vec3::ZERO, vec3(0.0, 2.0, 0.0), 0.5);
+        let on_segment = slide_sphere_solids(
+            vec3(0.0, 1.0, 0.0),
+            0.4,
+            Vec3::ZERO,
+            &[],
+            &[],
+            &[],
+            &[column],
+        );
+        assert_close(on_segment, vec3(0.9, 1.0, 0.0));
+
+        // The rail runs along X, so +X is the long way out. Y wins the tie with Z.
+        let rail = Capsule::new(vec3(-1.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0), 0.25);
+        let off_rail = slide_sphere_solids(Vec3::ZERO, 0.25, Vec3::ZERO, &[], &[], &[], &[rail]);
+        assert_close(off_rail, vec3(0.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn a_fast_move_does_not_tunnel_through_a_thin_capsule() {
+        let wire = Capsule::new(vec3(0.0, -2.0, 0.0), vec3(0.0, 2.0, 0.0), 0.02);
+        let end = slide_sphere_solids(
+            vec3(-3.0, 0.0, 0.0),
+            0.3,
+            vec3(10.0, 0.5, 0.0),
+            &[],
+            &[],
+            &[],
+            &[wire],
+        );
+        assert_close(end, vec3(-0.32, 0.5, 0.0));
+    }
+
+    #[test]
+    fn a_capsule_end_cap_stops_a_move_past_the_segment() {
+        let rail = Capsule::new(vec3(-1.0, 0.0, 0.0), vec3(1.0, 0.0, 0.0), 0.3);
+        let end = slide_sphere_solids(
+            vec3(1.0, 2.0, 0.0),
+            0.2,
+            vec3(0.0, -4.0, 0.0),
+            &[],
+            &[],
+            &[],
+            &[rail],
+        );
+        assert_close(end, vec3(1.0, 0.5, 0.0));
+    }
+
+    #[test]
+    fn a_slide_far_from_the_origin_matches_the_same_sphere() {
+        let rock = Sphere::new(Vec3::ZERO, 0.5);
+        let start = vec3(-2.0, 0.4, 0.2);
+        let delta = vec3(5.0, -0.1, 0.4);
+        let near = slide_sphere_solids(start, 0.4, delta, &[], &[], &[rock], &[]);
+        let shift = vec3(20_000.0, -15_000.0, 8_000.0);
+        let far = slide_sphere_solids(
+            start + shift,
+            0.4,
+            delta,
+            &[],
+            &[],
+            &[rock.offset(shift)],
+            &[],
+        );
+        let shifted = far - shift;
+        let drift = (shifted - near).length();
+        // f32 at this distance is coarser than the local slide. A radius-early
+        // miss would be tenths, not a couple of hundredths.
+        assert!(
+            drift < 0.02,
+            "far slide drifted {drift}: near {near:?} far {shifted:?}"
+        );
+        assert!(
+            (near - (start + delta)).length() > 0.5,
+            "did not stop: {near:?}"
+        );
+        let gap = near.length() - rock.radius - 0.4;
+        assert!(gap > -1e-3, "penetrated: gap {gap}");
+        let far_gap = (far - rock.offset(shift).center).length() - rock.radius - 0.4;
+        assert!(far_gap > -0.02, "penetrated far away: gap {far_gap}");
+    }
+
+    #[test]
+    fn empty_spheres_and_capsules_do_not_block() {
+        let solid = Sphere::new(Vec3::ZERO, 1.0);
+        let bad_spheres = [
+            Sphere::new(Vec3::ZERO, -1.0),
+            Sphere::new(Vec3::ZERO, f32::NAN),
+            Sphere::new(vec3(f32::NAN, 0.0, 0.0), 1.0),
+        ];
+        let bad_capsules = [
+            Capsule::new(Vec3::ZERO, Vec3::Y, -0.5),
+            Capsule::new(Vec3::ZERO, vec3(f32::NAN, 1.0, 0.0), 0.5),
+        ];
+        let start = vec3(-2.0, 0.0, 0.0);
+        let delta = vec3(5.0, 0.2, -0.3);
+        assert_close(
+            slide_sphere_solids(start, 0.4, delta, &[], &[], &bad_spheres, &bad_capsules),
+            start + delta,
+        );
+        assert_close(
+            slide_sphere_solids(start, -1.0, delta, &[], &[], &[solid], &[]),
+            start + delta,
+        );
+        let blocked = slide_sphere_solids(start, 0.4, delta, &[], &[], &[solid], &[]);
+        assert!(blocked.x < -0.5, "solid sphere did not block: {blocked:?}");
+    }
+
+    #[test]
+    fn a_floor_and_a_rock_keep_the_floor_and_stop_on_the_rock() {
+        let floor = Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(10.0, 1.0, 10.0));
+        let rock = Sphere::new(vec3(2.0, 0.5, 0.0), 0.5);
+        let radius = 0.5;
+        let start = vec3(0.0, radius, 0.0);
+        let end = slide_sphere_solids(
+            start,
+            radius,
+            vec3(3.0, -0.4, 0.0),
+            &[floor],
+            &[],
+            &[rock],
+            &[],
+        );
+        assert_close(end, vec3(1.0, radius, 0.0));
+        assert_outside_aabb(end, radius, &floor);
     }
 }
