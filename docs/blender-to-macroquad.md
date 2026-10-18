@@ -31,7 +31,7 @@ Put custom properties on the **object**, not on the mesh data. The exporter writ
 
 - A `box` is an `Aabb`. The center is the world-matrix translation. The full size is the length of each column of the world matrix's upper 3×3, in column order. Parent scale is included. A negative scale stays a positive length. Those lengths are **not** reordered onto world axes, and a rotated empty is **not** turned into an `Obb`.
 - A `sphere` uses that same center. The radius is the **largest** of the three column lengths, not half of it. An empty scaled `(2, 2, 2)` has radius `2`.
-- `capsule` is skipped until a capsule type exists. The node is not a collider.
+- `capsule` is recognized and then skipped. `Capsule` is in `macroquad::math`, but this loader does not build one yet. The segment will run along the node's world +Y, the radius will be the larger of the world X and Z column lengths, and the world Y column length will be the distance from the center to an endpoint of the inner segment.
 - A collider or trigger with no `mq_shape` and with a mesh becomes an `Aabb` around the mesh positions after the node world matrix.
 - An empty with a role, no `mq_shape`, and no mesh is not a collider.
 

@@ -34,7 +34,8 @@
 //! Node `extras` are preferred: `mq_shape` is `box`, `sphere`, or `capsule`,
 //! and `mq_role` is `collider`, `trigger`, or `spawn`. When `mq_role` is
 //! absent, a name ending in `_collider`, `_trigger`, or `_spawn` supplies the
-//! role. `capsule` is skipped until a capsule type exists. A `box` or `sphere`
+//! role. `capsule` is recognized and skipped: [`crate::math::Capsule`] exists,
+//! but this loader does not emit one yet. A `box` or `sphere`
 //! is centered on the world-matrix translation. Its size is the length of each
 //! column of that matrix's upper 3×3, in column order, so a parent's scale is
 //! included and a negative scale stays positive. Those lengths are not turned

@@ -10,9 +10,9 @@ use super::{Aabb, RayHit};
 
 /// A sphere, defined by its center and radius.
 ///
-/// `radius` should be non-negative. A negative radius is empty: it contains
-/// nothing, overlaps nothing, and the ray query misses. A radius of zero is a
-/// single point at `center`.
+/// `radius` should be non-negative and finite. A negative or non-finite radius
+/// is empty: it contains nothing, overlaps nothing, and the ray query misses.
+/// A radius of zero is a single point at `center`.
 ///
 /// Boundaries are inclusive, matching [`Aabb`] and [`Rect`](crate::math::Rect):
 /// a point on the surface is inside, and two spheres that only touch overlap.
@@ -30,7 +30,7 @@ use super::{Aabb, RayHit};
 pub struct Sphere {
     /// Center of the sphere.
     pub center: Vec3,
-    /// Radius. See the struct docs for negative and zero values.
+    /// Radius. See the struct docs for negative, non-finite, and zero values.
     pub radius: f32,
 }
 
@@ -83,7 +83,7 @@ impl Sphere {
     /// assert!(!ball.contains(vec3(1.1, 0.0, 0.0)));
     /// ```
     pub const fn contains(&self, point: Vec3) -> bool {
-        if self.radius < 0.0 {
+        if !self.radius.is_finite() || self.radius < 0.0 {
             return false;
         }
         distance_squared(self.center, point) <= self.radius * self.radius
@@ -91,8 +91,8 @@ impl Sphere {
 
     /// Returns true when the two spheres overlap, including a shared point.
     ///
-    /// A negative radius is empty and overlaps nothing, even when the other
-    /// radius would cover this center.
+    /// A negative or non-finite radius is empty and overlaps nothing, even when
+    /// the other radius would cover this center.
     ///
     /// # Example
     ///
@@ -104,7 +104,11 @@ impl Sphere {
     /// assert!(a.overlaps(&b));
     /// ```
     pub const fn overlaps(&self, other: &Sphere) -> bool {
-        if self.radius < 0.0 || other.radius < 0.0 {
+        if !self.radius.is_finite()
+            || self.radius < 0.0
+            || !other.radius.is_finite()
+            || other.radius < 0.0
+        {
             return false;
         }
         let reach = self.radius + other.radius;
@@ -125,7 +129,7 @@ impl Sphere {
     /// assert!(ball.overlaps_aabb(&crate_));
     /// ```
     pub fn overlaps_aabb(&self, aabb: &Aabb) -> bool {
-        if self.radius < 0.0 {
+        if !self.radius.is_finite() || self.radius < 0.0 {
             return false;
         }
         let closest = aabb.closest_point(self.center);
@@ -135,7 +139,7 @@ impl Sphere {
     /// Closest point on or inside the solid sphere to `point`.
     ///
     /// A point already inside is returned unchanged. An empty sphere (negative
-    /// radius) returns `center`.
+    /// or non-finite radius) returns `center`. A non-finite `point` does too.
     ///
     /// # Example
     ///
@@ -146,7 +150,7 @@ impl Sphere {
     /// assert_eq!(ball.closest_point(vec3(3.0, 0.0, 0.0)), Vec3::X);
     /// ```
     pub fn closest_point(&self, point: Vec3) -> Vec3 {
-        if self.radius <= 0.0 {
+        if !self.radius.is_finite() || self.radius <= 0.0 || !point.is_finite() {
             return self.center;
         }
         let delta = point - self.center;
@@ -330,6 +334,11 @@ mod tests {
 
         assert!(Sphere::new(vec3(1.0, 1.0, 1.0), 0.1).overlaps_aabb(&aabb));
         assert!(!Sphere::new(vec3(5.0, 1.0, 1.0), -1.0).overlaps_aabb(&aabb));
+        assert!(!Sphere::new(Vec3::ZERO, f32::INFINITY).overlaps_aabb(&aabb));
+        assert!(!Sphere::new(Vec3::ZERO, f32::NAN).contains(Vec3::ZERO));
+        assert!(!Sphere::new(Vec3::ZERO, f32::INFINITY).contains(vec3(100.0, 0.0, 0.0)));
+        assert!(!Sphere::new(Vec3::ZERO, f32::INFINITY).overlaps(&Sphere::new(Vec3::X, 1.0)));
+        assert!(!Sphere::new(Vec3::ZERO, 1.0).overlaps(&Sphere::new(Vec3::X, f32::NAN)));
     }
 
     #[test]
@@ -351,6 +360,15 @@ mod tests {
             Sphere::new(Vec3::X, -1.0).closest_point(Vec3::ZERO),
             Vec3::X
         );
+        assert_eq!(
+            Sphere::new(Vec3::X, f32::NAN).closest_point(Vec3::ZERO),
+            Vec3::X
+        );
+        assert_eq!(
+            Sphere::new(Vec3::X, f32::INFINITY).closest_point(vec3(4.0, 0.0, 0.0)),
+            Vec3::X
+        );
+        assert_eq!(sphere.closest_point(vec3(f32::NAN, 0.0, 0.0)), Vec3::ZERO);
     }
 
     #[test]

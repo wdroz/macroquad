@@ -14,9 +14,9 @@ use super::{Aabb, RayHit, Sphere};
 /// does not change the shape. A character body is this segment standing along
 /// whatever direction the caller treats as up.
 ///
-/// `radius` should be non-negative. A negative radius is empty: it contains
-/// nothing, overlaps nothing, and the ray query misses. A radius of zero is
-/// the segment itself (a single point when `a == b`).
+/// `radius` should be non-negative and finite. A negative or non-finite radius
+/// is empty: it contains nothing, overlaps nothing, and the ray query misses.
+/// A radius of zero is the segment itself (a single point when `a == b`).
 ///
 /// Boundaries are inclusive, matching [`Sphere`] and [`Aabb`]: a point on the
 /// surface is inside, and two capsules that only touch overlap.
@@ -35,7 +35,7 @@ pub struct Capsule {
     pub a: Vec3,
     /// The other endpoint of the inner segment.
     pub b: Vec3,
-    /// Radius around the segment. See the struct docs for negative and zero.
+    /// Radius around the segment. See the struct docs for negative, non-finite, and zero.
     pub radius: f32,
 }
 
@@ -93,7 +93,7 @@ impl Capsule {
     /// assert!(!body.contains(vec3(0.0, 1.0, 1.2)));
     /// ```
     pub const fn contains(&self, point: Vec3) -> bool {
-        if self.radius < 0.0 {
+        if !self.radius.is_finite() || self.radius < 0.0 {
             return false;
         }
         point_segment_distance_sq(point, self.a, self.b) <= self.radius * self.radius
@@ -101,8 +101,8 @@ impl Capsule {
 
     /// Returns true when the two capsules overlap, including a shared point.
     ///
-    /// A negative radius is empty and overlaps nothing, even when the other
-    /// capsule would cover this segment.
+    /// A negative or non-finite radius is empty and overlaps nothing, even when
+    /// the other capsule would cover this segment.
     ///
     /// # Example
     ///
@@ -114,7 +114,11 @@ impl Capsule {
     /// assert!(left.overlaps(&right));
     /// ```
     pub fn overlaps(&self, other: &Capsule) -> bool {
-        if self.radius < 0.0 || other.radius < 0.0 {
+        if !self.radius.is_finite()
+            || self.radius < 0.0
+            || !other.radius.is_finite()
+            || other.radius < 0.0
+        {
             return false;
         }
         let reach = self.radius + other.radius;
@@ -123,7 +127,7 @@ impl Capsule {
 
     /// Returns true when this capsule and `sphere` overlap, including a touch.
     ///
-    /// A negative radius on either shape is empty and overlaps nothing.
+    /// A negative or non-finite radius on either shape is empty and overlaps nothing.
     ///
     /// # Example
     ///
@@ -135,7 +139,11 @@ impl Capsule {
     /// assert!(body.overlaps_sphere(&ball));
     /// ```
     pub fn overlaps_sphere(&self, sphere: &Sphere) -> bool {
-        if self.radius < 0.0 || sphere.radius < 0.0 {
+        if !self.radius.is_finite()
+            || self.radius < 0.0
+            || !sphere.radius.is_finite()
+            || sphere.radius < 0.0
+        {
             return false;
         }
         let reach = self.radius + sphere.radius;
@@ -146,7 +154,7 @@ impl Capsule {
     ///
     /// Assumes the box is normalized (`min` <= `max` on every axis). An
     /// inverted box overlaps nothing. A non-finite corner or endpoint misses.
-    /// A negative capsule radius is empty and overlaps nothing.
+    /// A negative or non-finite capsule radius is empty and overlaps nothing.
     ///
     /// # Example
     ///
@@ -158,7 +166,7 @@ impl Capsule {
     /// assert!(body.overlaps_aabb(&floor));
     /// ```
     pub fn overlaps_aabb(&self, aabb: &Aabb) -> bool {
-        if self.radius < 0.0 {
+        if !self.radius.is_finite() || self.radius < 0.0 {
             return false;
         }
         if !self.a.is_finite()
@@ -362,7 +370,6 @@ fn cylinder_hit(a: Vec3, b: Vec3, radius: f32, origin: Vec3, direction: Vec3) ->
         }
     };
 
-    let slack = 1e-4 * axis_len.max(1.0);
     let mut best: Option<RayHit> = None;
     for t in [t_near, t_far] {
         if !t.is_finite() || t < 0.0 {
@@ -370,11 +377,13 @@ fn cylinder_hit(a: Vec3, b: Vec3, radius: f32, origin: Vec3, direction: Vec3) ->
         }
         let point = origin + direction * t;
         let h = (point - a).dot(axis_n);
-        if h < -slack || h > axis_len + slack {
+        // The infinite cylinder continues past the segment, outside the capsule.
+        // Caps cover those ends, including the rim. Accepting `h` slightly
+        // outside `[0, axis_len]` reports a hit that `contains` rejects.
+        if !(0.0..=axis_len).contains(&h) {
             continue;
         }
-        let h_clamped = h.clamp(0.0, axis_len);
-        let axis_point = a + axis_n * h_clamped;
+        let axis_point = a + axis_n * h;
         let normal = if radius == 0.0 {
             Vec3::ZERO
         } else {
@@ -670,6 +679,9 @@ mod tests {
 
         assert!(!body.overlaps(&Capsule::new(Vec3::ZERO, Vec3::Y, -1.0)));
         assert!(!Capsule::new(Vec3::ZERO, Vec3::Y, -1.0).overlaps(&body));
+        assert!(!body.overlaps(&Capsule::new(Vec3::ZERO, Vec3::Y, f32::INFINITY)));
+        assert!(!Capsule::new(Vec3::ZERO, Vec3::Y, f32::NAN).overlaps(&body));
+        assert!(!Capsule::new(Vec3::ZERO, Vec3::Y, f32::INFINITY).contains(Vec3::ZERO));
     }
 
     #[test]
@@ -679,8 +691,14 @@ mod tests {
         assert!(!body.overlaps_sphere(&Sphere::new(vec3(0.0, 1.0, 2.0), 0.99)));
         assert!(body.overlaps_sphere(&Sphere::new(vec3(0.0, 1.0, 0.0), 0.1)));
         assert!(!body.overlaps_sphere(&Sphere::new(vec3(0.0, 1.0, 0.0), -1.0)));
+        assert!(!body.overlaps_sphere(&Sphere::new(vec3(0.0, 1.0, 0.0), f32::INFINITY)));
+        assert!(!body.overlaps_sphere(&Sphere::new(vec3(0.0, 1.0, 0.0), f32::NAN)));
         assert!(!Capsule::new(Vec3::ZERO, Vec3::Y, -0.25)
             .overlaps_sphere(&Sphere::new(Vec3::ZERO, 10.0)));
+        assert!(!Capsule::new(Vec3::ZERO, Vec3::Y, f32::INFINITY)
+            .overlaps_sphere(&Sphere::new(Vec3::ZERO, 10.0)));
+        assert!(!Capsule::new(Vec3::ZERO, Vec3::Y, f32::INFINITY)
+            .overlaps_aabb(&Aabb::from_min_max(Vec3::ZERO, Vec3::ONE,)));
 
         let point = Capsule::new(Vec3::ZERO, Vec3::ZERO, 1.0);
         assert!(point.overlaps_sphere(&Sphere::new(Vec3::X, 0.0)));
@@ -917,5 +935,43 @@ mod tests {
         assert_vec3_close(hit.point, vec3(1.0, -1.0, 0.0));
         assert_vec3_close(hit.normal, -Vec3::Y);
         assert_vec3_close(hit.point, vec3(1.0, -3.0, 0.0) + Vec3::Y * hit.t);
+    }
+
+    #[test]
+    fn ray_does_not_accept_the_infinite_cylinder_past_either_cap() {
+        // Axial slack used to grow with the segment. On a long body the wall
+        // past the end (radius 1 at y = -0.05) is outside the solid, and that
+        // hit was closer than the real one on the spherical cap.
+        let body = Capsule::new(Vec3::ZERO, vec3(0.0, 1000.0, 0.0), 1.0);
+        assert!(!body.contains(vec3(1.0, -0.05, 0.0)));
+
+        let below = body.ray_intersect(vec3(4.0, -0.05, 0.0), -Vec3::X).unwrap();
+        assert!(
+            below.point.x < 0.999,
+            "hit the cylinder wall past the cap: {:?}",
+            below.point
+        );
+        assert!((below.point.length() - 1.0).abs() < 1e-3);
+        assert!(below.point.y < 0.0);
+        assert!((body.closest_point(below.point) - below.point).length() < 1e-3);
+
+        let above = body
+            .ray_intersect(vec3(4.0, 1000.05, 0.0), -Vec3::X)
+            .unwrap();
+        let cap_center = vec3(0.0, 1000.0, 0.0);
+        assert!(((above.point - cap_center).length() - 1.0).abs() < 1e-3);
+        assert!(above.point.y > 1000.0);
+        assert!((body.closest_point(above.point) - above.point).length() < 1e-3);
+
+        assert!(body.ray_intersect(vec3(4.0, -2.0, 0.0), -Vec3::X).is_none());
+
+        let rim = body.ray_intersect(vec3(-3.0, 0.0, 0.0), Vec3::X).unwrap();
+        assert!((rim.t - 2.0).abs() < 1e-3);
+        assert_vec3_close(rim.point, -Vec3::X);
+        assert_vec3_close(rim.normal, -Vec3::X);
+
+        let side_cap = body.ray_intersect(vec3(-3.0, -0.5, 0.0), Vec3::X).unwrap();
+        assert!(side_cap.point.y < 0.0);
+        assert!((body.closest_point(side_cap.point) - side_cap.point).length() < 1e-3);
     }
 }

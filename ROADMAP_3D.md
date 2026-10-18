@@ -1,8 +1,8 @@
 # 3D roadmap
 
-Enhancements since last fixer round: 5
-Fixer rounds since last game round: 1
-Rounds since last documentation round: 1
+Enhancements since last fixer round: 0
+Fixer rounds since last game round: 2
+Rounds since last documentation round: 2
 
 Source of truth for the unattended 3D enhancement bot on this fork. The goal is to make 3D games easier to build with macroquad: collision primitives, raycasting, simple rigid-body physics, collision response, a character controller, and spatial partitioning. A second track loads a Blender scene exported as glTF 2.0 (meshes, materials, textures, node transforms, and collider / trigger / spawn markup) so a level does not have to be rebuilt by hand.
 
@@ -36,7 +36,7 @@ The checkboxes live in **Priorities**, interleaved with the collision items they
 - Markup, preferred source first:
   - glTF node `extras`: `mq_shape` = `box` | `sphere` | `capsule`, `mq_role` = `collider` | `trigger` | `spawn`.
   - Otherwise a name suffix: `_collider`, `_trigger`, `_spawn`.
-- A `box` uses the world-matrix translation as the center (not the local translation) and the node's full scale as the AABB size, matching `draw_cube` / `Aabb::from_center_size`. Scale is the length of each column of the world matrix's upper 3×3, in column order, so a parent's scale is included and a mirrored (negative) scale stays a positive size. Those lengths are not reordered onto world axes: a rotated box is still that size until the OBB item. A `sphere` uses the same world center and the largest of those three lengths as the radius. Spawn points use the world translation. `capsule` waits until `Capsule` exists: the segment runs along the node's world +Y (glTF Y-up), the radius is the larger of the world X and Z column lengths, and the world Y column length is the distance from the center to an endpoint of the inner segment.
+- A `box` uses the world-matrix translation as the center (not the local translation) and the node's full scale as the AABB size, matching `draw_cube` / `Aabb::from_center_size`. Scale is the length of each column of the world matrix's upper 3×3, in column order, so a parent's scale is included and a mirrored (negative) scale stays a positive size. Those lengths are not reordered onto world axes. A rotated box stays an `Aabb` of that size until the glTF collider-shapes item, which emits an `Obb` (use `Obb::from_world_matrix`; a negative scale stays a positive extent and the box stays centered). A `sphere` uses the same world center and the largest of those three lengths as the radius. Spawn points use the world translation. A `capsule` is still skipped by the loader. When the collider-shapes item emits one, the segment runs along the node's world +Y (glTF Y-up), the radius is the larger of the world X and Z column lengths, and the world Y column length is the distance from the center to an endpoint of the inner segment.
 - Empties (nodes with no mesh) are the usual markers. A mesh with a suffix and no `mq_shape` becomes an AABB around its transformed positions.
 - Checked-in bytes live under `examples/assets/`. A Python script headless Blender can run is how to regenerate them. Tests and examples must not require Blender to be installed.
 
@@ -86,3 +86,4 @@ The checkboxes live in **Priorities**, interleaved with the collision items they
 - 2026-10-17 — Enhancement: added `Obb` in `macroquad::math` (center, half extents, unit quaternion). `contains`, `closest_point`, separating-axis `overlaps_aabb`, `overlaps_sphere`, and `ray_intersect` (the ray is transformed into box space and tested with `Aabb`). `from_world_matrix` treats the matrix scale as the full size, matching `draw_cube` / `Aabb::from_center_size`. A negative half extent is empty. Example `examples/obb_overlap.rs`. Counters: N=4, M=1, D=10.
 - 2026-10-17 — Documentation: rustdoc examples on the new 3D math types, glTF scene and draw types, and `Texture2D::from_rgba8_mipmapped`. Added `docs/3d-guide.md` (collision queries, plus the application-side physics and character movement the library does not provide yet), `docs/blender-to-macroquad.md`, and `examples/README.md`. Counters: N=4, M=1, D=0.
 - 2026-10-17 — Enhancement: added `Capsule` in `macroquad::math` (segment swept by a radius: `contains`, `overlaps` / `overlaps_sphere` / `overlaps_aabb`, `closest_point`, `ray_intersect` → `RayHit`). `Ray::closest_capsule` matches the other slice queries. A negative radius is empty. Example `examples/capsule_overlap.rs`. Counters: N=5, M=1, D=1.
+- 2026-10-18 — Fixer: a capsule ray no longer hits the infinite cylinder past either cap (that point was outside the solid). A negative or non-finite radius is empty for `Sphere` and `Capsule` overlap, containment, and closest-point queries, matching their ray queries; a NaN sphere radius no longer returns a NaN closest point. `Ray::closest_obb` matches the other slice queries. Docs no longer say the capsule type is missing: the loader still skips `mq_shape = capsule`, and a rotated glTF box stays an `Aabb` until the collider-shapes item. Counters: N=0, M=2, D=2.

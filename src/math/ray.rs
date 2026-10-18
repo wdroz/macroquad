@@ -2,12 +2,13 @@
 //!
 //! A ray is an origin and a direction in world space. It does not assume a
 //! particular up axis, matching [`Aabb`](crate::math::Aabb),
-//! [`Sphere`](crate::math::Sphere), [`Capsule`](crate::math::Capsule),
-//! [`Plane`](crate::math::Plane), and [`Triangle`](crate::math::Triangle).
+//! [`Obb`](crate::math::Obb), [`Sphere`](crate::math::Sphere),
+//! [`Capsule`](crate::math::Capsule), [`Plane`](crate::math::Plane), and
+//! [`Triangle`](crate::math::Triangle).
 
 use glam::{vec3, Vec3};
 
-use super::{Aabb, Capsule, Plane, RayHit, Sphere, Triangle};
+use super::{Aabb, Capsule, Obb, Plane, RayHit, Sphere, Triangle};
 
 /// Closest intersection of a [`Ray`] with one shape in a slice.
 ///
@@ -115,6 +116,27 @@ impl Ray {
             origin: self.origin,
             direction: self.direction.normalize_or_zero(),
         }
+    }
+
+    /// Closest hit against `boxes`, or [`None`] when every box is missed.
+    ///
+    /// Hits with `t < 0` are rejected. Ties keep the earlier index. An empty
+    /// box (a negative half extent) or a zero quaternion misses, same as
+    /// [`Obb::ray_intersect`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Ray, Vec3, vec3};
+    ///
+    /// let ray = Ray::new(vec3(-3.0, 0.0, 0.0), Vec3::X);
+    /// let boxes = [Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY)];
+    /// let closest = ray.closest_obb(&boxes).unwrap();
+    /// assert_eq!(closest.index, 0);
+    /// assert_eq!(closest.hit.point, -Vec3::X);
+    /// ```
+    pub fn closest_obb(&self, boxes: &[Obb]) -> Option<ClosestHit> {
+        closest_hit(boxes, |obb| obb.ray_intersect(self.origin, self.direction))
     }
 
     /// Closest hit against `boxes`, or [`None`] when every box is missed.
@@ -251,6 +273,8 @@ fn closest_hit<T>(
 
 #[cfg(test)]
 mod tests {
+    use glam::Quat;
+
     use super::*;
 
     fn assert_vec3_close(left: Vec3, right: Vec3) {
@@ -454,5 +478,25 @@ mod tests {
         assert_eq!(ray.closest_capsule(&tied).unwrap().index, 0);
         assert!(ray.closest_capsule(&[]).is_none());
         assert!(ray.closest_capsule(&[capsules[2]]).is_none());
+    }
+
+    #[test]
+    fn closest_obb_picks_the_nearer_box_and_keeps_an_earlier_tie() {
+        let ray = Ray::new(vec3(-4.0, 0.0, 0.0), Vec3::X);
+        let boxes = [
+            Obb::new(vec3(4.0, 0.0, 0.0), Vec3::splat(0.5), Quat::IDENTITY),
+            Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY),
+            Obb::new(vec3(-8.0, 0.0, 0.0), Vec3::ONE, Quat::IDENTITY),
+        ];
+        let closest = ray.closest_obb(&boxes).unwrap();
+        assert_eq!(closest.index, 1);
+        assert!((closest.hit.t - 3.0).abs() < 1e-4);
+        assert_vec3_close(closest.hit.point, -Vec3::X);
+        assert_vec3_close(closest.hit.normal, -Vec3::X);
+
+        let tied = [boxes[1], boxes[1]];
+        assert_eq!(ray.closest_obb(&tied).unwrap().index, 0);
+        assert!(ray.closest_obb(&[]).is_none());
+        assert!(ray.closest_obb(&[boxes[2]]).is_none());
     }
 }
