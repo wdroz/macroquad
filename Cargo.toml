@@ -16,6 +16,7 @@ audio = ["quad-snd"]
 log-rs = ["log"]
 glam-serde = ["glam/serde"]
 gltf = ["dep:gltf", "dep:serde_json", "image/jpeg", "image/webp"]
+video = ["dep:serde_json"]
 default = []
 
 [package.metadata.android]

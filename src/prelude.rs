@@ -14,6 +14,8 @@ pub use crate::shapes::*;
 pub use crate::text::*;
 pub use crate::texture::*;
 pub use crate::time::*;
+#[cfg(feature = "video")]
+pub use crate::video::*;
 pub use crate::window::*;
 
 pub use crate::color::{colors::*, Color};

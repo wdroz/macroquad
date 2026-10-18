@@ -37,3 +37,8 @@ logging stubs:
 ```sh
 node js/mq_js_bundle.test.cjs path/to/game.wasm
 ```
+
+The optional `video` feature uses the separate `mq_video.js` plugin. Load it
+after the bundle and before `load("app.wasm")`. See `docs/video.md` for the
+playback API and native decoder requirements. Check its browser lifecycle and
+GL-state behavior with `node js/mq_video.test.cjs`.

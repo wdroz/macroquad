@@ -90,6 +90,8 @@ pub mod text;
 pub mod texture;
 pub mod time;
 pub mod ui;
+#[cfg(feature = "video")]
+pub mod video;
 pub mod window;
 
 pub mod experimental;
