@@ -1094,6 +1094,7 @@ mod tests {
             uvs: vec![],
             indices: vec![0, 1, 2],
             base_color_factor: [1.; 4],
+            base_color_texture: None,
         };
         let transform = Mat4::from_scale(Vec3::new(-2.0, 1.0, 1.0));
         let vertices = world_vertices(&primitive, transform);
@@ -1227,6 +1228,7 @@ mod tests {
             uvs: vec![],
             indices: vec![],
             base_color_factor: [1.; 4],
+            base_color_texture: None,
         };
         let vertices = world_vertices(&primitive, Mat4::from_scale(Vec3::new(2., 1., 1.)));
         let expected = Vec3::new(0.5, 1., 0.).normalize();
@@ -1472,6 +1474,7 @@ mod tests {
             ],
             indices: vec![0, 1, 2],
             base_color_factor: [0.2, 0.4, 0.6, 1.0],
+            base_color_texture: None,
         };
         let world = Mat4::from_scale(Vec3::new(-2.0, 1.0, 1.0));
         let vertices = world_vertices(&primitive, world);

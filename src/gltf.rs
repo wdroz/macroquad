@@ -34,6 +34,15 @@
 //! A buffer longer than its declared `byteLength` is truncated. Only triangle
 //! primitives are loaded, and a node index used more than once is an error.
 //!
+//! [`GltfPrimitive::base_color_texture`] indexes [`GltfScene::images`]. Those
+//! images are the base-color textures the loaded primitives sample, decoded
+//! to 8-bit RGBA. An image no loaded primitive samples is left out, including
+//! one named only by an external URI. Other texture slots (normal,
+//! metallic-roughness, occlusion, emissive) are not loaded. An external image
+//! URI is an error when a loaded primitive does sample it. Sampler wrap and
+//! filter are not stored. [`crate::gltf_draw::GltfModel`] still uploads its
+//! own GPU textures.
+//!
 //! Colliders, triggers, and spawn points come from the nodes that were loaded.
 //! Node `extras` are preferred: `mq_shape` is `box`, `sphere`, or `capsule`,
 //! and `mq_role` is `collider`, `trigger`, or `spawn`. When `mq_role` is
@@ -87,14 +96,16 @@ use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
 use crate::math::{Aabb, Capsule, Obb, Sphere};
 
-/// A parsed glTF scene: the default scene's nodes and the meshes they use.
+/// A parsed glTF scene: the default scene's nodes, the meshes they use, and
+/// the base-color images those meshes sample.
 ///
 /// Nodes are stored in preorder, parents before children. A document with no
-/// scenes yields empty `nodes` and `meshes`. Meshes that no loaded node
-/// references are left out. Images, skins, and animations are not loaded here.
-/// [`crate::gltf_draw::GltfModel`] decodes embedded images when it draws a `.glb`.
-/// [`Self::colliders`] and [`Self::spawns`] are the markers on those nodes,
-/// in the same preorder. See the module docs for the markup.
+/// scenes yields empty `nodes`, `meshes`, and `images`. Meshes that no loaded
+/// node references are left out, and so are images those meshes do not sample.
+/// [`Self::images`] are decoded RGBA bytes, not GPU textures. Skins and
+/// animations are not loaded. [`Self::colliders`] and [`Self::spawns`] are the
+/// markers on those nodes, in the same preorder. See the module docs for the
+/// markup and for which images are kept.
 ///
 /// # Example
 ///
@@ -107,6 +118,7 @@ use crate::math::{Aabb, Capsule, Obb, Sphere};
 /// .unwrap();
 /// assert_eq!(scene.nodes[0].name.as_deref(), Some("room"));
 /// assert!(scene.meshes.is_empty());
+/// assert!(scene.images.is_empty());
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfScene {
@@ -114,6 +126,12 @@ pub struct GltfScene {
     pub nodes: Vec<GltfNode>,
     /// Meshes referenced by [`Self::nodes`], in the order they are first used.
     pub meshes: Vec<GltfMesh>,
+    /// Base-color images sampled by [`Self::meshes`], in the order they are
+    /// first used.
+    ///
+    /// [`GltfPrimitive::base_color_texture`] indexes this list. It is not the
+    /// texture index in the glTF file.
+    pub images: Vec<GltfImage>,
     /// Colliders and triggers, in node preorder.
     ///
     /// A trigger is a [`GltfCollider`] with [`GltfCollider::trigger`] set.
@@ -198,8 +216,11 @@ pub struct GltfMesh {
 /// `0..positions.len()` so every primitive is indexed. The index count is a
 /// multiple of 3, and every index is in range. Other primitive modes are an
 /// error. `base_color_factor` is the metallic-roughness factor, RGBA,
-/// defaulting to white when the material omits it. Normals and uvs, when
-/// present, have one entry per position.
+/// defaulting to white when the material omits it. `base_color_texture`
+/// indexes [`GltfScene::images`] when that material has a base-color image,
+/// and is [`None`] otherwise. Normals and uvs, when present, have one entry
+/// per position. `uvs` stay `TEXCOORD_0`; the texture index does not select
+/// another UV set.
 ///
 /// # Example
 ///
@@ -213,8 +234,10 @@ pub struct GltfMesh {
 ///     uvs: vec![vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0)],
 ///     indices: vec![0, 1, 2],
 ///     base_color_factor: [1.0, 1.0, 1.0, 1.0],
+///     base_color_texture: None,
 /// };
 /// assert_eq!(primitive.indices.len(), 3);
+/// assert!(primitive.base_color_texture.is_none());
 /// ```
 #[derive(Clone, Debug, PartialEq)]
 pub struct GltfPrimitive {
@@ -228,6 +251,46 @@ pub struct GltfPrimitive {
     pub indices: Vec<u32>,
     /// Metallic-roughness base color factor, linear RGBA.
     pub base_color_factor: [f32; 4],
+    /// Index into [`GltfScene::images`] of the base-color texture.
+    ///
+    /// [`None`] when the material has no base-color image. Two primitives that
+    /// sample one image share this index. See the module docs.
+    pub base_color_texture: Option<usize>,
+}
+
+/// An embedded glTF image, decoded to 8-bit RGBA.
+///
+/// `pixels` is row-major, four bytes per pixel (R, G, B, A). Row 0 is the top
+/// row, which matches glTF's top-left texture origin. The length is
+/// `width * height * 4`. The channels are the values stored in the file: a
+/// base-color image is sRGB, and this type does not convert them to linear.
+/// JPEG has no alpha, so those pixels use alpha 255. There is no
+/// [`crate::texture::Texture2D`] here.
+///
+/// # Example
+///
+/// ```
+/// use macroquad::gltf::GltfScene;
+///
+/// let scene = GltfScene::from_bytes(include_bytes!(
+///     "../examples/assets/triangle.gltf"
+/// ))
+/// .unwrap();
+/// let image = &scene.images[0];
+/// assert_eq!((image.width, image.height), (1, 1));
+/// assert_eq!(image.pixels, [10, 20, 30, 255]);
+/// assert_eq!(scene.meshes[0].primitives[0].base_color_texture, Some(0));
+/// ```
+#[derive(Clone, Debug, PartialEq)]
+pub struct GltfImage {
+    /// glTF image name, or [`None`] when the image has none.
+    pub name: Option<String>,
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Row-major RGBA8 pixels. See the struct docs.
+    pub pixels: Vec<u8>,
 }
 
 /// Shape produced from a glTF collider or trigger.
@@ -413,7 +476,10 @@ impl GltfScene {
     /// is used. No scene means an empty [`GltfScene`]. External buffer files
     /// are an error; see the module docs. A node that appears twice in that
     /// scene, including through a cycle, is an error. Markers are collected
-    /// from the nodes that load; see the module docs.
+    /// from the nodes that load; see the module docs. Base-color images those
+    /// nodes sample are decoded into [`GltfScene::images`]. An external image
+    /// URI, or an image that cannot be decoded, is an error when a loaded
+    /// primitive samples it.
     ///
     /// # Example
     ///
@@ -446,6 +512,7 @@ impl GltfScene {
             return Ok(GltfScene {
                 nodes: Vec::new(),
                 meshes: Vec::new(),
+                images: Vec::new(),
                 colliders: Vec::new(),
                 spawns: Vec::new(),
             });
@@ -454,21 +521,18 @@ impl GltfScene {
         let mut loaded = GltfScene {
             nodes: Vec::new(),
             meshes: Vec::new(),
+            images: Vec::new(),
             colliders: Vec::new(),
             spawns: Vec::new(),
         };
-        let mut mesh_of = HashMap::new();
-        let mut seen_nodes = HashSet::new();
+        let mut state = LoadState {
+            buffers: &buffers,
+            mesh_of: HashMap::new(),
+            image_of: HashMap::new(),
+            seen_nodes: HashSet::new(),
+        };
         for root in scene.nodes() {
-            append_node(
-                &mut loaded,
-                &root,
-                None,
-                Mat4::IDENTITY,
-                &buffers,
-                &mut mesh_of,
-                &mut seen_nodes,
-            )?;
+            append_node(&mut loaded, &root, None, Mat4::IDENTITY, &mut state)?;
         }
         Ok(loaded)
     }
@@ -486,7 +550,9 @@ impl GltfScene {
     /// mesh-local space and move with their node's world matrix. Colliders,
     /// triggers, and spawns, which are stored in world space, are rotated by
     /// the same amount. An [`Aabb`] whose faces stay on the world axes stays
-    /// an [`Aabb`]. Any other rotation of a box becomes an [`Obb`].
+    /// an [`Aabb`]. Any other rotation of a box becomes an [`Obb`]. Images
+    /// have no position, so [`GltfScene::images`] and the primitive texture
+    /// indices are unchanged.
     ///
     /// [`crate::camera::Camera3D`]'s [`Default`] up axis is +Z, not +Y. A
     /// camera aimed at a scene from [`Self::from_bytes`] needs `up: Vec3::Y`,
@@ -628,16 +694,21 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+struct LoadState<'a> {
+    buffers: &'a [Vec<u8>],
+    mesh_of: HashMap<usize, usize>,
+    image_of: HashMap<usize, usize>,
+    seen_nodes: HashSet<usize>,
+}
+
 fn append_node(
     loaded: &mut GltfScene,
     node: &gltf::Node<'_>,
     parent: Option<usize>,
     parent_world: Mat4,
-    buffers: &[Vec<u8>],
-    mesh_of: &mut HashMap<usize, usize>,
-    seen_nodes: &mut HashSet<usize>,
+    state: &mut LoadState<'_>,
 ) -> Result<usize, GltfError> {
-    if !seen_nodes.insert(node.index()) {
+    if !state.seen_nodes.insert(node.index()) {
         return Err(GltfError::new(format!(
             "glTF node {} appears more than once in the scene graph",
             node.index()
@@ -646,7 +717,7 @@ fn append_node(
     let (translation, rotation, scale, local) = local_transform(node);
     let world = parent_world * local;
     let mesh = match node.mesh() {
-        Some(mesh) => Some(mesh_index(loaded, &mesh, buffers, mesh_of)?),
+        Some(mesh) => Some(mesh_index(loaded, &mesh, state)?),
         None => None,
     };
     let index = loaded.nodes.len();
@@ -665,15 +736,7 @@ fn append_node(
     let children: Vec<gltf::Node<'_>> = node.children().collect();
     let mut child_indices = Vec::with_capacity(children.len());
     for child in &children {
-        child_indices.push(append_node(
-            loaded,
-            child,
-            Some(index),
-            world,
-            buffers,
-            mesh_of,
-            seen_nodes,
-        )?);
+        child_indices.push(append_node(loaded, child, Some(index), world, state)?);
     }
     loaded.nodes[index].children = child_indices;
     Ok(index)
@@ -703,19 +766,19 @@ fn local_transform(node: &gltf::Node<'_>) -> (Vec3, Quat, Vec3, Mat4) {
 fn mesh_index(
     loaded: &mut GltfScene,
     mesh: &gltf::Mesh<'_>,
-    buffers: &[Vec<u8>],
-    mesh_of: &mut HashMap<usize, usize>,
+    state: &mut LoadState<'_>,
 ) -> Result<usize, GltfError> {
-    if let Some(index) = mesh_of.get(&mesh.index()) {
+    if let Some(index) = state.mesh_of.get(&mesh.index()) {
         return Ok(*index);
     }
     let mut primitives = Vec::new();
     for (primitive_index, primitive) in mesh.primitives().enumerate() {
         primitives.push(load_primitive(
+            loaded,
             mesh.index(),
             primitive_index,
             &primitive,
-            buffers,
+            state,
         )?);
     }
     let index = loaded.meshes.len();
@@ -723,15 +786,16 @@ fn mesh_index(
         name: mesh.name().map(str::to_owned),
         primitives,
     });
-    mesh_of.insert(mesh.index(), index);
+    state.mesh_of.insert(mesh.index(), index);
     Ok(index)
 }
 
 fn load_primitive(
+    loaded: &mut GltfScene,
     mesh_index: usize,
     primitive_index: usize,
     primitive: &gltf::Primitive<'_>,
-    buffers: &[Vec<u8>],
+    state: &mut LoadState<'_>,
 ) -> Result<GltfPrimitive, GltfError> {
     if primitive.mode() != gltf::mesh::Mode::Triangles {
         return Err(GltfError::new(format!(
@@ -740,6 +804,7 @@ fn load_primitive(
         )));
     }
 
+    let buffers = state.buffers;
     let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice));
     let positions: Vec<Vec3> = reader
         .read_positions()
@@ -800,6 +865,96 @@ fn load_primitive(
             .material()
             .pbr_metallic_roughness()
             .base_color_factor(),
+        base_color_texture: base_color_image(loaded, primitive, state)?,
+    })
+}
+
+fn base_color_image(
+    loaded: &mut GltfScene,
+    primitive: &gltf::Primitive<'_>,
+    state: &mut LoadState<'_>,
+) -> Result<Option<usize>, GltfError> {
+    let Some(info) = primitive
+        .material()
+        .pbr_metallic_roughness()
+        .base_color_texture()
+    else {
+        return Ok(None);
+    };
+    let image = info.texture().source();
+    let gltf_index = image.index();
+    if let Some(index) = state.image_of.get(&gltf_index) {
+        return Ok(Some(*index));
+    }
+    let bytes = image_bytes(&image, state.buffers)?;
+    let decoded = image::load_from_memory(&bytes).map_err(|error| {
+        GltfError::new(format!(
+            "glTF image {gltf_index} could not be decoded: {error}"
+        ))
+    })?;
+    let rgba = decoded.to_rgba8();
+    let index = loaded.images.len();
+    loaded.images.push(GltfImage {
+        name: image.name().map(str::to_owned),
+        width: rgba.width(),
+        height: rgba.height(),
+        pixels: rgba.into_raw(),
+    });
+    state.image_of.insert(gltf_index, index);
+    Ok(Some(index))
+}
+
+fn image_bytes(image: &gltf::Image<'_>, buffers: &[Vec<u8>]) -> Result<Vec<u8>, GltfError> {
+    match image.source() {
+        gltf::image::Source::View { view, .. } => {
+            let buffer_index = view.buffer().index();
+            let Some(buffer) = buffers.get(buffer_index) else {
+                return Err(GltfError::new(format!(
+                    "glTF image {} uses buffer {buffer_index}, which is missing",
+                    image.index()
+                )));
+            };
+            let start = view.offset();
+            let Some(end) = start.checked_add(view.length()) else {
+                return Err(GltfError::new(format!(
+                    "glTF image {} buffer view range overflows",
+                    image.index()
+                )));
+            };
+            buffer
+                .get(start..end)
+                .map(|bytes| bytes.to_vec())
+                .ok_or_else(|| {
+                    GltfError::new(format!(
+                        "glTF image {} buffer view is outside buffer {buffer_index}",
+                        image.index()
+                    ))
+                })
+        }
+        gltf::image::Source::Uri { uri, .. } => decode_image_uri(uri, image.index()),
+    }
+}
+
+fn decode_image_uri(uri: &str, image_index: usize) -> Result<Vec<u8>, GltfError> {
+    let Some(rest) = uri.strip_prefix("data:") else {
+        return Err(GltfError::new(format!(
+            "external glTF image {image_index} is not loaded from a byte slice; embed it in the buffer or as a data URI"
+        )));
+    };
+    let Some((header, payload)) = rest.split_once(',') else {
+        return Err(GltfError::new(format!(
+            "glTF image {image_index} data URI has no payload"
+        )));
+    };
+    if !header.contains("base64") {
+        return Err(GltfError::new(format!(
+            "glTF image {image_index} data URI is not base64"
+        )));
+    }
+    decode_base64(payload).ok_or_else(|| {
+        GltfError::new(format!(
+            "glTF image {image_index} data URI is not valid base64"
+        ))
     })
 }
 
@@ -1449,6 +1604,11 @@ mod tests {
         assert_eq!(triangle.uvs, vec![Vec2::ZERO, Vec2::X, Vec2::Y]);
         assert_eq!(triangle.indices, vec![0, 1, 2]);
         assert_eq!(triangle.base_color_factor, [0.2, 0.4, 0.6, 1.0]);
+        assert_eq!(triangle.base_color_texture, Some(0));
+        assert_eq!(gltf.images.len(), 1);
+        assert_eq!(gltf.images[0].name.as_deref(), Some("pixel"));
+        assert_eq!((gltf.images[0].width, gltf.images[0].height), (1, 1));
+        assert_eq!(gltf.images[0].pixels, [10, 20, 30, 255]);
 
         let bare = &gltf.meshes[0].primitives[1];
         assert_eq!(bare.positions, vec![Vec3::ZERO, Vec3::Z, Vec3::Y]);
@@ -1456,6 +1616,7 @@ mod tests {
         assert!(bare.uvs.is_empty());
         assert_eq!(bare.indices, vec![0, 1, 2]);
         assert_eq!(bare.base_color_factor, [1.0, 0.0, 0.0, 0.5]);
+        assert_eq!(bare.base_color_texture, None);
     }
 
     #[test]
@@ -1463,6 +1624,7 @@ mod tests {
         let empty = GltfScene::from_bytes(br#"{"asset":{"version":"2.0"}}"#).unwrap();
         assert!(empty.nodes.is_empty());
         assert!(empty.meshes.is_empty());
+        assert!(empty.images.is_empty());
         assert!(empty.colliders.is_empty());
         assert!(empty.spawns.is_empty());
 
@@ -1563,6 +1725,8 @@ mod tests {
             scene.meshes[0].primitives[0].base_color_factor,
             [1.0, 1.0, 1.0, 1.0]
         );
+        assert_eq!(scene.meshes[0].primitives[0].base_color_texture, None);
+        assert!(scene.images.is_empty());
         assert_eq!(scene.meshes[0].primitives[0].indices, vec![0, 1, 2]);
 
         let lines = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"mode":1}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":2,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],"bufferViews":[{"buffer":0,"byteLength":24}],"buffers":[{"byteLength":24}]}"#;
@@ -1584,6 +1748,108 @@ mod tests {
         indices[41] = 0;
         let indexed = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"indices":1}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]},{"bufferView":1,"componentType":5123,"count":3,"type":"SCALAR"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":6}],"buffers":[{"byteLength":42}]}"#;
         error_contains(&glb(indexed, &indices), "outside");
+    }
+
+    fn rgba_png(pixels: &[u8]) -> Vec<u8> {
+        use image::ImageEncoder;
+        let mut png = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut png)
+            .write_image(pixels, 1, 1, image::ColorType::Rgba8)
+            .expect("png");
+        png
+    }
+
+    fn base64_encode(bytes: &[u8]) -> String {
+        const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = String::new();
+        let mut index = 0;
+        while index + 3 <= bytes.len() {
+            let triple = ((bytes[index] as u32) << 16)
+                | ((bytes[index + 1] as u32) << 8)
+                | bytes[index + 2] as u32;
+            out.push(TABLE[((triple >> 18) & 63) as usize] as char);
+            out.push(TABLE[((triple >> 12) & 63) as usize] as char);
+            out.push(TABLE[((triple >> 6) & 63) as usize] as char);
+            out.push(TABLE[(triple & 63) as usize] as char);
+            index += 3;
+        }
+        let rest = bytes.len() - index;
+        if rest == 1 {
+            let triple = (bytes[index] as u32) << 16;
+            out.push(TABLE[((triple >> 18) & 63) as usize] as char);
+            out.push(TABLE[((triple >> 12) & 63) as usize] as char);
+            out.push('=');
+            out.push('=');
+        } else if rest == 2 {
+            let triple = ((bytes[index] as u32) << 16) | ((bytes[index + 1] as u32) << 8);
+            out.push(TABLE[((triple >> 18) & 63) as usize] as char);
+            out.push(TABLE[((triple >> 12) & 63) as usize] as char);
+            out.push(TABLE[((triple >> 6) & 63) as usize] as char);
+            out.push('=');
+        }
+        out
+    }
+
+    fn positions_json(extra: &str) -> String {
+        format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],{extra},"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}}],"bufferViews":[{{"buffer":0,"byteLength":36}}],"buffers":[{{"byteLength":36}}]}}"#
+        )
+    }
+
+    #[test]
+    fn base_color_images_are_shared_rgba_bytes() {
+        let png = rgba_png(&[10, 20, 30, 40]);
+        let mut bin = vec![0u8; 36];
+        bin.extend_from_slice(&png);
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"material":0}},{{"attributes":{{"POSITION":0}},"material":0}},{{"attributes":{{"POSITION":0}},"material":1}}]}}],"materials":[{{"pbrMetallicRoughness":{{"baseColorFactor":[0.2,0.4,0.6,1],"baseColorTexture":{{"index":0}}}}}},{{"pbrMetallicRoughness":{{"baseColorFactor":[0,1,0,1]}}}}],"textures":[{{"source":0}}],"images":[{{"name":"dot","mimeType":"image/png","bufferView":1}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}}],"bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":36}},{{"buffer":0,"byteOffset":36,"byteLength":{}}}],"buffers":[{{"byteLength":{}}}]}}"#,
+            png.len(),
+            bin.len()
+        );
+        let scene = GltfScene::from_bytes(&glb(&json, &bin)).unwrap();
+        assert_eq!(scene.images.len(), 1);
+        assert_eq!(scene.images[0].name.as_deref(), Some("dot"));
+        assert_eq!((scene.images[0].width, scene.images[0].height), (1, 1));
+        assert_eq!(scene.images[0].pixels, [10, 20, 30, 40]);
+        assert_eq!(scene.meshes[0].primitives[0].base_color_texture, Some(0));
+        assert_eq!(scene.meshes[0].primitives[1].base_color_texture, Some(0));
+        assert_eq!(scene.meshes[0].primitives[2].base_color_texture, None);
+        assert_eq!(
+            scene.meshes[0].primitives[0].base_color_factor,
+            [0.2, 0.4, 0.6, 1.0]
+        );
+
+        let uri = format!("data:image/png;base64,{}", base64_encode(&png));
+        let data_uri = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0}}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}},"material":0}}]}}],"materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}}}}}}],"textures":[{{"source":0}}],"images":[{{"uri":"{uri}"}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}}],"bufferViews":[{{"buffer":0,"byteLength":36}}],"buffers":[{{"byteLength":36}}]}}"#
+        );
+        let from_uri = GltfScene::from_bytes(&glb(&data_uri, &[0; 36])).unwrap();
+        assert_eq!(from_uri.images[0].pixels, [10, 20, 30, 40]);
+        assert_eq!(from_uri.images[0].name, None);
+    }
+
+    #[test]
+    fn external_and_undecodable_images_fail_only_when_sampled() {
+        let external = positions_json(
+            r#""meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],"textures":[{"source":0}],"images":[{"uri":"pixel.png"}]"#,
+        );
+        error_contains(&glb(&external, &[0; 36]), "external");
+
+        let unused = positions_json(
+            r#""meshes":[{"primitives":[{"attributes":{"POSITION":0}}]},{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],"textures":[{"source":0}],"images":[{"uri":"pixel.png"}]"#,
+        );
+        let scene = GltfScene::from_bytes(&glb(&unused, &[0; 36])).unwrap();
+        assert!(scene.images.is_empty());
+        assert_eq!(scene.meshes.len(), 1);
+        assert_eq!(scene.meshes[0].primitives[0].base_color_texture, None);
+
+        let mut bin = vec![0u8; 36];
+        bin.extend_from_slice(b"nope");
+        let corrupt = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],"textures":[{"source":0}],"images":[{"mimeType":"image/png","bufferView":1}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":4}],"buffers":[{"byteLength":40}]}"#;
+        error_contains(&glb(corrupt, &bin), "could not be decoded");
+
+        let past_end = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"mesh":0}],"meshes":[{"primitives":[{"attributes":{"POSITION":0},"material":0}]}],"materials":[{"pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],"textures":[{"source":0}],"images":[{"mimeType":"image/png","bufferView":1}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[0,0,0]}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":8}],"buffers":[{"byteLength":36}]}"#;
+        error_contains(&glb(past_end, &[0; 36]), "outside");
     }
 
     #[test]

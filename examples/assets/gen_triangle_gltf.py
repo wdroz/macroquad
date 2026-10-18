@@ -5,6 +5,8 @@ The scene is a parent, a scaled mesh child, a rotated child, a second node
 sharing that mesh, a matrix node, a box-collider empty, a spawn empty, and one
 node left out of the scene. The collider is marked with node extras
 (`mq_shape`, `mq_role`). The spawn is marked with a `_spawn` name suffix.
+The first material samples a 1x1 PNG (RGBA 10, 20, 30, 255) named "pixel",
+embedded in the buffer. The second material has no texture.
 Regenerate with this script. Tests load the committed bytes and do not run
 Python.
 """
@@ -13,6 +15,7 @@ import base64
 import json
 import math
 import struct
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -22,6 +25,23 @@ def f32s(*values):
     return struct.pack("<" + "f" * len(values), *values)
 
 
+def png_chunk(tag, data):
+    crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+    return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+
+def png_rgba(width, height, rgba):
+    """One uncompressed 8-bit RGBA PNG. Row 0 is the top row."""
+    row = b"\x00" + bytes(rgba) * width
+    ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", ihdr)
+        + png_chunk(b"IDAT", zlib.compress(row * height, 9))
+        + png_chunk(b"IEND", b"")
+    )
+
+
 def build_buffer():
     positions = f32s(0, 0, 0, 1, 0, 0, 0, 1, 0)
     normals = f32s(0, 0, 1, 0, 0, 1, 0, 0, 1)
@@ -29,10 +49,12 @@ def build_buffer():
     indices = struct.pack("<HHH", 0, 1, 2)
     positions2 = f32s(0, 0, 0, 0, 0, 1, 0, 1, 0)
     # Pad the 6-byte index view so the next float view stays 4-byte aligned.
-    return positions + normals + uvs + indices + b"\x00\x00" + positions2
+    geometry = positions + normals + uvs + indices + b"\x00\x00" + positions2
+    image = png_rgba(1, 1, (10, 20, 30, 255))
+    return geometry + image, len(geometry), len(image)
 
 
-def document(buffer_uri, byte_length):
+def document(buffer_uri, byte_length, image_offset, image_length):
     half = math.sqrt(2.0) / 2.0
     # Column-major translation by (4, 5, 6).
     marker = [
@@ -74,8 +96,22 @@ def document(buffer_uri, byte_length):
             }
         ],
         "materials": [
-            {"name": "blue", "pbrMetallicRoughness": {"baseColorFactor": [0.2, 0.4, 0.6, 1]}},
+            {
+                "name": "blue",
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": [0.2, 0.4, 0.6, 1],
+                    "baseColorTexture": {"index": 0},
+                },
+            },
             {"name": "red", "pbrMetallicRoughness": {"baseColorFactor": [1, 0, 0, 0.5]}},
+        ],
+        "textures": [{"name": "pixel", "source": 0}],
+        "images": [
+            {
+                "name": "pixel",
+                "mimeType": "image/png",
+                "bufferView": 5,
+            }
         ],
         "accessors": [
             {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3", "min": [0, 0, 0], "max": [1, 1, 0]},
@@ -90,6 +126,7 @@ def document(buffer_uri, byte_length):
             {"buffer": 0, "byteOffset": 72, "byteLength": 24},
             {"buffer": 0, "byteOffset": 96, "byteLength": 6},
             {"buffer": 0, "byteOffset": 104, "byteLength": 36},
+            {"buffer": 0, "byteOffset": image_offset, "byteLength": image_length},
         ],
         "buffers": [{"byteLength": byte_length, **({"uri": buffer_uri} if buffer_uri else {})}],
     }
@@ -103,13 +140,15 @@ def pad(data, alignment, byte):
 
 
 def main():
-    blob = build_buffer()
+    blob, image_offset, image_length = build_buffer()
     encoded = base64.b64encode(blob).decode("ascii")
     uri = "data:application/octet-stream;base64," + encoded
-    gltf = document(uri, len(blob))
+    gltf = document(uri, len(blob), image_offset, image_length)
     (ROOT / "triangle.gltf").write_text(json.dumps(gltf, indent=2) + "\n", encoding="utf-8")
 
-    glb_json = json.dumps(document(None, len(blob)), separators=(",", ":")).encode("utf-8")
+    glb_json = json.dumps(
+        document(None, len(blob), image_offset, image_length), separators=(",", ":")
+    ).encode("utf-8")
     json_chunk = pad(glb_json, 4, 0x20)
     bin_chunk = pad(blob, 4, 0x00)
     total = 12 + 8 + len(json_chunk) + 8 + len(bin_chunk)

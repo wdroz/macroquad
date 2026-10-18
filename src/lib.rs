@@ -26,7 +26,8 @@
 //! or sphere against a static box, and [`math::slide_sphere`] keeps the motion
 //! along a face. They do not assume an up axis. The `gltf` feature parses a
 //! Blender glTF 2.0 export without a window and can draw a `.glb` once one is
-//! running. `GltfScene::with_up_axis` and `GltfModel::with_up_axis` share one
+//! running. A parsed scene stores the base-color images it samples as RGBA
+//! bytes. `GltfScene::with_up_axis` and `GltfModel::with_up_axis` share one
 //! caller-chosen up axis; `Vec3::Y` leaves a file unchanged. Guides:
 //! `docs/3d-guide.md` and `docs/blender-to-macroquad.md`.
 //!

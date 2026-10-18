@@ -142,7 +142,10 @@
           0.4,
           0.6,
           1
-        ]
+        ],
+        "baseColorTexture": {
+          "index": 0
+        }
       }
     },
     {
@@ -155,6 +158,19 @@
           0.5
         ]
       }
+    }
+  ],
+  "textures": [
+    {
+      "name": "pixel",
+      "source": 0
+    }
+  ],
+  "images": [
+    {
+      "name": "pixel",
+      "mimeType": "image/png",
+      "bufferView": 5
     }
   ],
   "accessors": [
@@ -234,12 +250,17 @@
       "buffer": 0,
       "byteOffset": 104,
       "byteLength": 36
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 140,
+      "byteLength": 70
     }
   ],
   "buffers": [
     {
-      "byteLength": 140,
-      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAACAPwAAAAA="
+      "byteLength": 210,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAABAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAgD8AAAAAAACAPwAAAACJUE5HDQoaCgAAAA1JSERSAAAAAQAAAAEIBgAAAB8VxIkAAAANSURBVHjaY+ASkfsPAAGkATxM1RynAAAAAElFTkSuQmCC"
     }
   ]
 }

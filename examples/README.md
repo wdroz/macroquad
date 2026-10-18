@@ -70,7 +70,7 @@ The chase camera sets `up: Vec3::Y`. `Camera3D`'s default up is +Z, and this fil
 
 | Path | Role |
 | --- | --- |
-| `assets/triangle.gltf`, `assets/triangle.glb` | Hierarchy, box collider, and spawn used by the loader tests. Regenerate with `assets/gen_triangle_gltf.py`. |
+| `assets/triangle.gltf`, `assets/triangle.glb` | Hierarchy, box collider, spawn, and a 1×1 base-color image used by the loader tests. Regenerate with `assets/gen_triangle_gltf.py`. |
 | `assets/textured_quad.glb` | Checkerboard drawn by `gltf_textured`. Regenerate with `assets/gen_textured_quad.py`. |
 | `assets/marble_maze.glb` | Level for `marble_maze`. Regenerate with Blender and `assets/gen_marble_maze.py`. |
 
