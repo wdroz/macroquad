@@ -142,7 +142,24 @@ if let Some(texture) = scene.meshes[0].primitives[0].base_color_texture {
 
 `model.draw()` submits every chunk with the current camera and the default material. The base-color factor is already in the vertex colors, at 8-bit precision. The exact factor, alpha mode, cutoff, double-sided flag, emissive factor, metallic, roughness, transmission, and unlit flag are on `part.surface`. The built-in draw does not light, sort transparency, skin, animate, or refract. Iterate `model.parts` when you need that.
 
+`part.emissive_texture` retains the optional embedded emissive map. In a lighting shader, decode both color images from sRGB to linear RGB, multiply the emissive image by `part.surface.emissive`, and add it to the lit base color. When there is no emissive map, use a white texture. An emissive factor is not a flat glow when the material also supplies an emissive map; ignoring the map washes out dark details. Base-color and emissive images share the mesh's one UV channel: the loader applies texture-coordinate selection and `KHR_texture_transform`, and returns an error if the two resulting mappings differ.
+
+For glass, submit all opaque geometry first, then blended geometry back to front, using `depth_test: Comparison::LessOrEqual` and `depth_write: false`. The fork honors these independently on OpenGL/WebGL, including a workaround for miniquad 0.4.11's depth-state coupling. Setting a custom material texture also snapshots it for each queued draw, so one reusable shader can render several objects with different emissive maps. `cargo run --example material_depth_check` verifies occlusion, depth masks, depth clearing and queued samplers with GPU pixel assertions.
+
 `GltfModel::from_bytes_with_limits` splits a mesh into 16-bit chunks. The default limit matches `Conf`'s default draw-call capacities (10_000 vertices, 5_000 indices). A larger chunk needs both a higher `GltfMeshLimits` and higher `draw_call_vertex_capacity` / `draw_call_index_capacity`.
+
+The draw-call capacities are upper limits, not a GPU reservation for every material group. Each streaming vertex/index buffer starts at the submitted chunk's actual size and grows geometrically only when a later draw needs more space, bounded by the configured limit. Buffers retain their high-water capacity for reuse; changing the limits releases them for lazy recreation. Clearing queued draws also discards their queued CPU geometry. This keeps large permitted chunks affordable in scenes that contain hundreds of small meshes.
+
+For a browser or a scene with many large images, opt into a texture budget:
+
+```rust
+let model = GltfModel::from_bytes_with_options(&bytes, GltfLoadOptions {
+    max_texture_size: Some(512),
+    ..Default::default()
+})?;
+```
+
+Both image dimensions stay at or below this limit; a 4096×2048 image becomes 512×256. Smaller images stay unchanged, and the aspect ratio, UVs, and sampler settings are preserved. This applies to embedded base-color and emissive images and their mipmaps. `None` is the default, preserving the original full-resolution behavior of the existing loading methods. The cap bounds retained GPU image memory, but the decoder still briefly holds the original image in CPU memory. It does not edit or re-encode the source GLB. Supply `mesh_limits` in the same options value when changing mesh chunk sizes as well.
 
 Node `world` is the glTF hierarchy: local translation, rotation, and scale composed with the parent. Mesh positions stay in mesh-local space on `GltfScene`. `GltfModel` has already multiplied them by `world`.
 

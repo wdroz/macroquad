@@ -26,6 +26,14 @@ matrices, and splits large index buffers into triangle-safe 16-bit chunks.
 Call `from_bytes` after macroquad starts, because it creates GPU textures. `model.draw()`
 submits the textured meshes with the current camera and material.
 
+For memory-constrained scenes, `GltfModel::from_bytes_with_options` accepts
+`GltfLoadOptions { max_texture_size: Some(512), ..Default::default() }`.
+This bounds both edges of each uploaded base-color/emissive image, preserves
+aspect ratio, and never enlarges an image. The default is `None`: existing
+`from_bytes` and `from_bytes_with_limits` calls retain full resolution. The
+cap reduces GPU texture and mipmap memory; the original image is still decoded
+temporarily in CPU memory. Source GLBs are never modified.
+
 ```sh
 cargo run --features gltf --example gltf_textured
 cargo run --features gltf --example gltf_textured -- path/to/model.glb

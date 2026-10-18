@@ -1,7 +1,7 @@
 //! Textured GLB conversion for [`crate::gltf::GltfScene`].
 //!
 //! Call [`GltfModel::from_bytes`] inside a running macroquad application: it
-//! uploads embedded PNG, JPEG and WebP base-color images. Geometry, transforms,
+//! uploads embedded PNG, JPEG and WebP base-color and emissive images. Geometry, transforms,
 //! normals and indices come from the fork's CPU scene loader. This module keeps
 //! material metadata so applications can use their own lighting shader. It does
 //! not implement PBR, skins, animation, external image URIs, or morph targets.
@@ -111,6 +111,7 @@ pub enum GltfAlphaMode {
 ///         indices: vec![0],
 ///         texture: None,
 ///     },
+///     emissive_texture: None,
 ///     surface: GltfSurface {
 ///         name: None,
 ///         base_color: [1.0, 1.0, 1.0, 1.0],
@@ -138,6 +139,11 @@ pub struct GltfDrawMesh {
     /// hold the base-color factor at byte precision. `texture` is the
     /// base-color image, or [`None`].
     pub mesh: Mesh,
+    /// Optional emissive image in sRGB. A custom shader must decode its RGB to
+    /// linear space and multiply by [`GltfSurface::emissive`]. Missing images
+    /// mean white, so the factor alone emits light. The mesh UVs apply to both
+    /// images; loading rejects different base-color/emissive UV mappings.
+    pub emissive_texture: Option<Texture2D>,
     /// Material values for this chunk. See [`GltfSurface`].
     pub surface: GltfSurface,
     /// Index into the CPU scene's node list.
@@ -203,6 +209,29 @@ impl Default for GltfMeshLimits {
     }
 }
 
+/// Mesh batching and optional GPU texture resolution for a [`GltfModel`] load.
+///
+/// The default preserves every source image at its original resolution. Set
+/// `max_texture_size` to bound both dimensions of uploaded base-color and
+/// emissive textures, preserving aspect ratio and never enlarging an image.
+/// This does not modify the GLB or reduce the decoder's temporary source image.
+///
+/// ```
+/// use macroquad::gltf_draw::GltfLoadOptions;
+/// let options = GltfLoadOptions {
+///     max_texture_size: Some(512),
+///     ..Default::default()
+/// };
+/// assert_eq!(GltfLoadOptions::default().max_texture_size, None);
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GltfLoadOptions {
+    /// Maximum vertices and indices per draw chunk.
+    pub mesh_limits: GltfMeshLimits,
+    /// Optional maximum image edge in pixels. Zero is rejected.
+    pub max_texture_size: Option<u16>,
+}
+
 /// Counts from a [`GltfModel`] load.
 ///
 /// # Example
@@ -230,7 +259,7 @@ pub struct GltfModelStats {
     pub draw_calls: usize,
     /// Triangles across every chunk.
     pub triangles: usize,
-    /// Embedded base-color images uploaded to the GPU.
+    /// Embedded base-color and emissive texture objects uploaded to the GPU.
     pub textures: usize,
 }
 
@@ -292,7 +321,7 @@ impl GltfModel {
     /// }
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        Self::from_bytes_with_limits(bytes, GltfMeshLimits::default())
+        Self::from_bytes_with_options(bytes, GltfLoadOptions::default())
     }
 
     /// [`GltfModel::from_bytes`] with an explicit chunk size.
@@ -321,7 +350,40 @@ impl GltfModel {
     /// }
     /// ```
     pub fn from_bytes_with_limits(bytes: &[u8], limits: GltfMeshLimits) -> Result<Self, String> {
+        Self::from_bytes_with_options(
+            bytes,
+            GltfLoadOptions {
+                mesh_limits: limits,
+                ..Default::default()
+            },
+        )
+    }
+
+    /// Load an embedded GLB with explicit mesh and texture budgets.
+    ///
+    /// Images exceeding `max_texture_size` are resized with a triangle filter
+    /// before upload. Their UVs and sampler settings remain unchanged. A cap
+    /// limits retained GPU image memory, including mipmaps; decoding still
+    /// temporarily uses the original image resolution. Source files are never
+    /// rewritten. [`Self::from_bytes`] and [`Self::from_bytes_with_limits`]
+    /// retain their original full-resolution behavior.
+    ///
+    /// ```no_run
+    /// use macroquad::gltf_draw::{GltfLoadOptions, GltfModel};
+    /// # async fn example() -> Result<(), String> {
+    /// let bytes = macroquad::file::load_file("scene.glb").await.unwrap();
+    /// let model = GltfModel::from_bytes_with_options(&bytes, GltfLoadOptions {
+    ///     max_texture_size: Some(512),
+    ///     ..Default::default()
+    /// })?;
+    /// # Ok(()) }
+    /// ```
+    pub fn from_bytes_with_options(bytes: &[u8], options: GltfLoadOptions) -> Result<Self, String> {
+        let limits = options.mesh_limits;
         validate_limits(limits)?;
+        if options.max_texture_size == Some(0) {
+            return Err("max_texture_size must be greater than zero".into());
+        }
         let (scene, document, binary) = prepare_glb(bytes)?;
         // The CPU loader visits nodes in preorder and meshes in first-use order.
         // Recreate that same source-mesh mapping, rather than assuming indices
@@ -390,105 +452,28 @@ impl GltfModel {
             {
                 let material = source.material();
                 let pbr = material.pbr_metallic_roughness();
-                let texture = if let Some(info) = pbr.base_color_texture() {
-                    let texture = info.texture();
-                    let key = texture.index();
-                    if !textures.contains_key(&key) {
-                        let image = texture.source();
-                        let data = match image.source() {
-                            gltf::image::Source::View { view, .. } => {
-                                if view.buffer().index() != 0
-                                    || !matches!(view.buffer().source(), gltf::buffer::Source::Bin)
-                                {
-                                    return Err(
-                                        "image buffers must use the GLB binary chunk".into()
-                                    );
-                                }
-                                let end = view
-                                    .offset()
-                                    .checked_add(view.length())
-                                    .ok_or("image buffer range overflow")?;
-                                binary
-                                    .get(view.offset()..end)
-                                    .ok_or("image buffer is out of bounds")?
-                            }
-                            gltf::image::Source::Uri { .. } => {
-                                return Err(
-                                    "external image URIs are unsupported; embed images in the GLB"
-                                        .into(),
-                                )
-                            }
-                        };
-                        let rgba = image::load_from_memory(data)
-                            .map_err(|e| format!("image {}: {e}", image.index()))?
-                            .to_rgba8();
-                        let (mut min_filter, mut mipmap_filter) =
-                            minification_filters(texture.sampler().min_filter());
-                        let version = crate::get_quad_context().info().gl_version_string;
-                        let restricted_npot = (!rgba.width().is_power_of_two()
-                            || !rgba.height().is_power_of_two())
-                            && restricted_npot_backend(&version);
-                        // Preserve original pixels. Legacy WebGL 1 / GLES 2
-                        // cannot repeat or mipmap non-power-of-two textures.
-                        if restricted_npot {
-                            min_filter = FilterMode::Linear;
-                            mipmap_filter = MipmapFilterMode::None;
-                        }
-                        let has_mipmaps = mipmap_filter != MipmapFilterMode::None;
-                        let width = u16::try_from(rgba.width())
-                            .map_err(|_| "texture width exceeds 65535")?;
-                        let height = u16::try_from(rgba.height())
-                            .map_err(|_| "texture height exceeds 65535")?;
-                        let gpu = if has_mipmaps {
-                            Texture2D::from_rgba8_mipmapped(width, height, rgba.as_raw())
-                        } else {
-                            Texture2D::from_rgba8(width, height, rgba.as_raw())
-                        };
-                        let nearest = matches!(
-                            texture.sampler().mag_filter(),
-                            Some(gltf::texture::MagFilter::Nearest)
-                        );
-                        let mag_filter = if nearest {
-                            FilterMode::Nearest
-                        } else {
-                            FilterMode::Linear
-                        };
-                        fn wrap(mode: gltf::texture::WrappingMode) -> TextureWrap {
-                            match mode {
-                                gltf::texture::WrappingMode::ClampToEdge => TextureWrap::Clamp,
-                                gltf::texture::WrappingMode::MirroredRepeat => TextureWrap::Mirror,
-                                gltf::texture::WrappingMode::Repeat => TextureWrap::Repeat,
-                            }
-                        }
-                        unsafe {
-                            let gl = crate::window::get_internal_gl();
-                            gl.quad_context.texture_set_min_filter(
-                                gpu.raw_miniquad_id(),
-                                min_filter,
-                                mipmap_filter,
-                            );
-                            gl.quad_context
-                                .texture_set_mag_filter(gpu.raw_miniquad_id(), mag_filter);
-                            gl.quad_context.texture_set_wrap(
-                                gpu.raw_miniquad_id(),
-                                if restricted_npot {
-                                    TextureWrap::Clamp
-                                } else {
-                                    wrap(texture.sampler().wrap_s())
-                                },
-                                if restricted_npot {
-                                    TextureWrap::Clamp
-                                } else {
-                                    wrap(texture.sampler().wrap_t())
-                                },
-                            );
-                        }
-                        textures.insert(key, gpu);
-                    }
-                    textures.get(&key).cloned()
-                } else {
-                    None
-                };
+                let texture = pbr
+                    .base_color_texture()
+                    .map(|info| {
+                        load_texture(
+                            info.texture(),
+                            binary.as_ref(),
+                            &mut textures,
+                            options.max_texture_size,
+                        )
+                    })
+                    .transpose()?;
+                let emissive_texture = material
+                    .emissive_texture()
+                    .map(|info| {
+                        load_texture(
+                            info.texture(),
+                            binary.as_ref(),
+                            &mut textures,
+                            options.max_texture_size,
+                        )
+                    })
+                    .transpose()?;
                 let strength = material
                     .extension_value("KHR_materials_emissive_strength")
                     .and_then(|v| v.get("emissiveStrength"))
@@ -522,6 +507,15 @@ impl GltfModel {
                 if let Some(info) = pbr.base_color_texture() {
                     apply_material_uvs(&mut vertices, &source, binary.as_ref(), &info)?;
                 }
+                if let Some(info) = material.emissive_texture() {
+                    let mut emissive_vertices = vertices.clone();
+                    apply_material_uvs(&mut emissive_vertices, &source, binary.as_ref(), &info)?;
+                    if pbr.base_color_texture().is_some() {
+                        validate_shared_uvs(&vertices, &emissive_vertices)?;
+                    } else {
+                        vertices = emissive_vertices;
+                    }
+                }
                 let indices = winding_indices(&primitive.indices, node.world);
                 for (vertices, indices) in split_triangles(&vertices, &indices, limits)? {
                     let mut min = Vec3::splat(f32::INFINITY);
@@ -538,6 +532,7 @@ impl GltfModel {
                             indices,
                             texture: texture.clone(),
                         },
+                        emissive_texture: emissive_texture.clone(),
                         surface: surface.clone(),
                         node: node_index,
                         name: name.clone(),
@@ -609,6 +604,7 @@ impl GltfModel {
     ///             indices: vec![0],
     ///             texture: None,
     ///         },
+    ///         emissive_texture: None,
     ///         surface: GltfSurface {
     ///             name: None,
     ///             base_color: [1.0, 1.0, 1.0, 1.0],
@@ -733,6 +729,124 @@ fn rotated_bounds(rotation: Quat, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
     (new_min, new_max)
 }
 
+fn load_texture(
+    texture: gltf::Texture<'_>,
+    binary: &[u8],
+    textures: &mut HashMap<usize, Texture2D>,
+    max_texture_size: Option<u16>,
+) -> Result<Texture2D, String> {
+    let key = texture.index();
+    if !textures.contains_key(&key) {
+        let image = texture.source();
+        let data = match image.source() {
+            gltf::image::Source::View { view, .. } => {
+                if view.buffer().index() != 0
+                    || !matches!(view.buffer().source(), gltf::buffer::Source::Bin)
+                {
+                    return Err("image buffers must use the GLB binary chunk".into());
+                }
+                let end = view
+                    .offset()
+                    .checked_add(view.length())
+                    .ok_or("image buffer range overflow")?;
+                binary
+                    .get(view.offset()..end)
+                    .ok_or("image buffer is out of bounds")?
+            }
+            gltf::image::Source::Uri { .. } => {
+                return Err("external image URIs are unsupported; embed images in the GLB".into())
+            }
+        };
+        let decoded =
+            image::load_from_memory(data).map_err(|e| format!("image {}: {e}", image.index()))?;
+        let (width, height) =
+            texture_dimensions(decoded.width(), decoded.height(), max_texture_size);
+        let decoded = if (width, height) != (decoded.width(), decoded.height()) {
+            decoded.resize_exact(width, height, image::imageops::FilterType::Triangle)
+        } else {
+            decoded
+        };
+        // Consume the decoded image so an RGBA source does not need another
+        // full-size copy while uploading its pixels.
+        let rgba = decoded.into_rgba8();
+        let (mut min_filter, mut mipmap_filter) =
+            minification_filters(texture.sampler().min_filter());
+        let version = crate::get_quad_context().info().gl_version_string;
+        let restricted_npot = (!rgba.width().is_power_of_two() || !rgba.height().is_power_of_two())
+            && restricted_npot_backend(&version);
+        // Legacy WebGL 1 / GLES 2 cannot repeat or mipmap non-power-of-two
+        // textures, including dimensions produced by the optional size cap.
+        if restricted_npot {
+            min_filter = FilterMode::Linear;
+            mipmap_filter = MipmapFilterMode::None;
+        }
+        let has_mipmaps = mipmap_filter != MipmapFilterMode::None;
+        let width = u16::try_from(rgba.width()).map_err(|_| "texture width exceeds 65535")?;
+        let height = u16::try_from(rgba.height()).map_err(|_| "texture height exceeds 65535")?;
+        let gpu = if has_mipmaps {
+            Texture2D::from_rgba8_mipmapped(width, height, rgba.as_raw())
+        } else {
+            Texture2D::from_rgba8(width, height, rgba.as_raw())
+        };
+        let nearest = matches!(
+            texture.sampler().mag_filter(),
+            Some(gltf::texture::MagFilter::Nearest)
+        );
+        let mag_filter = if nearest {
+            FilterMode::Nearest
+        } else {
+            FilterMode::Linear
+        };
+        fn wrap(mode: gltf::texture::WrappingMode) -> TextureWrap {
+            match mode {
+                gltf::texture::WrappingMode::ClampToEdge => TextureWrap::Clamp,
+                gltf::texture::WrappingMode::MirroredRepeat => TextureWrap::Mirror,
+                gltf::texture::WrappingMode::Repeat => TextureWrap::Repeat,
+            }
+        }
+        unsafe {
+            let gl = crate::window::get_internal_gl();
+            gl.quad_context.texture_set_min_filter(
+                gpu.raw_miniquad_id(),
+                min_filter,
+                mipmap_filter,
+            );
+            gl.quad_context
+                .texture_set_mag_filter(gpu.raw_miniquad_id(), mag_filter);
+            gl.quad_context.texture_set_wrap(
+                gpu.raw_miniquad_id(),
+                if restricted_npot {
+                    TextureWrap::Clamp
+                } else {
+                    wrap(texture.sampler().wrap_s())
+                },
+                if restricted_npot {
+                    TextureWrap::Clamp
+                } else {
+                    wrap(texture.sampler().wrap_t())
+                },
+            );
+        }
+        textures.insert(key, gpu);
+    }
+    Ok(textures.get(&key).unwrap().clone())
+}
+
+fn texture_dimensions(width: u32, height: u32, maximum: Option<u16>) -> (u32, u32) {
+    let Some(maximum) = maximum else {
+        return (width, height);
+    };
+    let longest = width.max(height);
+    let maximum = maximum as u64;
+    if longest as u64 <= maximum {
+        return (width, height);
+    }
+    (
+        ((width as u64 * maximum) / longest as u64).max(1) as u32,
+        ((height as u64 * maximum) / longest as u64).max(1) as u32,
+    )
+}
+
 fn minification_filters(
     filter: Option<gltf::texture::MinFilter>,
 ) -> (FilterMode, MipmapFilterMode) {
@@ -757,20 +871,14 @@ fn prepare_glb(bytes: &[u8]) -> Result<(GltfScene, gltf::Document, Cow<'_, [u8]>
     let mut json: serde_json::Value =
         serde_json::from_slice(&glb.json).map_err(|e| e.to_string())?;
     normalize_webp(&mut json)?;
-    let json_bytes = serde_json::to_vec(&json).map_err(|e| e.to_string())?;
     // Validate normally after resolving the extensions implemented by this
     // adapter. Unrecognized required extensions are retained and still fail.
-    let document = gltf::Gltf::from_slice(&json_bytes)
-        .map_err(|e| e.to_string())?
-        .document;
-    let normalized = gltf::binary::Glb {
-        header: glb.header,
-        json: Cow::Owned(json_bytes),
-        bin: Some(Cow::Borrowed(binary.as_ref())),
-    }
-    .to_vec()
-    .map_err(|e| e.to_string())?;
-    let scene = GltfScene::from_bytes(&normalized).map_err(|e| e.to_string())?;
+    let root = serde_json::from_value(json).map_err(|e| e.to_string())?;
+    let document = gltf::Document::from_json(root).map_err(|e| e.to_string())?;
+    // Reuse the validated JSON and borrowed BIN chunk. Rebuilding a normalized
+    // GLB and reparsing it used to duplicate the largest allocation three times.
+    let scene = GltfScene::from_document(&document, Some(binary.as_ref()), false)
+        .map_err(|e| e.to_string())?;
     Ok((scene, document, binary))
 }
 
@@ -909,6 +1017,13 @@ fn apply_material_uvs(
     Ok(())
 }
 
+fn validate_shared_uvs(base: &[Vertex], emissive: &[Vertex]) -> Result<(), String> {
+    if base.iter().zip(emissive).any(|(a, b)| a.uv != b.uv) {
+        return Err("base-color and emissive textures need matching UV mappings (macroquad Mesh has one UV channel)".into());
+    }
+    Ok(())
+}
+
 fn winding_indices(indices: &[u32], world: Mat4) -> Cow<'_, [u32]> {
     if world.determinant() < 0.0 {
         let mut reversed = indices.to_vec();
@@ -983,6 +1098,34 @@ mod tests {
     use crate::color::WHITE;
 
     #[test]
+    fn optional_texture_cap_preserves_aspect_and_never_upscales() {
+        assert_eq!(texture_dimensions(4096, 2048, Some(512)), (512, 256));
+        assert_eq!(texture_dimensions(1080, 1920, Some(1024)), (576, 1024));
+        assert_eq!(texture_dimensions(6000, 2000, Some(1024)), (1024, 341));
+        assert_eq!(texture_dimensions(128, 64, Some(512)), (128, 64));
+        assert_eq!(texture_dimensions(512, 512, Some(512)), (512, 512));
+        assert_eq!(texture_dimensions(4096, 2048, None), (4096, 2048));
+        assert_eq!(texture_dimensions(1, u32::MAX, Some(512)), (1, 512));
+        assert_eq!(
+            texture_dimensions(u32::MAX, u32::MAX, Some(65535)),
+            (65535, 65535)
+        );
+        assert_eq!(GltfLoadOptions::default().max_texture_size, None);
+    }
+
+    #[test]
+    fn zero_texture_cap_is_rejected_before_decoding_or_gpu_use() {
+        let result = GltfModel::from_bytes_with_options(
+            &[],
+            GltfLoadOptions {
+                max_texture_size: Some(0),
+                ..Default::default()
+            },
+        );
+        assert!(matches!(result, Err(error) if error.contains("greater than zero")));
+    }
+
+    #[test]
     fn gltf_minification_keeps_texel_and_mipmap_filters_independent() {
         use gltf::texture::MinFilter as F;
         assert_eq!(
@@ -1040,6 +1183,26 @@ mod tests {
     }
 
     #[test]
+    fn normalized_material_document_keeps_the_original_binary_borrowed() {
+        let bytes = fixture_with_json(|json| {
+            json["materials"][0]["extensions"] = serde_json::json!({"KHR_materials_unlit":{}});
+            json["extensionsUsed"] = serde_json::json!(["KHR_materials_unlit"]);
+            json["extensionsRequired"] = json["extensionsUsed"].clone();
+        });
+        let source = gltf::binary::Glb::from_slice(&bytes).unwrap();
+        let (_, _, binary) = prepare_glb(&bytes).unwrap();
+        assert!(matches!(binary, Cow::Borrowed(_)));
+        assert_eq!(binary.as_ptr(), source.bin.as_ref().unwrap().as_ptr());
+        assert_eq!(binary.len(), source.bin.as_ref().unwrap().len());
+
+        let unsupported = fixture_with_json(|json| {
+            json["extensionsUsed"] = serde_json::json!(["UNSUPPORTED_required_extension"]);
+            json["extensionsRequired"] = json["extensionsUsed"].clone();
+        });
+        assert!(prepare_glb(&unsupported).is_err());
+    }
+
+    #[test]
     fn selected_uv_set_and_required_texture_transform_are_applied() {
         let bytes = fixture_with_json(|json| {
             let attributes = &mut json["meshes"][0]["primitives"][0]["attributes"];
@@ -1065,6 +1228,45 @@ mod tests {
             .unwrap();
         apply_material_uvs(&mut vertices, &primitive, binary.as_ref(), &info).unwrap();
         assert!((vertices[0].uv - Vec2::new(-2.5, 0.25)).length() < 0.00001);
+    }
+
+    #[test]
+    fn emissive_map_keeps_its_image_and_requires_compatible_mesh_uvs() {
+        let bytes = fixture_with_json(|json| {
+            json["materials"][0]["emissiveTexture"] = serde_json::json!({"index": 0});
+            json["materials"][0]["emissiveFactor"] = serde_json::json!([0.1, 0.2, 0.3]);
+        });
+        let (scene, document, binary) = prepare_glb(&bytes).unwrap();
+        let primitive = document
+            .meshes()
+            .next()
+            .unwrap()
+            .primitives()
+            .next()
+            .unwrap();
+        let material = primitive.material();
+        let base = material
+            .pbr_metallic_roughness()
+            .base_color_texture()
+            .unwrap();
+        let emissive = material.emissive_texture().unwrap();
+        assert_eq!(emissive.texture().source().index(), 0);
+        assert_eq!(material.emissive_factor(), [0.1, 0.2, 0.3]);
+        let mut base_vertices = world_vertices(&scene.meshes[0].primitives[0], Mat4::IDENTITY);
+        let mut emissive_vertices = base_vertices.clone();
+        apply_material_uvs(&mut base_vertices, &primitive, binary.as_ref(), &base).unwrap();
+        apply_material_uvs(
+            &mut emissive_vertices,
+            &primitive,
+            binary.as_ref(),
+            &emissive,
+        )
+        .unwrap();
+        validate_shared_uvs(&base_vertices, &emissive_vertices).unwrap();
+        emissive_vertices[0].uv += Vec2::X;
+        assert!(validate_shared_uvs(&base_vertices, &emissive_vertices)
+            .unwrap_err()
+            .contains("matching UV"));
     }
 
     #[test]
@@ -1112,6 +1314,14 @@ mod tests {
             prepare_glb(include_bytes!("../examples/assets/textured_quad.glb")).unwrap();
         assert_eq!(scene.nodes.len(), 1);
         assert_eq!(scene.meshes[0].primitives[0].indices, [0, 1, 2, 0, 2, 3]);
+        // GPU construction must not retain full-size CPU images in addition
+        // to the bounded textures it decodes and uploads below.
+        assert!(scene.images.is_empty());
+        assert_eq!(scene.meshes[0].primitives[0].base_color_texture, None);
+        let cpu =
+            GltfScene::from_bytes(include_bytes!("../examples/assets/textured_quad.glb")).unwrap();
+        assert_eq!(cpu.images.len(), 1);
+        assert_eq!(cpu.meshes[0].primitives[0].base_color_texture, Some(0));
         let image = document.images().next().unwrap();
         let gltf::image::Source::View { view, .. } = image.source() else {
             panic!("embedded image expected");
@@ -1302,6 +1512,7 @@ mod tests {
                 indices,
                 texture: None,
             },
+            emissive_texture: None,
             surface: sample_surface(),
             node: 1,
             name: name.into(),

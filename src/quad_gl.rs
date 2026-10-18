@@ -34,6 +34,7 @@ struct DrawCall {
     draw_mode: DrawMode,
     pipeline: GlPipeline,
     uniforms: Option<Vec<u8>>,
+    textures: BTreeMap<String, MiniquadTexture>,
     render_pass: Option<RenderPass>,
     capture: bool,
 }
@@ -59,6 +60,7 @@ impl DrawCall {
             draw_mode,
             pipeline,
             uniforms,
+            textures: BTreeMap::new(),
             render_pass,
             capture: false,
         }
@@ -286,6 +288,8 @@ struct Uniform {
 #[derive(Clone)]
 struct PipelineExt {
     pipeline: miniquad::Pipeline,
+    depth_test: Comparison,
+    depth_write: bool,
     wants_screen_texture: bool,
     uniforms: Vec<Uniform>,
     uniforms_data: Vec<u8>,
@@ -523,6 +527,8 @@ impl PipelinesStorage {
 
         self.pipelines[id] = Some(PipelineExt {
             pipeline,
+            depth_test: params.depth_test,
+            depth_write: params.depth_write,
             wants_screen_texture,
             uniforms,
             uniforms_data: vec![0; max_offset],
@@ -567,6 +573,38 @@ pub struct QuadGl {
 
     batch_vertex_buffer: Vec<Vertex>,
     batch_index_buffer: Vec<u16>,
+}
+
+// A new slot starts at its actual geometry size. Reused slots grow
+// geometrically, never past the configured draw-call limit, and never shrink
+// between frames. Large mesh limits therefore do not penalize tiny meshes.
+fn stream_buffer_capacity(current: usize, required: usize, maximum: usize) -> usize {
+    debug_assert!(required <= maximum);
+    if required <= current {
+        current
+    } else {
+        required.max(current.saturating_mul(2)).min(maximum)
+    }
+}
+
+fn grow_stream_buffer<T>(
+    ctx: &mut dyn miniquad::RenderingBackend,
+    buffer: &mut BufferId,
+    buffer_type: BufferType,
+    required: usize,
+    maximum: usize,
+) {
+    let current = ctx.buffer_size(*buffer) / std::mem::size_of::<T>();
+    let capacity = stream_buffer_capacity(current, required, maximum);
+    if capacity > current {
+        let previous = *buffer;
+        *buffer = ctx.new_buffer(
+            buffer_type,
+            BufferUsage::Stream,
+            BufferSource::empty::<T>(capacity),
+        );
+        ctx.delete_buffer(previous);
+    }
 }
 
 impl QuadGl {
@@ -665,6 +703,10 @@ impl QuadGl {
     /// Reset only draw calls state
     pub fn clear_draw_calls(&mut self) {
         self.draw_calls_count = 0;
+        // Discard the geometry belonging to the cancelled calls too. Repeated
+        // clears before a flush must not keep appending unreachable vertices.
+        self.batch_vertex_buffer.clear();
+        self.batch_index_buffer.clear();
     }
 
     /// Reset internal state to known default
@@ -673,22 +715,30 @@ impl QuadGl {
         self.state.texture = None;
         self.state.model_stack = vec![glam::Mat4::IDENTITY];
 
-        self.draw_calls_count = 0;
+        self.clear_draw_calls();
     }
 
     pub fn draw(&mut self, ctx: &mut dyn miniquad::RenderingBackend, projection: glam::Mat4) {
         let white_texture = self.white_texture;
 
-        for _ in 0..self.draw_calls.len() - self.draw_calls_bindings.len() {
+        // Only allocate slots actually submitted, at their current size. A
+        // scene with hundreds of small material groups must not reserve the
+        // configured maximum vertex/index capacity hundreds of times.
+        for dc in self
+            .draw_calls
+            .iter()
+            .take(self.draw_calls_count)
+            .skip(self.draw_calls_bindings.len())
+        {
             let vertex_buffer = ctx.new_buffer(
                 BufferType::VertexBuffer,
                 BufferUsage::Stream,
-                BufferSource::empty::<Vertex>(self.max_vertices),
+                BufferSource::empty::<Vertex>(dc.vertices_count.max(1)),
             );
             let index_buffer = ctx.new_buffer(
                 BufferType::IndexBuffer,
                 BufferUsage::Stream,
-                BufferSource::empty::<u16>(self.max_indices),
+                BufferSource::empty::<u16>(dc.indices_count.max(1)),
             );
             let bindings = Bindings {
                 vertex_buffers: vec![vertex_buffer],
@@ -698,16 +748,31 @@ impl QuadGl {
 
             self.draw_calls_bindings.push(bindings);
         }
-        assert_eq!(self.draw_calls_bindings.len(), self.draw_calls.len());
+        debug_assert!(self.draw_calls_bindings.len() >= self.draw_calls_count);
 
         let (screen_width, screen_height) = miniquad::window::screen_size();
         let time = (miniquad::date::now() - self.start_time) as f32;
         let time = glam::vec4(time, time.sin(), time.cos(), 0.);
+        let gl_depth_workaround = ctx.info().backend == Backend::OpenGl;
 
         for (dc, bindings) in self.draw_calls[0..self.draw_calls_count]
             .iter_mut()
             .zip(self.draw_calls_bindings.iter_mut())
         {
+            grow_stream_buffer::<Vertex>(
+                ctx,
+                &mut bindings.vertex_buffers[0],
+                BufferType::VertexBuffer,
+                dc.vertices_count,
+                self.max_vertices,
+            );
+            grow_stream_buffer::<u16>(
+                ctx,
+                &mut bindings.index_buffer,
+                BufferType::IndexBuffer,
+                dc.indices_count,
+                self.max_indices,
+            );
             let pipeline = self.pipelines.get_quad_pipeline_mut(dc.pipeline);
 
             let (width, height) = if let Some(render_pass) = dc.render_pass {
@@ -754,12 +819,24 @@ impl QuadGl {
                 .resize(2 + pipeline.textures.len(), white_texture);
 
             for (pos, name) in pipeline.textures.iter().enumerate() {
-                if let Some(texture) = pipeline.textures_data.get(name).copied() {
-                    bindings.images[2 + pos] = texture;
-                }
+                bindings.images[2 + pos] = dc.textures.get(name).copied().unwrap_or(white_texture);
             }
 
             ctx.apply_pipeline(&pipeline.pipeline);
+            // miniquad 0.4.11's GL backend uses depth_write to enable the
+            // depth test and never sets the write mask. Honor the independent
+            // PipelineParams here, especially for depth-tested transparent 3D.
+            if gl_depth_workaround {
+                unsafe {
+                    if pipeline.depth_write || pipeline.depth_test != Comparison::Always {
+                        gl::glEnable(gl::GL_DEPTH_TEST);
+                        gl::glDepthFunc(pipeline.depth_test.into());
+                    } else {
+                        gl::glDisable(gl::GL_DEPTH_TEST);
+                    }
+                    gl::glDepthMask(pipeline.depth_write as u8);
+                }
+            }
             if let Some((x, y, w, h)) = dc.viewport {
                 ctx.apply_viewport(x, y, w, h);
             } else {
@@ -785,6 +862,11 @@ impl QuadGl {
                 pipeline.uniforms_data.len(),
             );
             ctx.draw(0, dc.indices_count as i32, 1);
+            // Leave miniquad's expected default mask intact for clears and
+            // direct backend users between macroquad batches.
+            if gl_depth_workaround {
+                unsafe { gl::glDepthMask(1) };
+            }
             ctx.end_render_pass();
 
             if dc.capture {
@@ -929,6 +1011,11 @@ impl QuadGl {
             }
             self.draw_calls[self.draw_calls_count].texture = self.state.texture;
             self.draw_calls[self.draw_calls_count].uniforms = uniforms;
+            self.draw_calls[self.draw_calls_count].textures = self
+                .pipelines
+                .get_quad_pipeline_mut(pip)
+                .textures_data
+                .clone();
             self.draw_calls[self.draw_calls_count].vertices_count = 0;
             self.draw_calls[self.draw_calls_count].indices_count = 0;
             self.draw_calls[self.draw_calls_count].clip = self.state.clip;
@@ -980,6 +1067,7 @@ impl QuadGl {
     }
 
     pub fn set_texture(&mut self, pipeline: GlPipeline, name: &str, texture: Texture2D) {
+        self.state.break_batching = true;
         let pipeline = self.pipelines.get_quad_pipeline_mut(pipeline);
         pipeline
             .textures
@@ -1006,33 +1094,53 @@ impl QuadGl {
     ) {
         self.max_vertices = max_vertices;
         self.max_indices = max_indices;
-        self.draw_calls_count = 0;
+        self.clear_draw_calls();
+        // This explicit, infrequent reset is also used between large scenes.
+        // Release old CPU high-water allocations so the next asset load can
+        // reuse that memory; ordinary frame clears retain capacity as usual.
+        self.batch_vertex_buffer.shrink_to_fit();
+        self.batch_index_buffer.shrink_to_fit();
 
         for draw_call in &mut self.draw_calls {
             draw_call.indices_start = 0;
             draw_call.vertices_start = 0;
         }
-        for binding in &mut self.draw_calls_bindings {
+        // Capacity changes discard the old buffers. Recreate only the slots
+        // needed by the next draw, using their geometry size at that point.
+        for binding in self.draw_calls_bindings.drain(..) {
             ctx.delete_buffer(binding.index_buffer);
             for vertex_buffer in &binding.vertex_buffers {
                 ctx.delete_buffer(*vertex_buffer);
             }
-            let vertex_buffer = ctx.new_buffer(
-                BufferType::VertexBuffer,
-                BufferUsage::Stream,
-                BufferSource::empty::<Vertex>(self.max_vertices),
-            );
-            let index_buffer = ctx.new_buffer(
-                BufferType::IndexBuffer,
-                BufferUsage::Stream,
-                BufferSource::empty::<u16>(self.max_indices),
-            );
-            *binding = Bindings {
-                vertex_buffers: vec![vertex_buffer],
-                index_buffer,
-                images: vec![self.white_texture, self.white_texture],
-            };
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_buffer_tests {
+    use super::*;
+
+    #[test]
+    fn small_draws_do_not_reserve_the_configured_mesh_limit() {
+        let vertices = stream_buffer_capacity(0, 24, 20_001);
+        let indices = stream_buffer_capacity(0, 36, 60_001);
+        assert_eq!((vertices, indices), (24, 36));
+        let actual = 398 * (vertices * std::mem::size_of::<Vertex>() + indices * 2);
+        let worst_case = 398 * (20_001 * std::mem::size_of::<Vertex>() + 60_001 * 2);
+        assert!(actual < worst_case / 100);
+    }
+
+    #[test]
+    fn reused_slots_grow_geometrically_without_exceeding_the_limit() {
+        assert_eq!(stream_buffer_capacity(24, 25, 100), 48);
+        assert_eq!(stream_buffer_capacity(48, 25, 100), 48);
+        assert_eq!(stream_buffer_capacity(48, 99, 100), 99);
+        assert_eq!(stream_buffer_capacity(99, 100, 100), 100);
+        assert_eq!(stream_buffer_capacity(100, 1, 100), 100);
+        assert_eq!(
+            stream_buffer_capacity(usize::MAX / 2 + 1, usize::MAX, usize::MAX),
+            usize::MAX
+        );
     }
 }
 

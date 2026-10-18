@@ -947,16 +947,15 @@ pub mod conf {
         /// update_on will tell macroquad when to proceed with the event loop.
         pub update_on: Option<UpdateTrigger>,
         pub default_filter_mode: crate::FilterMode,
-        /// Macroquad performs automatic and static batching for each
-        /// draw_* call. For each draw call, it pre-allocate a huge cpu/gpu
-        /// buffer to add vertices to. When it exceeds the buffer, it allocates the
-        /// new one, marking the new draw call.
+        /// Maximum vertices and indices in one automatically batched draw.
+        /// Streaming GPU buffers start at the submitted geometry size and grow
+        /// as needed up to these limits. CPU batches reuse their allocated space.
         ///
         /// Some examples when altering those values migh be convinient:
         /// - for huge 3d models that do not fit into a single draw call, increasing
         ///     the buffer size might be easier than splitting the model.
-        /// - when each draw_* call got its own material,
-        ///     buffer size might be reduced to save some memory
+        /// - smaller limits can bound individual uploads, at the cost of more
+        ///     draw calls when geometry must be split.
         pub draw_call_vertex_capacity: usize,
         pub draw_call_index_capacity: usize,
     }

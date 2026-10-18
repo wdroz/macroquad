@@ -32,4 +32,25 @@ for (const name of ['audio_init', 'js_create_object', 'ws_connect', 'ws_is_conne
   assert.equal(typeof context.importObject.env[name], 'function', `${name} is registered`);
 }
 assert.equal(context.importObject.env.ws_is_connected(), 0);
-console.log('PASS: strict-mode bundle evaluation and all three plugin registrations');
+
+// Transparent 3D drawing disables only depth writes, then restores the mask.
+// Missing GL imports become noisy runtime stubs, so exercise this binding here.
+const depthMasks = [];
+context.gl = { depthMask: value => depthMasks.push(value) };
+context.importObject.env.glDepthMask(0);
+context.importObject.env.glDepthMask(1);
+assert.deepEqual(depthMasks, [false, true]);
+console.log('PASS: strict-mode bundle, plugin registrations, and WebGL depth-mask forwarding');
+
+// Optionally audit an actual final build without instantiating it or opening a
+// browser. Keep this before add_missing_functions_stabs can hide omissions.
+if (process.argv[2]) {
+  const module = new WebAssembly.Module(fs.readFileSync(process.argv[2]));
+  const glImports = WebAssembly.Module.imports(module).filter(
+    item => item.module === 'env' && item.kind === 'function' && item.name.startsWith('gl'),
+  );
+  assert(glImports.length > 0, 'Expected a macroquad WASM module with GL imports');
+  const missing = glImports.filter(item => typeof context.importObject.env[item.name] !== 'function');
+  assert.deepEqual(missing, [], `Missing WebGL bindings: ${missing.map(item => item.name).join(', ')}`);
+  console.log(`PASS: all ${glImports.length} GL imports in ${process.argv[2]} have real bundle bindings`);
+}

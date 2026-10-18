@@ -17,7 +17,10 @@ cargo run --example picking_ray
 cargo run --example frustum_cull
 cargo run --example debug_draw
 cargo run --features gltf --example gltf_textured
+cargo run --example material_depth_check
 ```
+
+`material_depth_check` is an OpenGL/WebGL shader regression that exits after checking rendered pixels. It verifies that opaque surfaces hide glass, transparent surfaces keep depth testing without writing depth, subsequent clears reset depth, and changing a custom texture preserves the bindings of earlier queued draws. It also exercises adaptive streaming-buffer growth, reuse with smaller geometry, and recreation after the configured capacity changes.
 
 ## `aabb_overlap`
 

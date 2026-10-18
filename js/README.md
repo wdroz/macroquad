@@ -26,3 +26,14 @@ without a browser or graphics context:
 ```sh
 node js/mq_js_bundle.test.cjs
 ```
+
+The fork also requires `glDepthMask` to forward to `gl.depthMask(Boolean(value))`
+so transparent meshes can depth-test without writing depth. Preserve that
+binding when regenerating the bundle. The test checks both disabling and
+enabling writes. Pass a final WASM build to verify that every imported GL
+function has a real binding, before the loader can replace omissions with
+logging stubs:
+
+```sh
+node js/mq_js_bundle.test.cjs path/to/game.wasm
+```

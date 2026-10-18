@@ -90,7 +90,10 @@
 //! node is rotated. An empty node with a role but no `mq_shape` and no mesh
 //! is not a collider.
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+};
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
@@ -504,11 +507,40 @@ impl GltfScene {
     /// }
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<GltfScene, GltfError> {
-        let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| {
-            GltfError::new(format!("glTF document could not be parsed: {error}"))
-        })?;
-        let buffers = load_buffers(&gltf)?;
-        let Some(scene) = gltf.default_scene().or_else(|| gltf.scenes().next()) else {
+        if bytes.starts_with(b"glTF") {
+            // gltf::Gltf::from_slice owns (and copies) the complete binary
+            // chunk. Parse/validate its JSON separately so large embedded
+            // meshes and images remain borrowed from the caller's bytes.
+            let glb = gltf::binary::Glb::from_slice(bytes).map_err(|error| {
+                GltfError::new(format!("glTF document could not be parsed: {error}"))
+            })?;
+            let gltf = gltf::Gltf::from_slice(&glb.json).map_err(|error| {
+                GltfError::new(format!("glTF document could not be parsed: {error}"))
+            })?;
+            Self::from_document(&gltf.document, glb.bin.as_deref(), true)
+        } else {
+            let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| {
+                GltfError::new(format!("glTF document could not be parsed: {error}"))
+            })?;
+            Self::from_document(&gltf.document, None, true)
+        }
+    }
+
+    /// Shared CPU path for an already validated document. Embedded binary data
+    /// is borrowed only during construction; the returned scene owns its mesh
+    /// arrays and remains independent of the source bytes. Data URIs retain
+    /// their existing owned decoding behavior. GPU conversion skips CPU image
+    /// retention and decodes each texture on demand with its resolution budget.
+    pub(crate) fn from_document(
+        document: &gltf::Document,
+        binary: Option<&[u8]>,
+        decode_images: bool,
+    ) -> Result<GltfScene, GltfError> {
+        let buffers = load_buffers(document, binary)?;
+        let Some(scene) = document
+            .default_scene()
+            .or_else(|| document.scenes().next())
+        else {
             return Ok(GltfScene {
                 nodes: Vec::new(),
                 meshes: Vec::new(),
@@ -527,6 +559,7 @@ impl GltfScene {
         };
         let mut state = LoadState {
             buffers: &buffers,
+            decode_images,
             mesh_of: HashMap::new(),
             image_of: HashMap::new(),
             seen_nodes: HashSet::new(),
@@ -606,18 +639,20 @@ impl GltfScene {
     }
 }
 
-fn load_buffers(gltf: &gltf::Gltf) -> Result<Vec<Vec<u8>>, GltfError> {
-    let mut blob = gltf.blob.clone();
+fn load_buffers<'a>(
+    document: &gltf::Document,
+    mut binary: Option<&'a [u8]>,
+) -> Result<Vec<Cow<'a, [u8]>>, GltfError> {
     let mut buffers = Vec::new();
-    for buffer in gltf.buffers() {
-        let mut data = match buffer.source() {
-            gltf::buffer::Source::Bin => blob.take().ok_or_else(|| {
+    for buffer in document.buffers() {
+        let data = match buffer.source() {
+            gltf::buffer::Source::Bin => Cow::Borrowed(binary.take().ok_or_else(|| {
                 GltfError::new(format!(
                     "glTF buffer {} needs the binary chunk, which is missing",
                     buffer.index()
                 ))
-            })?,
-            gltf::buffer::Source::Uri(uri) => decode_data_uri(uri)?,
+            })?),
+            gltf::buffer::Source::Uri(uri) => Cow::Owned(decode_data_uri(uri)?),
         };
         if data.len() < buffer.length() {
             return Err(GltfError::new(format!(
@@ -629,7 +664,13 @@ fn load_buffers(gltf: &gltf::Gltf) -> Result<Vec<Vec<u8>>, GltfError> {
         }
         // GLB pads the binary chunk to 4 bytes. Accessors must not read that
         // padding, so the slice stops at the declared length.
-        data.truncate(buffer.length());
+        let data = match data {
+            Cow::Borrowed(data) => Cow::Borrowed(&data[..buffer.length()]),
+            Cow::Owned(mut data) => {
+                data.truncate(buffer.length());
+                Cow::Owned(data)
+            }
+        };
         buffers.push(data);
     }
     Ok(buffers)
@@ -695,7 +736,8 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
 }
 
 struct LoadState<'a> {
-    buffers: &'a [Vec<u8>],
+    buffers: &'a [Cow<'a, [u8]>],
+    decode_images: bool,
     mesh_of: HashMap<usize, usize>,
     image_of: HashMap<usize, usize>,
     seen_nodes: HashSet<usize>,
@@ -805,7 +847,7 @@ fn load_primitive(
     }
 
     let buffers = state.buffers;
-    let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(Vec::as_slice));
+    let reader = primitive.reader(|buffer| buffers.get(buffer.index()).map(|data| data.as_ref()));
     let positions: Vec<Vec3> = reader
         .read_positions()
         .ok_or_else(|| {
@@ -865,7 +907,11 @@ fn load_primitive(
             .material()
             .pbr_metallic_roughness()
             .base_color_factor(),
-        base_color_texture: base_color_image(loaded, primitive, state)?,
+        base_color_texture: if state.decode_images {
+            base_color_image(loaded, primitive, state)?
+        } else {
+            None
+        },
     })
 }
 
@@ -892,7 +938,7 @@ fn base_color_image(
             "glTF image {gltf_index} could not be decoded: {error}"
         ))
     })?;
-    let rgba = decoded.to_rgba8();
+    let rgba = decoded.into_rgba8();
     let index = loaded.images.len();
     loaded.images.push(GltfImage {
         name: image.name().map(str::to_owned),
@@ -904,7 +950,10 @@ fn base_color_image(
     Ok(Some(index))
 }
 
-fn image_bytes(image: &gltf::Image<'_>, buffers: &[Vec<u8>]) -> Result<Vec<u8>, GltfError> {
+fn image_bytes<'a>(
+    image: &gltf::Image<'_>,
+    buffers: &'a [Cow<'_, [u8]>],
+) -> Result<Cow<'a, [u8]>, GltfError> {
     match image.source() {
         gltf::image::Source::View { view, .. } => {
             let buffer_index = view.buffer().index();
@@ -921,17 +970,16 @@ fn image_bytes(image: &gltf::Image<'_>, buffers: &[Vec<u8>]) -> Result<Vec<u8>, 
                     image.index()
                 )));
             };
-            buffer
-                .get(start..end)
-                .map(|bytes| bytes.to_vec())
-                .ok_or_else(|| {
-                    GltfError::new(format!(
-                        "glTF image {} buffer view is outside buffer {buffer_index}",
-                        image.index()
-                    ))
-                })
+            buffer.get(start..end).map(Cow::Borrowed).ok_or_else(|| {
+                GltfError::new(format!(
+                    "glTF image {} buffer view is outside buffer {buffer_index}",
+                    image.index()
+                ))
+            })
         }
-        gltf::image::Source::Uri { uri, .. } => decode_image_uri(uri, image.index()),
+        gltf::image::Source::Uri { uri, .. } => {
+            decode_image_uri(uri, image.index()).map(Cow::Owned)
+        }
     }
 }
 
@@ -1497,6 +1545,37 @@ impl<'a> JsonCursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_buffers_borrow_source_and_data_uris_stay_owned() {
+        let parsed = gltf::Gltf::from_slice(
+            br#"{
+            "asset":{"version":"2.0"},
+            "buffers":[
+                {"byteLength":3},
+                {"uri":"data:application/octet-stream;base64,BAUGBw==","byteLength":2}
+            ]
+        }"#,
+        )
+        .unwrap();
+        let binary = [1, 2, 3, 0];
+        let buffers = load_buffers(&parsed.document, Some(&binary)).unwrap();
+        assert!(matches!(&buffers[0], Cow::Borrowed(bytes) if bytes.as_ptr() == binary.as_ptr()));
+        assert_eq!(buffers[0].as_ref(), &[1, 2, 3]);
+        assert!(matches!(&buffers[1], Cow::Owned(_)));
+        assert_eq!(buffers[1].as_ref(), &[4, 5]);
+        assert!(load_buffers(&parsed.document, None).is_err());
+        assert!(load_buffers(&parsed.document, Some(&binary[..2])).is_err());
+    }
+
+    #[test]
+    fn validated_borrowed_document_matches_public_glb_loader() {
+        let bytes = include_bytes!("../examples/assets/triangle.glb");
+        let glb = gltf::binary::Glb::from_slice(bytes).unwrap();
+        let parsed = gltf::Gltf::from_slice(&glb.json).unwrap();
+        let scene = GltfScene::from_document(&parsed.document, glb.bin.as_deref(), true).unwrap();
+        assert_eq!(scene, GltfScene::from_bytes(bytes).unwrap());
+    }
     use glam::vec3;
 
     fn assert_vec3_close(left: Vec3, right: Vec3) {
