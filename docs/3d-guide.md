@@ -38,8 +38,8 @@ Queued draws keep their mesh alive even if the caller drops its last handle.
 Unused buffers are collected on a renderer flush or the next retained upload;
 ordinary frame completion flushes automatically. Cancelled draws release their
 queued references too. Live retained buffers survive streaming-capacity resets.
-See `examples/retained_mesh.rs` for a complete example. Resource diagnostics
-remain a separate roadmap item.
+See `examples/retained_mesh.rs` for a complete example, and resource diagnostics
+below for allocation estimates and upload counters.
 
 With `--features gltf`, `RetainedGltfModel::from_model(model, false)` consumes
 an existing `GltfModel`, uploads each chunk once and releases its CPU vertices
@@ -89,6 +89,64 @@ pipeline or uniforms. Include any parent model stack in the helper's transform.
 The default shader is unlit and does not cull. These are shared geometry draws,
 not hardware instancing; no frame-time improvement is implied by buffer reuse.
 See `examples/gltf_retained.rs`.
+
+## Resource diagnostics
+
+Resource reports are explicit snapshots; they do not change rendering or
+collect unused resources. `GltfModelStats` keeps its original loader counts.
+With `gltf`, call `model.resource_report()` or combine several CPU and retained
+models with `GltfResourceReport::collect`. A combined report counts shared CPU
+allocations, retained buffers and textures once, including resources referenced
+by an optional retained CPU model. Separate reports must not be summed when
+their models share resources.
+
+```rust,no_run
+use macroquad::gltf_draw::{
+    set_gltf_resource_diagnostics_enabled, GltfModel, GltfResourceReport,
+    RetainedGltfModel,
+};
+# fn example(bytes: &[u8]) -> Result<(), String> {
+// Opt in before loading to preserve source image identifiers and dimensions.
+set_gltf_resource_diagnostics_enabled(true);
+let cpu = GltfModel::from_bytes(bytes)?;
+let retained = RetainedGltfModel::from_model(cpu, false).map_err(|e| e.to_string())?;
+let instance = retained.clone();
+let report = GltfResourceReport::collect(&[], &[&retained, &instance]);
+println!("{report:#?}");
+# Ok(()) }
+```
+
+Source-image tracking is disabled by default and stores only small metadata
+with weak texture references. Enabling it after loading cannot reconstruct
+earlier source dimensions; disabling clears the metadata. Uploaded dimensions
+and texture estimates remain available without source tracking. A capped
+texture's source dimensions refer to the input GLB, before upload resizing;
+offline-prepared GLBs naturally report their prepared dimensions. Textures
+replaced by application code have no glTF source metadata.
+
+`macroquad::telemetry::renderer_diagnostics()` reports current CPU batch lengths
+and capacities, renderer-owned retained buffers, streaming GPU buffer capacity,
+queued draws and optional cumulative counters. Enable counters with
+`set_renderer_diagnostics_enabled(true)` and reset the measurement interval with
+`reset_renderer_diagnostics()`. Read after `next_frame().await` to include that
+frame's flushed draws, then reset before the next interval. A snapshot taken
+before a flush distinguishes queued work from backend draws already submitted.
+Enabling counters does not reconstruct earlier uploads.
+
+CPU byte counts describe vertex/index elements and their allocation capacities,
+excluding model metadata and allocator overhead. GPU buffer estimates use
+buffer payload/capacity; texture estimates sum allocated pixel levels including
+mipmaps. The model report covers its referenced base-color/emissive textures,
+not all application textures. The renderer report covers geometry storage and
+uploads; it does not include framebuffer, shader, video, font or driver memory.
+Raw backend changes can bypass texture metadata. None of these estimates is
+total process memory, physical GPU residency, a decoder peak, or a frame-time
+benchmark. Model and renderer buffer totals overlap: do not add them together.
+
+Dropped handles can remain in the renderer report until a flush collects them;
+pending draws deliberately keep their resources alive. Compare snapshots at
+the same frame boundary when testing repeated load/drop cycles. Diagnostics do
+not add a new resource-retirement operation.
 
 ## Loading and materials
 

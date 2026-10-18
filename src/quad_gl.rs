@@ -210,7 +210,11 @@ impl MagicSnapshotter {
         }
     }
 
-    fn snapshot(&mut self, ctx: &mut dyn RenderingBackend, camera_render_pass: Option<RenderPass>) {
+    fn snapshot(
+        &mut self,
+        ctx: &mut dyn RenderingBackend,
+        camera_render_pass: Option<RenderPass>,
+    ) -> bool {
         if let Some(camera_render_pass) = camera_render_pass {
             let texture = ctx.render_pass_texture(camera_render_pass);
             if self.pass.is_none() {
@@ -265,6 +269,7 @@ impl MagicSnapshotter {
             let texture = self.screen_texture.unwrap();
             Texture2D::unmanaged(texture).grab_screen();
         }
+        camera_render_pass.is_some()
     }
 }
 
@@ -589,6 +594,8 @@ pub struct QuadGl {
     // Scratch bindings hold no ownership of the GPU buffers. Every retained
     // draw replaces their IDs, and immediate draws use separate stream slots.
     retained_bindings: Option<Bindings>,
+    diagnostics_enabled: bool,
+    diagnostics_counters: telemetry::RendererCounters,
     #[cfg(test)]
     retained_buffer_uploads: usize,
     #[cfg(test)]
@@ -666,6 +673,8 @@ impl QuadGl {
             draw_calls_count: 0,
             retained_meshes: Vec::new(),
             retained_bindings: None,
+            diagnostics_enabled: false,
+            diagnostics_counters: telemetry::RendererCounters::default(),
             #[cfg(test)]
             retained_buffer_uploads: 0,
             #[cfg(test)]
@@ -845,7 +854,12 @@ impl QuadGl {
             };
 
             if pipeline.wants_screen_texture {
-                self.state.snapshotter.snapshot(ctx, dc.render_pass);
+                let submitted = self.state.snapshotter.snapshot(ctx, dc.render_pass);
+                if submitted && self.diagnostics_enabled {
+                    let counters = &mut self.diagnostics_counters;
+                    counters.draw_calls = counters.draw_calls.saturating_add(1);
+                    counters.auxiliary_draw_calls = counters.auxiliary_draw_calls.saturating_add(1);
+                }
             }
 
             if let Some(render_pass) = dc.render_pass {
@@ -872,6 +886,17 @@ impl QuadGl {
                 #[cfg(test)]
                 {
                     self.stream_buffer_updates += 2;
+                }
+                if self.diagnostics_enabled {
+                    let counters = &mut self.diagnostics_counters;
+                    counters.streaming_buffer_uploads =
+                        counters.streaming_buffer_uploads.saturating_add(2);
+                    counters.streaming_buffer_upload_bytes =
+                        counters.streaming_buffer_upload_bytes.saturating_add(
+                            (dc.vertices_count * std::mem::size_of::<Vertex>()
+                                + dc.indices_count * std::mem::size_of::<u16>())
+                                as u64,
+                        );
                 }
             }
 
@@ -929,6 +954,15 @@ impl QuadGl {
                 pipeline.uniforms_data.len(),
             );
             ctx.draw(0, dc.indices_count as i32, 1);
+            if self.diagnostics_enabled {
+                let counters = &mut self.diagnostics_counters;
+                counters.draw_calls = counters.draw_calls.saturating_add(1);
+                if dc.retained.is_some() {
+                    counters.retained_draw_calls = counters.retained_draw_calls.saturating_add(1);
+                } else {
+                    counters.immediate_draw_calls = counters.immediate_draw_calls.saturating_add(1);
+                }
+            }
             // Leave miniquad's expected default mask intact for clears and
             // direct backend users between macroquad batches.
             if gl_depth_workaround {
@@ -938,6 +972,11 @@ impl QuadGl {
 
             if dc.capture {
                 telemetry::track_drawcall(&pipeline.pipeline, bindings, dc.indices_count);
+                if self.diagnostics_enabled {
+                    let counters = &mut self.diagnostics_counters;
+                    counters.draw_calls = counters.draw_calls.saturating_add(1);
+                    counters.auxiliary_draw_calls = counters.auxiliary_draw_calls.saturating_add(1);
+                }
             }
 
             dc.vertices_count = 0;
@@ -1055,6 +1094,14 @@ impl QuadGl {
         #[cfg(test)]
         {
             self.retained_buffer_uploads += 2;
+        }
+        if self.diagnostics_enabled {
+            let counters = &mut self.diagnostics_counters;
+            counters.retained_buffer_uploads = counters.retained_buffer_uploads.saturating_add(2);
+            counters.retained_buffer_upload_bytes =
+                counters.retained_buffer_upload_bytes.saturating_add(
+                    (std::mem::size_of_val(vertices) + std::mem::size_of_val(indices)) as u64,
+                );
         }
         self.retained_meshes.push(buffers.clone());
         buffers
@@ -1286,6 +1333,49 @@ impl QuadGl {
             for vertex_buffer in &binding.vertex_buffers {
                 ctx.delete_buffer(*vertex_buffer);
             }
+        }
+    }
+
+    pub(crate) fn set_diagnostics_enabled(&mut self, enabled: bool) {
+        self.diagnostics_enabled = enabled;
+    }
+
+    pub(crate) fn reset_diagnostics(&mut self) {
+        self.diagnostics_counters = telemetry::RendererCounters::default();
+    }
+
+    pub(crate) fn diagnostics(
+        &self,
+        ctx: &mut dyn RenderingBackend,
+    ) -> telemetry::RendererDiagnostics {
+        telemetry::RendererDiagnostics {
+            counters_enabled: self.diagnostics_enabled,
+            counters: self.diagnostics_counters,
+            queued_draw_calls: self.draw_calls_count,
+            cpu_vertex_bytes: self.batch_vertex_buffer.len() * std::mem::size_of::<Vertex>(),
+            cpu_vertex_capacity_bytes: self.batch_vertex_buffer.capacity()
+                * std::mem::size_of::<Vertex>(),
+            cpu_index_bytes: self.batch_index_buffer.len() * std::mem::size_of::<u16>(),
+            cpu_index_capacity_bytes: self.batch_index_buffer.capacity()
+                * std::mem::size_of::<u16>(),
+            retained_mesh_count: self.retained_meshes.len(),
+            retained_gpu_buffer_count: self.retained_meshes.len() * 2,
+            estimated_retained_gpu_buffer_bytes: self
+                .retained_meshes
+                .iter()
+                .map(|buffers| {
+                    ctx.buffer_size(buffers.vertex_buffer) + ctx.buffer_size(buffers.index_buffer)
+                })
+                .sum(),
+            streaming_gpu_buffer_count: self.draw_calls_bindings.len() * 2,
+            estimated_streaming_gpu_buffer_capacity_bytes: self
+                .draw_calls_bindings
+                .iter()
+                .map(|bindings| {
+                    ctx.buffer_size(bindings.vertex_buffers[0])
+                        + ctx.buffer_size(bindings.index_buffer)
+                })
+                .sum(),
         }
     }
 }

@@ -379,3 +379,124 @@ pub(crate) fn track_drawcall(
 pub fn textures_count() -> usize {
     get_context().textures.len()
 }
+
+/// Geometry work submitted while renderer diagnostics are enabled.
+///
+/// Counts accumulate across frames until [`reset_renderer_diagnostics`]. Each
+/// vertex or index buffer upload is one operation; allocating empty streaming
+/// capacity is not an upload. These are submitted backend calls, not GPU timings
+/// or application draw-function calls (immediate geometry may be batched).
+///
+/// ```no_run
+/// use macroquad::telemetry;
+/// telemetry::set_renderer_diagnostics_enabled(true);
+/// telemetry::reset_renderer_diagnostics();
+/// // Draw and finish a frame before reading submitted work.
+/// let counts = telemetry::renderer_diagnostics().counters;
+/// println!("{} draws, {} streamed bytes", counts.draw_calls, counts.streaming_buffer_upload_bytes);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RendererCounters {
+    /// Total backend draws, including the auxiliary draws below.
+    pub draw_calls: u64,
+    /// Backend draws using batched immediate geometry.
+    pub immediate_draw_calls: u64,
+    /// Backend draws using retained geometry. Instances remain separate draws.
+    pub retained_draw_calls: u64,
+    /// Screen-texture copies and telemetry capture draws submitted by the renderer.
+    /// Direct calls through the internal backend API are not observed.
+    pub auxiliary_draw_calls: u64,
+    /// Vertex/index buffer updates for immediate geometry (two per batch).
+    pub streaming_buffer_uploads: u64,
+    /// Geometry bytes passed to those immediate buffer updates.
+    pub streaming_buffer_upload_bytes: u64,
+    /// Initialized immutable vertex/index buffers (two per retained mesh).
+    pub retained_buffer_uploads: u64,
+    /// Geometry bytes passed when creating retained buffers.
+    pub retained_buffer_upload_bytes: u64,
+}
+
+/// An on-demand snapshot of renderer geometry storage and optional work counts.
+///
+/// CPU values cover the immediate batching vectors, with initialized bytes
+/// separate from allocated capacity. GPU byte values are requested buffer sizes,
+/// not measured driver allocation or total process memory. They exclude textures,
+/// shaders, render targets, snapshot-copy buffers, driver alignment/overhead, and
+/// model-owned CPU geometry. glTF models expose their own resource reports.
+/// Shared retained buffers count once regardless of handles or queued instances.
+/// Buffers awaiting the next ordinary flush/upload collection are still included.
+///
+/// Reading a report neither flushes draws nor collects resources. Resource sizes
+/// can be queried with counting disabled; only [`RendererCounters`] require
+/// [`set_renderer_diagnostics_enabled`]. All functions require a live window.
+///
+/// ```no_run
+/// let report = macroquad::telemetry::renderer_diagnostics();
+/// println!("{} retained bytes, {} queued batches",
+///     report.estimated_retained_gpu_buffer_bytes, report.queued_draw_calls);
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RendererDiagnostics {
+    /// Whether future renderer operations will update `counters`.
+    pub counters_enabled: bool,
+    /// Work since the last explicit reset, recorded only while enabled.
+    pub counters: RendererCounters,
+    /// Currently queued batches and retained draws, not yet submitted.
+    pub queued_draw_calls: usize,
+    /// Initialized vertex bytes in the immediate CPU batching vector.
+    pub cpu_vertex_bytes: usize,
+    /// Allocated vertex capacity in bytes, retained across normal frame clears.
+    pub cpu_vertex_capacity_bytes: usize,
+    /// Initialized index bytes in the immediate CPU batching vector.
+    pub cpu_index_bytes: usize,
+    /// Allocated index capacity in bytes, retained across normal frame clears.
+    pub cpu_index_capacity_bytes: usize,
+    /// Unique retained vertex/index buffer pairs owned by the renderer.
+    pub retained_mesh_count: usize,
+    /// Number of retained GPU buffers (two per retained mesh).
+    pub retained_gpu_buffer_count: usize,
+    /// Requested retained GPU buffer bytes; excludes driver overhead.
+    pub estimated_retained_gpu_buffer_bytes: usize,
+    /// Number of reusable immediate GPU buffers, including idle slots.
+    pub streaming_gpu_buffer_count: usize,
+    /// Requested immediate GPU buffer capacity bytes; excludes driver overhead.
+    pub estimated_streaming_gpu_buffer_capacity_bytes: usize,
+}
+
+/// Enables or pauses renderer operation counting, initially disabled.
+///
+/// This takes effect immediately and does not reset existing counts. Queued draws
+/// count only if enabled when they are submitted; uploads count at upload time.
+/// Diagnostic resource snapshots remain available while counting is disabled.
+///
+/// ```no_run
+/// macroquad::telemetry::set_renderer_diagnostics_enabled(true);
+/// ```
+pub fn set_renderer_diagnostics_enabled(enabled: bool) {
+    get_context().gl.set_diagnostics_enabled(enabled);
+}
+
+/// Resets cumulative renderer operation counts without changing enablement.
+///
+/// Does not flush, discard queued draws, or release resources. Reset before the
+/// measured work, then finish/flush that work before reading the report.
+///
+/// ```no_run
+/// macroquad::telemetry::reset_renderer_diagnostics();
+/// ```
+pub fn reset_renderer_diagnostics() {
+    get_context().gl.reset_diagnostics();
+}
+
+/// Reads renderer resources and cumulative operation counts without a flush.
+///
+/// See [`RendererDiagnostics`] for scope and byte-estimation limits.
+///
+/// ```no_run
+/// let report = macroquad::telemetry::renderer_diagnostics();
+/// assert!(report.cpu_vertex_capacity_bytes >= report.cpu_vertex_bytes);
+/// ```
+pub fn renderer_diagnostics() -> RendererDiagnostics {
+    let context = get_context();
+    context.gl.diagnostics(&mut *context.quad_context)
+}

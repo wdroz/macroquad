@@ -65,6 +65,8 @@ use crate::{
 
 mod retained;
 pub use retained::*;
+mod diagnostics;
+pub use diagnostics::*;
 
 /// CPU-side material values, retained for a custom shader.
 ///
@@ -823,6 +825,7 @@ fn load_texture(
         };
         let decoded =
             image::load_from_memory(data).map_err(|e| format!("image {}: {e}", image.index()))?;
+        let source_dimensions = (decoded.width(), decoded.height());
         let (width, height) =
             texture_dimensions(decoded.width(), decoded.height(), max_texture_size);
         let decoded = if (width, height) != (decoded.width(), decoded.height()) {
@@ -891,6 +894,12 @@ fn load_texture(
                 },
             );
         }
+        diagnostics::record_source_image(
+            &gpu,
+            image.index(),
+            image.name(),
+            source_dimensions,
+        );
         textures.insert(key, gpu);
     }
     Ok(textures.get(&key).unwrap().clone())

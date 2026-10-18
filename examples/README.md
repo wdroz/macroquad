@@ -121,7 +121,13 @@ transform. Escape quits.
 Requires `--features gltf`. Converts the small checkerboard GLB to a
 `RetainedGltfModel`, explicitly releases CPU geometry, and draws instances with
 shared buffers and textures. One instance is reflected. Transformed bounds
-support frustum culling, and the display reports submitted chunks. The
+support frustum culling, and the display reports submitted chunks. It opts into
+resource diagnostics before loading: the console prints one deduplicated model
+report, source image dimensions and initial upload counts; the HUD shows the
+previous frame's backend draws and retained/streaming upload bytes. Text uses
+streaming geometry, so its uploads remain visible even when retained uploads
+stay zero. These estimates and operation counts are not driver/process memory
+or a frame-time benchmark. The
 adapter preserves current-material drawing; custom lighting and front-face
 selection use `GltfModelTransform`. The default material is unlit and does not
 cull, so it also draws the reflected instance. See the retained geometry section of the

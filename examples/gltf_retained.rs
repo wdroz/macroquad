@@ -7,12 +7,28 @@ use macroquad::prelude::*;
 #[cfg(feature = "gltf")]
 #[macroquad::main("Retained glTF instances")]
 async fn main() {
+    use macroquad::{
+        gltf_draw::{set_gltf_resource_diagnostics_enabled, GltfResourceReport},
+        telemetry,
+    };
+    set_gltf_resource_diagnostics_enabled(true);
+    telemetry::set_renderer_diagnostics_enabled(true);
     let cpu = GltfModel::from_bytes(include_bytes!("assets/textured_quad.glb")).unwrap();
     let center = (cpu.bounds_min + cpu.bounds_max) * 0.5;
     let scale = 1.4 / (cpu.bounds_max - cpu.bounds_min).length().max(0.001);
     // `false` releases the CPU vertices and indices after upload.
     let model = RetainedGltfModel::from_model(cpu, false).unwrap();
     let instances = [model.clone(), model.clone(), model];
+    // One report across all instances counts shared resources once. The image
+    // entry includes source dimensions because tracking began before loading.
+    let resources = GltfResourceReport::collect(&[], &instances.iter().collect::<Vec<_>>());
+    println!("Model resource estimates (not driver/process memory): {resources:#?}");
+    println!(
+        "Initial uploads: {:?}",
+        telemetry::renderer_diagnostics().counters
+    );
+    telemetry::reset_renderer_diagnostics();
+    let mut previous = telemetry::RendererCounters::default();
 
     loop {
         if is_key_pressed(KeyCode::Escape) {
@@ -58,7 +74,23 @@ async fn main() {
             20.,
             LIGHTGRAY,
         );
+        draw_text(
+            format!(
+                "Previous frame: {} draws | {} retained / {} streamed upload bytes",
+                previous.draw_calls,
+                previous.retained_buffer_upload_bytes,
+                previous.streaming_buffer_upload_bytes,
+            ),
+            20.,
+            86.,
+            18.,
+            LIGHTGRAY,
+        );
         next_frame().await;
+        // Include the finished frame's flush. UI text uses streaming geometry,
+        // while drawing the retained instances contributes no new uploads.
+        previous = telemetry::renderer_diagnostics().counters;
+        telemetry::reset_renderer_diagnostics();
     }
 }
 
