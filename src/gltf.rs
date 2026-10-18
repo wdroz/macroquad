@@ -23,7 +23,8 @@
 //! converts to Y-up, and this loader stores those axes as written. It does not
 //! apply a second conversion. [`GltfScene::with_up_axis`] rotates a loaded scene
 //! so glTF +Y points along a caller-chosen axis; [`glam::Vec3::Y`] leaves the
-//! scene unchanged. Macroquad does not assume an up axis.
+//! scene unchanged. [`crate::gltf_draw::GltfModel::with_up_axis`] applies that
+//! same rotation to a drawn mesh. Macroquad does not assume an up axis.
 //! [`crate::camera::Camera3D`]'s default up is +Z.
 //!
 //! Mesh vertices stay in mesh-local space. [`GltfNode::world`] is the node's
@@ -475,8 +476,9 @@ impl GltfScene {
     /// camera aimed at a scene from [`Self::from_bytes`] needs `up: Vec3::Y`,
     /// or the scene can be turned with `with_up_axis(Vec3::Z)` to match that
     /// default. This method does not change the camera default.
-    /// [`crate::gltf_draw::GltfModel`] parses the file on its own and is not
-    /// reoriented.
+    /// [`crate::gltf_draw::GltfModel`] parses the file on its own. Call
+    /// [`GltfModel::with_up_axis`](crate::gltf_draw::GltfModel::with_up_axis)
+    /// with the same `up` so the drawn vertices match these markers.
     ///
     /// # Example
     ///
@@ -501,9 +503,6 @@ impl GltfScene {
         let Some(rotation) = up_axis_rotation(up) else {
             return self.clone();
         };
-        if rotation.dot(Quat::IDENTITY).abs() > 1.0 - 1.0e-5 {
-            return self.clone();
-        }
         let mut scene = self.clone();
         let basis = Mat4::from_quat(rotation);
         for node in &mut scene.nodes {
@@ -1030,9 +1029,12 @@ const AXIS_ALIGN_EPSILON: f32 = 1.0e-3;
 
 /// Rotation that carries glTF +Y onto `up`.
 ///
-/// [`None`] when `up` is zero or not finite. [`Quat::IDENTITY`] when `up`
-/// already points along +Y.
-fn up_axis_rotation(up: Vec3) -> Option<Quat> {
+/// [`None`] when the data should stay as loaded: `up` is zero or not finite,
+/// `up` already points along +Y (any positive scale), or the quaternion is
+/// within `1e-5` of identity. [`GltfScene::with_up_axis`] and
+/// [`crate::gltf_draw::GltfModel::with_up_axis`] both treat [`None`] as
+/// "return a copy".
+pub(crate) fn up_axis_rotation(up: Vec3) -> Option<Quat> {
     if !up.is_finite() {
         return None;
     }
@@ -1042,14 +1044,13 @@ fn up_axis_rotation(up: Vec3) -> Option<Quat> {
     }
     let up = up / length_sq.sqrt();
     if !up.is_finite() || (up - Vec3::Y).length_squared() <= 1.0e-12 {
-        return Some(Quat::IDENTITY);
+        return None;
     }
     let rotation = Quat::from_rotation_arc(Vec3::Y, up);
-    if rotation.is_finite() {
-        Some(rotation)
-    } else {
-        None
+    if !rotation.is_finite() || rotation.dot(Quat::IDENTITY).abs() > 1.0 - 1.0e-5 {
+        return None;
     }
+    Some(rotation)
 }
 
 fn rotate_shape(rotation: Quat, shape: GltfColliderShape) -> GltfColliderShape {

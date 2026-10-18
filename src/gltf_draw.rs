@@ -6,10 +6,12 @@
 //! material metadata so applications can use their own lighting shader. It does
 //! not implement PBR, skins, animation, external image URIs, or morph targets.
 //! `EXT_texture_webp` is resolved in memory; the input file is never changed.
+//! [`GltfModel::with_up_axis`] rotates the baked mesh with the same rule as
+//! [`crate::gltf::GltfScene::with_up_axis`].
 
 use std::{borrow::Cow, collections::HashMap};
 
-use glam::{Mat4, Vec2, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use miniquad::{MipmapFilterMode, TextureWrap};
 
 use crate::{
@@ -130,6 +132,7 @@ pub enum GltfAlphaMode {
 /// };
 /// assert_eq!(part.path, "root/box");
 /// ```
+#[derive(Clone)]
 pub struct GltfDrawMesh {
     /// Positions, normals, and uvs after the node world matrix. Vertex colors
     /// hold the base-color factor at byte precision. `texture` is the
@@ -236,6 +239,8 @@ pub struct GltfModelStats {
 /// Build one with [`GltfModel::from_bytes`] inside a running macroquad
 /// application. [`GltfModel::draw`] submits every part. Read [`GltfModel::parts`]
 /// for alpha and lighting values that draw ignores.
+/// [`GltfModel::with_up_axis`] rotates the baked vertices so they share an up
+/// axis with [`GltfScene::with_up_axis`](crate::gltf::GltfScene::with_up_axis).
 ///
 /// # Example
 ///
@@ -252,6 +257,7 @@ pub struct GltfModelStats {
 /// };
 /// assert_eq!(model.root_names, vec!["room".to_string()]);
 /// ```
+#[derive(Clone)]
 pub struct GltfModel {
     /// One 16-bit chunk per entry, in node preorder.
     pub parts: Vec<GltfDrawMesh>,
@@ -563,6 +569,123 @@ impl GltfModel {
         })
     }
 
+    /// Rotates baked vertices so glTF +Y points along `up`.
+    ///
+    /// [`Self::from_bytes`] keeps the file's Y-up axes and bakes each node's
+    /// world matrix into positions and normals. This rotates those world
+    /// positions and normals, then rebuilds each chunk's bounds from the
+    /// rotated positions. UVs, vertex colors, indices, materials, names, and
+    /// textures stay. A rotation does not flip winding; a mirrored node was
+    /// already corrected at load time.
+    ///
+    /// [`Vec3::Y`], any positive multiple of it, a zero vector, and a
+    /// non-finite vector return a copy with the same vertices. `up` is a
+    /// direction: its length is ignored.
+    ///
+    /// Pass the same `up` to [`GltfScene::with_up_axis`](crate::gltf::GltfScene::with_up_axis) so colliders,
+    /// triggers, and spawns match the mesh. The two types parse the file
+    /// separately, and calling one does not change the other.
+    ///
+    /// [`Camera3D`](crate::camera::Camera3D)'s [`Default`] up axis is +Z, not
+    /// +Y. This method does not change that default. A camera aimed at a
+    /// model from [`Self::from_bytes`] needs `up: Vec3::Y`, or the model and
+    /// the scene can be turned with `with_up_axis(Vec3::Z)`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::camera::Camera3D;
+    /// use macroquad::color::colors::WHITE;
+    /// use macroquad::gltf_draw::{
+    ///     GltfAlphaMode, GltfDrawMesh, GltfModel, GltfModelStats, GltfSurface,
+    /// };
+    /// use macroquad::math::{vec3, Vec3};
+    /// use macroquad::models::{Mesh, Vertex};
+    ///
+    /// let model = GltfModel {
+    ///     parts: vec![GltfDrawMesh {
+    ///         mesh: Mesh {
+    ///             vertices: vec![Vertex::new(0.0, 2.0, 0.0, 0.0, 0.0, WHITE)],
+    ///             indices: vec![0],
+    ///             texture: None,
+    ///         },
+    ///         surface: GltfSurface {
+    ///             name: None,
+    ///             base_color: [1.0, 1.0, 1.0, 1.0],
+    ///             emissive: [0.0, 0.0, 0.0],
+    ///             metallic: 0.0,
+    ///             roughness: 1.0,
+    ///             transmission: 0.0,
+    ///             alpha_mode: GltfAlphaMode::Opaque,
+    ///             alpha_cutoff: 0.5,
+    ///             double_sided: false,
+    ///             unlit: true,
+    ///         },
+    ///         node: 0,
+    ///         name: "post".into(),
+    ///         path: "post".into(),
+    ///         center: vec3(0.0, 2.0, 0.0),
+    ///         bounds_min: vec3(0.0, 2.0, 0.0),
+    ///         bounds_max: vec3(0.0, 2.0, 0.0),
+    ///     }],
+    ///     stats: GltfModelStats::default(),
+    ///     bounds_min: vec3(0.0, 2.0, 0.0),
+    ///     bounds_max: vec3(0.0, 2.0, 0.0),
+    ///     root_names: vec!["post".into()],
+    /// };
+    /// assert_eq!(
+    ///     model.with_up_axis(Vec3::Y).parts[0].mesh.vertices[0].position,
+    ///     vec3(0.0, 2.0, 0.0)
+    /// );
+    /// let z_up = model.with_up_axis(Vec3::Z);
+    /// assert!(
+    ///     (z_up.parts[0].mesh.vertices[0].position - vec3(0.0, 0.0, 2.0)).length() < 1.0e-4
+    /// );
+    /// assert_eq!(Camera3D::default().up, Vec3::Z);
+    /// ```
+    pub fn with_up_axis(&self, up: Vec3) -> Self {
+        let Some(rotation) = crate::gltf::up_axis_rotation(up) else {
+            return self.clone();
+        };
+        let mut model = self.clone();
+        for part in &mut model.parts {
+            if part.mesh.vertices.is_empty() {
+                let (min, max) = rotated_bounds(rotation, part.bounds_min, part.bounds_max);
+                part.bounds_min = min;
+                part.bounds_max = max;
+                part.center = (min + max) * 0.5;
+            } else {
+                let mut min = Vec3::splat(f32::INFINITY);
+                let mut max = Vec3::splat(f32::NEG_INFINITY);
+                for vertex in &mut part.mesh.vertices {
+                    vertex.position = rotation * vertex.position;
+                    let normal = rotation * vertex.normal.truncate();
+                    vertex.normal = normal.extend(vertex.normal.w);
+                    min = min.min(vertex.position);
+                    max = max.max(vertex.position);
+                }
+                part.bounds_min = min;
+                part.bounds_max = max;
+                part.center = (min + max) * 0.5;
+            }
+        }
+        if model.parts.is_empty() {
+            let (min, max) = rotated_bounds(rotation, model.bounds_min, model.bounds_max);
+            model.bounds_min = min;
+            model.bounds_max = max;
+        } else {
+            let mut min = Vec3::splat(f32::INFINITY);
+            let mut max = Vec3::splat(f32::NEG_INFINITY);
+            for part in &model.parts {
+                min = min.min(part.bounds_min);
+                max = max.max(part.bounds_max);
+            }
+            model.bounds_min = min;
+            model.bounds_max = max;
+        }
+        model
+    }
+
     /// Submit textured meshes with their base color, using the current material
     /// and camera. Applications implementing alpha or lighting should inspect
     /// `parts`. The base-color factor is already in each vertex's color field.
@@ -586,6 +709,28 @@ impl GltfModel {
             draw_mesh(&part.mesh);
         }
     }
+}
+
+/// Axis-aligned bounds of `min`/`max` after `rotation`.
+///
+/// Non-finite corners are left in place. A pure rotation of the eight corners
+/// is the new box when the chunk has no vertices to measure.
+fn rotated_bounds(rotation: Quat, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
+    if !min.is_finite() || !max.is_finite() {
+        return (min, max);
+    }
+    let mut new_min = Vec3::splat(f32::INFINITY);
+    let mut new_max = Vec3::splat(f32::NEG_INFINITY);
+    for x in [min.x, max.x] {
+        for y in [min.y, max.y] {
+            for z in [min.z, max.z] {
+                let point = rotation * Vec3::new(x, y, z);
+                new_min = new_min.min(point);
+                new_max = new_max.max(point);
+            }
+        }
+    }
+    (new_min, new_max)
 }
 
 fn minification_filters(
@@ -1086,5 +1231,374 @@ mod tests {
         let vertices = world_vertices(&primitive, Mat4::from_scale(Vec3::new(2., 1., 1.)));
         let expected = Vec3::new(0.5, 1., 0.).normalize();
         assert!((vertices[0].normal.truncate() - expected).length() < 0.00001);
+    }
+
+    fn close(left: Vec3, right: Vec3) {
+        assert!(
+            (left - right).length() < 1e-4,
+            "left {left:?} right {right:?}"
+        );
+    }
+
+    fn sample_surface() -> GltfSurface {
+        GltfSurface {
+            name: Some("blue".into()),
+            base_color: [0.2, 0.4, 0.6, 1.0],
+            emissive: [0.1, 0.0, 0.0],
+            metallic: 0.2,
+            roughness: 0.8,
+            transmission: 0.0,
+            alpha_mode: GltfAlphaMode::Mask,
+            alpha_cutoff: 0.4,
+            double_sided: true,
+            unlit: true,
+        }
+    }
+
+    fn model_from_parts(parts: Vec<GltfDrawMesh>) -> GltfModel {
+        let (bounds_min, bounds_max) = if parts.is_empty() {
+            (Vec3::ZERO, Vec3::ZERO)
+        } else {
+            let mut min = Vec3::splat(f32::INFINITY);
+            let mut max = Vec3::splat(f32::NEG_INFINITY);
+            for part in &parts {
+                min = min.min(part.bounds_min);
+                max = max.max(part.bounds_max);
+            }
+            (min, max)
+        };
+        GltfModel {
+            stats: GltfModelStats {
+                nodes: 2,
+                meshes: 1,
+                draw_calls: parts.len(),
+                triangles: 1,
+                textures: 0,
+            },
+            parts,
+            bounds_min,
+            bounds_max,
+            root_names: vec!["root".into()],
+        }
+    }
+
+    fn part_with_vertices(vertices: Vec<Vertex>, indices: Vec<u16>, name: &str) -> GltfDrawMesh {
+        let (min, max) = if vertices.is_empty() {
+            (Vec3::ZERO, Vec3::ZERO)
+        } else {
+            let mut min = Vec3::splat(f32::INFINITY);
+            let mut max = Vec3::splat(f32::NEG_INFINITY);
+            for vertex in &vertices {
+                min = min.min(vertex.position);
+                max = max.max(vertex.position);
+            }
+            (min, max)
+        };
+        GltfDrawMesh {
+            mesh: Mesh {
+                vertices,
+                indices,
+                texture: None,
+            },
+            surface: sample_surface(),
+            node: 1,
+            name: name.into(),
+            path: format!("root/{name}"),
+            center: (min + max) * 0.5,
+            bounds_min: min,
+            bounds_max: max,
+        }
+    }
+
+    fn vertex_at(position: Vec3, normal: glam::Vec4) -> Vertex {
+        Vertex {
+            position,
+            uv: Vec2::new(0.25, 0.75),
+            color: [9, 8, 7, 6],
+            normal,
+        }
+    }
+
+    #[test]
+    fn y_up_and_an_unusable_up_leave_the_model_unchanged() {
+        let model = model_from_parts(vec![part_with_vertices(
+            vec![vertex_at(
+                Vec3::new(1.0, 2.0, 3.0),
+                glam::vec4(0.0, 1.0, 0.0, 0.5),
+            )],
+            vec![0, 2, 1],
+            "post",
+        )]);
+        for up in [Vec3::Y, Vec3::Y * 4.0, Vec3::ZERO, Vec3::NAN] {
+            let turned = model.with_up_axis(up);
+            let before = &model.parts[0];
+            let after = &turned.parts[0];
+            assert_eq!(
+                after.mesh.vertices[0].position,
+                before.mesh.vertices[0].position
+            );
+            assert_eq!(
+                after.mesh.vertices[0].normal,
+                before.mesh.vertices[0].normal
+            );
+            assert_eq!(after.mesh.vertices[0].uv, before.mesh.vertices[0].uv);
+            assert_eq!(after.mesh.vertices[0].color, before.mesh.vertices[0].color);
+            assert_eq!(after.mesh.indices, before.mesh.indices);
+            assert_eq!(after.bounds_min, before.bounds_min);
+            assert_eq!(after.bounds_max, before.bounds_max);
+            assert_eq!(after.center, before.center);
+            assert_eq!(after.name, before.name);
+            assert_eq!(after.path, before.path);
+            assert_eq!(after.node, before.node);
+            assert_eq!(after.surface.alpha_cutoff, before.surface.alpha_cutoff);
+            assert_eq!(turned.bounds_min, model.bounds_min);
+            assert_eq!(turned.bounds_max, model.bounds_max);
+            assert_eq!(turned.stats.triangles, model.stats.triangles);
+            assert_eq!(turned.root_names, model.root_names);
+        }
+        assert_eq!(crate::camera::Camera3D::default().up, Vec3::Z);
+    }
+
+    #[test]
+    fn z_up_rotates_positions_normals_and_the_combined_bounds() {
+        let model = model_from_parts(vec![
+            part_with_vertices(
+                vec![vertex_at(
+                    Vec3::new(0.0, 2.0, 0.0),
+                    glam::vec4(0.0, 1.0, 0.0, 0.5),
+                )],
+                vec![0],
+                "post",
+            ),
+            part_with_vertices(
+                vec![vertex_at(
+                    Vec3::new(3.0, 0.0, -1.0),
+                    glam::vec4(1.0, 0.0, 0.0, 0.25),
+                )],
+                vec![0],
+                "peg",
+            ),
+        ]);
+        let rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::Z);
+        let turned = model.with_up_axis(Vec3::Z);
+        assert_eq!(
+            model.parts[0].mesh.vertices[0].position,
+            Vec3::new(0.0, 2.0, 0.0),
+            "the source model stays put"
+        );
+        for (before, after) in model.parts.iter().zip(&turned.parts) {
+            let from = &before.mesh.vertices[0];
+            let to = &after.mesh.vertices[0];
+            close(to.position, rotation * from.position);
+            close(to.normal.truncate(), rotation * from.normal.truncate());
+            assert_eq!(to.normal.w, from.normal.w);
+            assert_eq!(to.uv, from.uv);
+            assert_eq!(to.color, from.color);
+            assert_eq!(after.mesh.indices, before.mesh.indices);
+            assert_eq!(after.path, before.path);
+            assert_eq!(after.surface.name, before.surface.name);
+            close(after.center, after.bounds_min);
+            close(after.bounds_max, after.bounds_min);
+        }
+        close(
+            turned.parts[0].mesh.vertices[0].position,
+            Vec3::new(0.0, 0.0, 2.0),
+        );
+        close(turned.parts[0].mesh.vertices[0].normal.truncate(), Vec3::Z);
+        close(
+            turned.parts[1].mesh.vertices[0].position,
+            Vec3::new(3.0, 1.0, 0.0),
+        );
+        close(turned.bounds_min, Vec3::new(0.0, 0.0, 0.0));
+        close(turned.bounds_max, Vec3::new(3.0, 1.0, 2.0));
+        assert_eq!(turned.stats.triangles, model.stats.triangles);
+        assert_eq!(turned.stats.draw_calls, model.stats.draw_calls);
+        assert_eq!(turned.root_names, model.root_names);
+
+        let along_x = model.with_up_axis(Vec3::X);
+        close(
+            along_x.parts[0].mesh.vertices[0].position,
+            Vec3::new(2.0, 0.0, 0.0),
+        );
+        let flipped = model.with_up_axis(-Vec3::Y);
+        close(
+            flipped.parts[0].mesh.vertices[0].position,
+            Vec3::new(0.0, -2.0, 0.0),
+        );
+        let diagonal = model.with_up_axis(Vec3::new(0.0, 1.0, 1.0));
+        close(
+            diagonal.parts[0].mesh.vertices[0].position,
+            Vec3::new(0.0, 1.0, 1.0).normalize() * 2.0,
+        );
+    }
+
+    #[test]
+    fn empty_chunks_rotate_their_stored_bounds() {
+        let empty = GltfModel {
+            parts: Vec::new(),
+            stats: GltfModelStats::default(),
+            bounds_min: Vec3::ZERO,
+            bounds_max: Vec3::ZERO,
+            root_names: Vec::new(),
+        };
+        let turned_empty = empty.with_up_axis(Vec3::Z);
+        assert!(turned_empty.parts.is_empty());
+        assert_eq!(turned_empty.bounds_min, Vec3::ZERO);
+        assert_eq!(turned_empty.bounds_max, Vec3::ZERO);
+
+        let mut gap = part_with_vertices(Vec::new(), Vec::new(), "gap");
+        gap.bounds_min = Vec3::new(0.0, 2.0, 0.0);
+        gap.bounds_max = Vec3::new(1.0, 4.0, 0.0);
+        gap.center = Vec3::new(0.5, 3.0, 0.0);
+        let model = model_from_parts(vec![gap]);
+        let turned = model.with_up_axis(Vec3::Z);
+        close(turned.parts[0].bounds_min, Vec3::new(0.0, 0.0, 2.0));
+        close(turned.parts[0].bounds_max, Vec3::new(1.0, 0.0, 4.0));
+        close(turned.parts[0].center, Vec3::new(0.5, 0.0, 3.0));
+        close(turned.bounds_min, turned.parts[0].bounds_min);
+        close(turned.bounds_max, turned.parts[0].bounds_max);
+        assert!(turned.parts[0].mesh.vertices.is_empty());
+    }
+
+    #[test]
+    fn mirrored_winding_stays_put_when_the_up_axis_changes() {
+        let primitive = GltfPrimitive {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::Y],
+            normals: vec![Vec3::Z; 3],
+            uvs: vec![
+                Vec2::new(0.1, 0.2),
+                Vec2::new(0.3, 0.4),
+                Vec2::new(0.5, 0.6),
+            ],
+            indices: vec![0, 1, 2],
+            base_color_factor: [0.2, 0.4, 0.6, 1.0],
+        };
+        let world = Mat4::from_scale(Vec3::new(-2.0, 1.0, 1.0));
+        let vertices = world_vertices(&primitive, world);
+        let indices = winding_indices(&primitive.indices, world);
+        assert_eq!(indices.as_ref(), &[0, 2, 1]);
+        let model = model_from_parts(vec![part_with_vertices(
+            vertices,
+            indices.iter().map(|index| *index as u16).collect(),
+            "mirror",
+        )]);
+        let rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::Z);
+        let turned = model.with_up_axis(Vec3::Z);
+        assert_eq!(turned.parts[0].mesh.indices, model.parts[0].mesh.indices);
+        let expected = world_vertices(&primitive, Mat4::from_quat(rotation) * world);
+        for (got, expect) in turned.parts[0].mesh.vertices.iter().zip(&expected) {
+            close(got.position, expect.position);
+            close(got.normal.truncate(), expect.normal.truncate());
+            assert_eq!(got.uv, expect.uv);
+        }
+        let index = &turned.parts[0].mesh.indices;
+        let verts = &turned.parts[0].mesh.vertices;
+        let a = verts[index[0] as usize].position;
+        let b = verts[index[1] as usize].position;
+        let c = verts[index[2] as usize].position;
+        assert!(
+            (b - a)
+                .cross(c - a)
+                .dot(verts[index[0] as usize].normal.truncate())
+                > 0.0
+        );
+    }
+
+    fn glb(json: &str, bin: &[u8]) -> Vec<u8> {
+        fn pad(mut data: Vec<u8>, alignment: usize, byte: u8) -> Vec<u8> {
+            while !data.len().is_multiple_of(alignment) {
+                data.push(byte);
+            }
+            data
+        }
+
+        let json_chunk = pad(json.as_bytes().to_vec(), 4, b' ');
+        let bin_chunk = pad(bin.to_vec(), 4, 0);
+        let total = 12 + 8 + json_chunk.len() + 8 + bin_chunk.len();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json_chunk.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json_chunk);
+        out.extend_from_slice(&(bin_chunk.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"BIN\0");
+        out.extend_from_slice(&bin_chunk);
+        out
+    }
+
+    #[test]
+    fn loaded_model_matches_the_scene_up_axis() {
+        let positions = [Vec3::new(0.0, 1.0, 0.0), Vec3::X, Vec3::new(0.0, 0.0, 1.0)];
+        let normal = Vec3::new(1.0, 1.0, 0.0).normalize();
+        let mut bin = Vec::new();
+        for position in positions {
+            for value in [position.x, position.y, position.z] {
+                bin.extend(value.to_le_bytes());
+            }
+        }
+        for _ in 0..3 {
+            for value in [normal.x, normal.y, normal.z] {
+                bin.extend(value.to_le_bytes());
+            }
+        }
+        let json = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,2,3]}],"nodes":[{"name":"root","translation":[0,5,0],"children":[1]},{"name":"post","translation":[1,0,0],"scale":[2,1,1],"mesh":0},{"name":"player_spawn","translation":[0,4,1]},{"name":"floor_collider","translation":[0,1,2],"scale":[2,0.2,4],"extras":{"mq_shape":"box","mq_role":"collider"}}],"meshes":[{"primitives":[{"attributes":{"POSITION":0,"NORMAL":1}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,1]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3"}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36}],"buffers":[{"byteLength":72}]}"#;
+        let scene = crate::gltf::GltfScene::from_bytes(&glb(json, &bin)).unwrap();
+        assert_eq!(scene.nodes[1].name.as_deref(), Some("post"));
+        assert_eq!(scene.spawns.len(), 1);
+        assert_eq!(scene.colliders.len(), 1);
+        let primitive = &scene.meshes[scene.nodes[1].mesh.unwrap()].primitives[0];
+        let baked = world_vertices(primitive, scene.nodes[1].world);
+        let model = model_from_parts(vec![part_with_vertices(
+            baked,
+            primitive
+                .indices
+                .iter()
+                .map(|index| *index as u16)
+                .collect(),
+            "post",
+        )]);
+        let same = model.with_up_axis(Vec3::Y);
+        assert_eq!(
+            same.parts[0].mesh.vertices[0].position,
+            model.parts[0].mesh.vertices[0].position
+        );
+
+        let rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::Z);
+        let turned_model = model.with_up_axis(Vec3::Z);
+        let turned_scene = scene.with_up_axis(Vec3::Z);
+        let expected = world_vertices(primitive, turned_scene.nodes[1].world);
+        assert_eq!(turned_model.parts[0].mesh.vertices.len(), expected.len());
+        for (got, expect) in turned_model.parts[0].mesh.vertices.iter().zip(&expected) {
+            close(got.position, expect.position);
+            close(got.normal.truncate(), expect.normal.truncate());
+        }
+        for (before, after) in model.parts[0]
+            .mesh
+            .vertices
+            .iter()
+            .zip(&turned_model.parts[0].mesh.vertices)
+        {
+            close(after.position, rotation * before.position);
+            close(after.normal.truncate(), rotation * before.normal.truncate());
+        }
+        close(
+            turned_scene.spawns[0].position,
+            rotation * scene.spawns[0].position,
+        );
+        close(
+            turned_scene.nodes[1].world.transform_point3(positions[0]),
+            turned_model.parts[0].mesh.vertices[0].position,
+        );
+        let crate::gltf::GltfColliderShape::Aabb(floor) = turned_scene.colliders[0].shape else {
+            panic!("quarter turn keeps the floor an Aabb");
+        };
+        close(floor.center(), rotation * Vec3::new(0.0, 1.0, 2.0));
+        assert_eq!(
+            turned_model.parts[0].mesh.indices,
+            model.parts[0].mesh.indices
+        );
+        assert_eq!(crate::camera::Camera3D::default().up, Vec3::Z);
     }
 }

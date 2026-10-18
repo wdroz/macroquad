@@ -13,14 +13,14 @@ On this fork the dependency is the crate in the repository root. Tests and examp
 
 Blender is Z-up. glTF is Y-up, right-handed, and in meters. Blender's glTF exporter converts Z-up to Y-up when **+Y Up** is checked, which is the default. `GltfScene::from_bytes` stores those glTF axes as written. It does not convert them again.
 
-`scene.with_up_axis(up)` rotates the loaded nodes, mesh placement, colliders, and spawns so glTF +Y points along `up`. `Vec3::Y` returns an equal scene. `Vec3::Z` matches `Camera3D`'s default up, which is +Z. That camera default stays +Z.
+`scene.with_up_axis(up)` rotates the loaded nodes, mesh placement, colliders, and spawns so glTF +Y points along `up`. `model.with_up_axis(up)` rotates the baked draw positions, normals, and bounds by that same rotation. `Vec3::Y` returns an equal scene and a model with the same vertices. `Vec3::Z` matches `Camera3D`'s default up, which is +Z. That camera default stays +Z. The two loaders do not share a value: call both helpers with the same axis, or neither.
 
 ```rust
-let scene = GltfScene::from_bytes(&bytes).expect("level");
-let scene = scene.with_up_axis(Vec3::Z);
+let scene = GltfScene::from_bytes(&bytes).expect("level").with_up_axis(Vec3::Z);
+let model = GltfModel::from_bytes(&bytes).expect("draw").with_up_axis(Vec3::Z);
 ```
 
-`GltfModel` parses the file on its own and stays Y-up. A camera that draws `model.draw()` uses `up: Vec3::Y` unless you exported a different orientation. Leaving **+Y Up** checked is the path the examples use.
+`GltfModel::from_bytes` still stores glTF Y-up until `with_up_axis`. A camera that draws an unreoriented model uses `up: Vec3::Y`. Leaving **+Y Up** checked is the path the examples use.
 
 ## Mark colliders, triggers, and spawns
 
@@ -129,7 +129,7 @@ async fn main() {
 }
 ```
 
-`GltfScene::from_bytes` and `GltfModel::from_bytes` each parse the buffer. Call both when you need markers and a draw. `GltfModel` has no method that reuses an existing `GltfScene`.
+`GltfScene::from_bytes` and `GltfModel::from_bytes` each parse the buffer. Call both when you need markers and a draw. `GltfModel` has no method that reuses an existing `GltfScene`. When the camera's up axis is not glTF +Y, call `with_up_axis` on each result with that same axis.
 
 `model.draw()` submits every chunk with the current camera and the default material. The base-color factor is already in the vertex colors, at 8-bit precision. The exact factor, alpha mode, cutoff, double-sided flag, emissive factor, metallic, roughness, transmission, and unlit flag are on `part.surface`. The built-in draw does not light, sort transparency, skin, animate, or refract. Iterate `model.parts` when you need that.
 
@@ -157,7 +157,7 @@ With no path, the example shows the checkerboard. A path is loaded with `load_fi
 
 ## What the loader does not do yet
 
-- `GltfModel` is not reoriented by `GltfScene::with_up_axis`. Draw and markers stay in agreement when the camera uses the same up axis as the file, which is Y for a normal Blender export.
+- `GltfScene::with_up_axis` does not change a `GltfModel`, and the reverse is also true. Call both with the same axis when the draw and the markers should leave Y-up. A camera can instead keep `up: Vec3::Y` and skip both calls. That is what the examples do.
 - Images are not stored on `GltfScene`. Only `GltfModel` uploads them, and only from a `.glb`.
 - Skins, animations, morph targets, and PBR shading are not implemented.
 - A full room asset is not checked in yet. The triangle and checkerboard files are the fixtures the tests and the draw example use.

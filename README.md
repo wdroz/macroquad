@@ -21,7 +21,9 @@ Enable `features = ["gltf"]` to use the CPU-only `GltfScene` parser and the
 `GltfModel` rendering adapter. `GltfModel::from_bytes(&bytes)` loads embedded
 PNG/JPEG/WebP base-color textures, applies node world transforms and normal
 matrices, and splits large index buffers into triangle-safe 16-bit chunks.
-Call it after macroquad starts, because it creates GPU textures. `model.draw()`
+`GltfModel::with_up_axis` rotates those baked vertices the same way
+`GltfScene::with_up_axis` rotates markers. `Vec3::Y` leaves both unchanged.
+Call `from_bytes` after macroquad starts, because it creates GPU textures. `model.draw()`
 submits the textured meshes with the current camera and material.
 
 ```sh
