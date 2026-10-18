@@ -10,7 +10,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Continuous box/sphere hits, oriented cover, slide against all four solid shapes |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
-| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials` | Immediate GLB draw, retained geometry, staged loading and opt-in material passes/lighting |
+| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, and the selected-part pixel fixture |
 | Renderer behavior | `retained_mesh`, `material_depth_check` | Immutable buffers and draw order, independent depth writes/testing, queued samplers |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 
@@ -36,6 +36,7 @@ cargo run --example retained_mesh
 cargo run --features gltf --example gltf_retained
 cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials
+cargo run --features gltf --example gltf_material_check
 cargo run --features video --example video_texture -- path/to/clip.mp4
 ```
 
@@ -175,12 +176,21 @@ color only in both modes. Escape exits.
 The default output encodes RGB before destination-space blending. Use linear
 output into a linear target with your own final conversion for linear
 compositing. Center sorting cannot resolve intersecting transparent triangles.
-See the [material passes guide](../docs/3d-guide.md#opt-in-gltf-material-passes).
+This sample submits each model whole. To omit a chunk or move one without
+cloning the model, borrow `model.parts` and call `submit_retained_part` with
+an extra affine transform. Positions are already baked, so a spin around a
+chosen point is `T(pivot) * R * T(-pivot)`. See the
+[material passes guide](../docs/3d-guide.md#opt-in-gltf-material-passes).
 
-`gltf_material_check` is the self-contained GPU regression fixture. It runs the
-same pixel assertions as `tests/gltf_material.rs`, prints
-`GLTF_MATERIAL_FIXTURE_PASS`, and displays a green screen on success; this also
-allows running the assertions in a browser after building for WASM.
+## `gltf_material_check`
+
+Requires `--features gltf`. It runs the same pixel assertions as
+`tests/gltf_material.rs`, including selected-part filtering, independent CPU
+and retained transforms, reflected parents, lighting, and mixed whole-model
+transparency. A passing run prints `GLTF_MATERIAL_FIXTURE_PASS` and stays on a
+green screen. A failure panics instead of waiting for input. The same binary
+can be built for the browser. Without `gltf`, it prints a feature reminder
+and exits.
 
 ## `material_depth_check`
 

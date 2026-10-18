@@ -62,6 +62,16 @@
 //! with imported normals. PBR and refraction are not included.
 //! [`GltfColorOutput`] makes the destination
 //! color-space policy explicit; the existing draw methods stay unchanged.
+//! [`GltfMaterialFrame::submit`] and [`GltfMaterialFrame::submit_retained`]
+//! collect every chunk. [`GltfMaterialFrame::submit_part`] and
+//! [`GltfMaterialFrame::submit_retained_part`] borrow one existing chunk and
+//! apply a caller-supplied affine transform, without cloning model metadata
+//! or recovering a rest pose.
+//!
+//! [`GltfModelLoader`] and [`RetainedGltfModelLoader`] split the same
+//! construction into pollable units. Synchronous constructors remain.
+//! [`GltfResourceReport`] estimates retained CPU geometry and GPU buffer or
+//! texture bytes for the models you pass in; it is not process or driver memory.
 
 use std::{borrow::Cow, collections::HashMap};
 
@@ -304,6 +314,23 @@ pub struct GltfLoadOptions {
 /// remains a separate post-decode upload cap. The image limits estimate RGBA8
 /// bytes, not decoder scratch memory, aggregate scene memory, or GPU memory.
 /// Oversized source images need offline preparation.
+///
+/// ```
+/// use macroquad::gltf_draw::{GltfImageLimits, GltfLoadOptions, GltfLoadSettings};
+///
+/// let settings = GltfLoadSettings {
+///     options: GltfLoadOptions {
+///         max_texture_size: Some(512),
+///         ..GltfLoadOptions::default()
+///     },
+///     image_limits: GltfImageLimits {
+///         max_source_pixels: Some(1024 * 1024),
+///         max_decoded_bytes: Some(4 * 1024 * 1024),
+///     },
+/// };
+/// assert_eq!(settings.options.max_texture_size, Some(512));
+/// assert_eq!(settings.image_limits.max_decoded_bytes, Some(4 * 1024 * 1024));
+/// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct GltfLoadSettings {
     /// Mesh batching and post-decode texture upload options.

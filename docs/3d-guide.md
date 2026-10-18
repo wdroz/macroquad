@@ -8,6 +8,8 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 
 There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, `slide_sphere`, and `slide_sphere_solids` are queries a game uses to write those itself. The physics and character sections below are application code. The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting, loading, drawing, and moving through a marked level. The [example index](../examples/README.md) lists runnable samples.
 
+Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission and [optional basic lighting](#optional-basic-lighting). Collision queries start at [Ray hits](#ray-hits). Gravity and a capsule standing on a floor are the application samples in [Physics](#physics) and [Character movement](#character-movement).
+
 ## Retained geometry
 
 `Mesh` and `draw_mesh` remain the immediate path. For unchanged geometry,
@@ -507,8 +509,10 @@ optional diffuse lighting does not implement glTF's PBR response. This source
 inspection does not know the lighting chosen later for a collection. Unsupported
 maps and material extensions remain warnings; loader errors (such as unsupported
 UV mappings) still fail loading normally.
-See `examples/gltf_materials.rs` and the tiny native/browser pixel fixture
-`examples/gltf_material_check.rs`.
+See `examples/gltf_materials.rs`, which submits whole models, and the tiny
+native/browser pixel fixture `examples/gltf_material_check.rs`, which also
+checks selected-part filtering, independent CPU and retained transforms, and
+mixed transparency order.
 
 ## Ray hits
 

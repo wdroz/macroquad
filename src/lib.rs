@@ -35,8 +35,14 @@
 //! Blender glTF 2.0 export without a window and can draw a `.glb` once one is
 //! running. A parsed scene stores the base-color images it samples as RGBA
 //! bytes. `GltfScene::with_up_axis` and `GltfModel::with_up_axis` share one
-//! caller-chosen up axis; `Vec3::Y` leaves a file unchanged. Guides:
-//! `docs/3d-guide.md` and `docs/blender-to-macroquad.md`.
+//! caller-chosen up axis; `Vec3::Y` leaves a file unchanged.
+//! [`models::RetainedMesh`] and `RetainedGltfModel` upload geometry once.
+//! `GltfMaterialRenderer` is an opt-in base-color and emissive pass with
+//! optional diffuse lighting. `submit_part` and `submit_retained_part` draw
+//! one borrowed chunk under an extra transform. `GltfModelLoader` polls that
+//! work in stages, and `GltfLoadSettings` can reject an oversized source image
+//! before decode. There is still no rigid-body world and no character
+//! controller. Guides: `docs/3d-guide.md` and `docs/blender-to-macroquad.md`.
 //!
 //! ```
 //! use macroquad::math::{Aabb, vec3};

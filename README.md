@@ -48,14 +48,16 @@ temporarily in CPU memory. Source GLBs are never modified.
 cargo run --features gltf --example gltf_textured
 cargo run --features gltf --example gltf_textured -- path/to/model.glb
 cargo run --features gltf --example gltf_retained
+cargo run --features gltf --example gltf_pollable
+cargo run --features gltf --example gltf_materials
 ```
 
 `model.parts` exposes each mesh, source node/name, bounds, and surface metadata
-(alpha mode/cutoff, sidedness, emissive, metallic, roughness and transmission values), allowing
-applications to implement lighting and transparent draw ordering. The base
-color factor is already in the vertices at 8-bit precision; a shader can use
+(alpha mode/cutoff, sidedness, emissive, metallic, roughness and transmission values).
+A custom shader can use that metadata for its own lighting and transparency order.
+The base color factor is already in the vertices at 8-bit precision; a shader can use
 `surface.base_color` for exact factors, including alpha-mask cutoff comparisons.
-The built-in drawing method does not
+`GltfModel::draw` and `RetainedGltfModel::draw` do not
 implement PBR, skins, animations, morph targets, or alpha sorting. Only embedded
 GLB images are supported. The base-color texture selects its authored UV set;
 `KHR_texture_transform` offset, rotation, scale and UV-set override are applied.
@@ -78,6 +80,26 @@ with shared geometry, not hardware instancing. Custom lighting, transparency
 sorting, normal transforms and reflected face culling remain caller controlled;
 `GltfModelTransform` supplies the inverse-transpose matrix and mirrored flag.
 For a hand-built `Mesh`, use `RetainedMesh` and `draw_retained_mesh` instead.
+
+`GltfMaterialRenderer` collects those parts without a custom shader.
+`submit` and `submit_retained` draw every chunk of a CPU or retained model.
+`submit_part` and `submit_retained_part` borrow one existing chunk and apply
+an extra affine transform, so hiding or moving one object does not clone the
+model. Opaque and masked chunks draw before one back-to-front blend pass.
+`set_lighting(Some(GltfLighting { .. }))` adds hemisphere and directional
+diffuse light from imported normals. Unlit materials ignore it, and the
+existing `draw` methods stay available. Metallic/roughness maps, refraction,
+and shadows are not part of this renderer. `examples/gltf_materials.rs` toggles
+the light; `examples/gltf_material_check.rs` also checks selected parts.
+
+`GltfModelLoader` and `RetainedGltfModelLoader` perform the same construction
+one stage at a time. Parsing, one image decode, and one mesh conversion can
+still occupy a frame. `GltfLoadSettings` adds per-image source-pixel and
+estimated RGBA8 byte limits checked before decode; `max_texture_size` remains
+the later upload cap. After a scene change, `retire_unused_render_resources`
+flushes queued draws and collects unused textures and retained buffers.
+`GltfResourceReport` and `telemetry::renderer_diagnostics` report estimated
+bytes and upload counts, not process or driver memory.
 
 `Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, `Obb`, and `Frustum` live in
 `macroquad::math` and the prelude. `Contact` describes an overlapping pair,
