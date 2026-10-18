@@ -471,6 +471,49 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     assert!(loader.take_model().is_none());
     assert_resources(reference_textures); // Even a still-live failed handle releases resources.
     drop(loader);
+
+    // Conversion can fail after every texture has uploaded and an earlier
+    // primitive has already built output chunks. The failed handle must drop
+    // both those chunks' texture owners and its upload cache without drawing.
+    let source = gltf::binary::Glb::from_slice(&bytes).unwrap();
+    let mut document: serde_json::Value = serde_json::from_slice(&source.json).unwrap();
+    document["materials"][1]["pbrMetallicRoughness"]["baseColorTexture"]["texCoord"] = json!(1);
+    let invalid_uvs = gltf::binary::Glb {
+        header: source.header,
+        json: Cow::Owned(serde_json::to_vec(&document).unwrap()),
+        bin: source.bin,
+    }
+    .to_vec()
+    .unwrap();
+    let mut loader = GltfModelLoader::new(&invalid_uvs, settings()).unwrap();
+    while loader.progress().stage != GltfLoadStage::ConvertMeshes {
+        loader.poll().unwrap();
+    }
+    assert_eq!(telemetry::textures_count(), reference_textures + 3);
+    assert_eq!(loader.poll().unwrap().completed, 1);
+    let error = loader.poll().unwrap_err();
+    assert!(
+        error.contains("green") && error.contains("TEXCOORD_1"),
+        "{error}"
+    );
+    assert_eq!(loader.progress().stage, GltfLoadStage::Failed);
+    assert!(loader.take_model().is_none());
+    assert_resources(reference_textures);
+    loader.cancel();
+    assert_eq!(loader.poll().unwrap_err(), error);
+    assert_eq!(loader.progress().stage, GltfLoadStage::Failed);
+    assert_resources(reference_textures);
+    drop(loader);
+
+    // A subsequent load must still render correctly after retiring the failed
+    // load's resources, including on backends that may recycle texture names.
+    let restarted = GltfModel::from_bytes_with_settings(&bytes, settings()).unwrap();
+    set_camera(&camera);
+    clear_background(BLACK);
+    restarted.draw();
+    assert_eq!(read_target(&target).bytes, expected_pixels.bytes);
+    drop(restarted);
+    assert_resources(reference_textures);
     drop(reference);
     assert_resources(baseline);
     set_gltf_resource_diagnostics_enabled(false);

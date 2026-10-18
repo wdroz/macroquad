@@ -105,8 +105,8 @@ pub struct MaterialParams {
 /// ```msl
 /// struct Uniforms
 /// {
-///     float4x4 Model;
 ///     float4x4 Projection;
+///     float4x4 Model;
 ///     float4 _Time;
 ///     ...
 ///     additional uniforms

@@ -44,12 +44,12 @@ struct RasterizerData
     float2 uv [[user(locn1)]];
 };
 
-// Uniforms should have Model, Projection, _Time in exact order for shader to work,
+// Uniforms should have Projection, Model, _Time in exact order for shader to work,
 // because they are laying in a single buffer
 struct Uniforms
 {
-    float4x4 Model;
     float4x4 Projection;
+    float4x4 Model;
     float4 _Time;
 
     float4 test_color;
@@ -101,11 +101,11 @@ struct RasterizerData
     float2 uv [[user(locn1)]];
 };
 
-// Uniforms should have Model, Projection, _Time for material shaders to work
+// Uniforms should have Projection, Model, _Time for material shaders to work
 struct Uniforms
 {
-    float4x4 Model;
     float4x4 Projection;
+    float4x4 Model;
     float4 _Time;
 
     float4 test_color[10];

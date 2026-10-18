@@ -398,6 +398,8 @@ impl<'a> GltfMaterialFrame<'a> {
     /// the default material, and preserves the camera and model stack. The
     /// renderer retains no model textures after this call. Invalid composed
     /// affine transforms or non-finite chunk centers/depths are skipped.
+    /// Custom materials used by earlier queued commands must remain alive
+    /// until this flush finishes, even after switching to another material.
     ///
     /// ```no_run
     /// use macroquad::prelude::*;

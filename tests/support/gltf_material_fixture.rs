@@ -270,6 +270,32 @@ pub async fn run() {
         "mixed geometry sorting",
     );
 
+    // Coincident transparent chunk centers deliberately have equal depth.
+    // Source-over is order-dependent, so these independent pixel results also
+    // verify that the promised submission order survives a stable sort.
+    let red_tie = Fixture::new(vec![quad(0., [1., 0., 0., 0.5], GltfAlphaMode::Blend)]);
+    let blue_tie = Fixture::new(vec![quad(0., [0., 0., 1., 0.5], GltfAlphaMode::Blend)]);
+    for (instances, expected) in [
+        (
+            [(&red_tie, identity), (&blue_tie, identity)],
+            [64, 0, 128, 255],
+        ),
+        (
+            [(&blue_tie, identity), (&red_tie, identity)],
+            [128, 0, 64, 255],
+        ),
+    ] {
+        check_scene(
+            &mut renderer,
+            &target,
+            &instances,
+            GltfColorOutput::Linear,
+            [0, 0, 2],
+            &[(32, expected)],
+            "equal-depth transparency preserves submission order",
+        );
+    }
+
     let front_glass = Fixture::new(vec![quad(0.5, [1., 0., 0., 0.5], GltfAlphaMode::Blend)]);
     let rear_solid = Fixture::new(vec![quad(0., [0., 0., 1., 1.], GltfAlphaMode::Opaque)]);
     for geometry in [Geometry::Cpu, Geometry::Retained] {

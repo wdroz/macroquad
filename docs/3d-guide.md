@@ -31,6 +31,11 @@ multiplied after the model stack. Custom shaders receive that composed `Model`
 matrix; they still handle normal transforms and reflected winding/culling.
 The handle's `texture` may be changed without reuploading geometry.
 
+Metal custom shaders receive built-in uniform bytes in the order `Projection`,
+`Model`, `_Time`, followed by the declared custom uniforms. Match that order in
+the MSL buffer struct and compute `Projection * Model * position`, as in
+`examples/custom_material.rs`. GLSL uniforms are bound by name.
+
 The source CPU mesh can be released after upload. Invalid indices, incomplete
 triangles, empty meshes and meshes exceeding the `u16` vertex range are rejected
 before allocation. Streaming batch capacity does not clamp retained geometry.
@@ -172,6 +177,9 @@ The operation flushes any pending draws before collecting unused managed
 textures and retained meshes. A queued draw still renders even if its last
 application mesh or texture handle was dropped. Custom materials used by queued
 draws must stay alive through retirement, even after switching materials.
+Deferred UI commands are processed at `next_frame().await`; retirement does not
+finish or clear those commands. Finish the outgoing UI frame before dropping
+its resources.
 Live handles and shared model instances remain
 valid; resources still owned by a camera, material binding or another handle
 are not unused. Ordinary pause does not retire live scene resources.
@@ -243,7 +251,9 @@ screen. Parsing, one primitive conversion, or one synchronous image decode
 can still stall a frame; there is no strict time budget and no worker decoding.
 Image limits reject oversized source dimensions before decoding but do not
 bound decoder scratch memory. A large primitive can produce several chunks
-during its single conversion unit.
+during its single conversion unit. All consumed textures are decoded and
+uploaded before primitive conversion, so source mesh arrays remain alive
+during image decoding and are released after their last instance is converted.
 
 `cancel()` drops partial work and an untaken completed result. Dropping a handle
 has the same ownership cleanup; errors release partial work while leaving the
@@ -448,7 +458,9 @@ shader decodes them; neither output mode changes this texture-filtering limit.
 `draw` flushes the collected GPU work before returning, restores the model stack
 and selects the default material. This makes dropping the renderer afterward
 safe; select your own material again before further custom drawing. It does not
-advance a frame, change the camera or clear the target. PBR, normal maps,
+advance a frame, change the camera or clear the target. Keep custom materials
+used by earlier queued draws alive until this flush completes, even after
+switching to a different material. PBR, normal maps,
 refraction, environment reflections and shadows are separate work.
 
 Inspect source bytes once to get structured warnings without opening a window

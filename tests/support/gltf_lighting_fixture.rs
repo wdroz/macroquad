@@ -232,6 +232,59 @@ pub(super) fn run(renderer: &mut GltfMaterialRenderer, target: &RenderTarget, ca
         );
     }
 
+    // Lighting changes RGB only: MASK still cuts texture alpha at 0.5 and
+    // BLEND keeps straight coverage alpha. Submit glass first so the pass
+    // sorting must move it after the depth-writing mask and blue backdrop.
+    let mut backdrop = quad(0., [0., 0., 1., 1.], GltfAlphaMode::Opaque);
+    backdrop.surface.unlit = true;
+    let mut mask = quad(0.5, [0.8, 0., 0., 1.], GltfAlphaMode::Mask);
+    mask.surface.emissive = [0., 0.2, 0.];
+    mask.mesh.texture = Some(texture(&[255, 255, 255, 127, 255, 255, 255, 128]));
+    let mut blend = quad(0.75, [0., 0.5, 0., 0.25], GltfAlphaMode::Blend);
+    blend.surface.emissive = [0.1, 0., 0.];
+    for part in [&mut mask, &mut blend] {
+        for vertex in &mut part.mesh.vertices {
+            vertex.normal = Vec3::Z.extend(0.);
+        }
+    }
+    let alpha = Fixture::new(vec![blend, mask, backdrop]);
+    // Linear fragment RGB is (.4,.2,0) for MASK and (.1,.25,0) for
+    // BLEND. Its alpha .25 gives (.025,.0625,.75) over blue and
+    // (.325,.2125,0) over MASK. sRGB mode encodes each fragment before
+    // blending, so it intentionally has different independently computed RGB.
+    for (output, left, right) in [
+        (GltfColorOutput::Linear, [6, 16, 191, 255], [83, 54, 0, 255]),
+        (
+            GltfColorOutput::Srgb,
+            [22, 34, 191, 255],
+            [149, 127, 0, 255],
+        ),
+    ] {
+        for geometry in [Geometry::Cpu, Geometry::Retained] {
+            clear_background(BLACK);
+            let mut frame = renderer.begin(camera.position, -Vec3::Z).unwrap();
+            frame.set_output(output);
+            frame.set_lighting(Some(half_light)).unwrap();
+            match geometry {
+                Geometry::Cpu => frame.submit(&alpha.cpu, identity).unwrap(),
+                Geometry::Retained => frame.submit_retained(&alpha.retained, identity).unwrap(),
+            }
+            assert_eq!(
+                frame.draw(),
+                GltfMaterialStats {
+                    opaque_draws: 1,
+                    mask_draws: 1,
+                    blend_draws: 1,
+                    skipped_draws: 0,
+                },
+                "lit alpha pass counts for {geometry:?} in {output:?}"
+            );
+            let image = read(target);
+            pixel(&image, 16, left, "lit BLEND over rejected MASK texel");
+            pixel(&image, 48, right, "lit BLEND over accepted MASK texel");
+        }
+    }
+
     let mut emissive = lit_quad(Vec3::Z);
     emissive.surface.emissive = [1.; 3];
     emissive.emissive_texture = Some(texture(&[4, 4, 4, 0, 8, 8, 8, 0]));

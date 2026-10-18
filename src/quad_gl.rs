@@ -1628,10 +1628,12 @@ mod shader {
 #include <metal_stdlib>
     using namespace metal;
 
+    // Match shader::uniforms(): Metal reads the uploaded buffer positionally.
     struct Uniforms
     {
-        float4x4 Model;
         float4x4 Projection;
+        float4x4 Model;
+        float4 _Time;
     };
 
     struct Vertex
@@ -1681,6 +1683,127 @@ mod shader {
                     .map(|(name, kind)| UniformDesc::new(name, kind))
                     .collect(),
             },
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use glam::{vec3, vec4, Mat4};
+
+        fn builtin_fields(source: &str) -> Vec<(&str, &str)> {
+            let declaration = source
+                .split_once("struct Uniforms")
+                .unwrap()
+                .1
+                .split_once('{')
+                .unwrap()
+                .1
+                .split_once('}')
+                .unwrap()
+                .0;
+            declaration
+                .split(';')
+                .take(3)
+                .filter_map(|field| {
+                    let mut words = field.split_whitespace();
+                    let ty = words.next()?;
+                    let name = words.next().unwrap();
+                    assert!(words.next().is_none());
+                    Some((name, ty))
+                })
+                .collect()
+        }
+
+        #[test]
+        fn metal_builtins_match_uploaded_bytes_and_noncommuting_transforms() {
+            // Metal consumes this buffer positionally; unlike GLSL, field
+            // names cannot repair a different declaration order. Parse the
+            // actual MSL declaration rather than repeating its expected order.
+            let fields = builtin_fields(METAL);
+            let meta = meta();
+            assert_eq!(fields.len(), meta.uniforms.uniforms.len());
+
+            // A pixel-space projection and translated/scaled model do not
+            // commute. Identity models would conceal the original MSL bug.
+            let projection = Mat4::from_cols_array(&[
+                1. / 32.,
+                0.,
+                0.,
+                0.,
+                0.,
+                1. / 32.,
+                0.,
+                0.,
+                0.,
+                0.,
+                1.,
+                0.,
+                -1.,
+                -1.,
+                0.,
+                1.,
+            ]);
+            let model =
+                Mat4::from_translation(vec3(16., 0., 0.)) * Mat4::from_scale(vec3(2., 1., 1.));
+            let mut bytes = Vec::new();
+            let mut msl_offsets = std::collections::BTreeMap::new();
+            for ((msl_name, msl_type), uniform) in fields.iter().zip(&meta.uniforms.uniforms) {
+                assert_eq!(*msl_name, uniform.name);
+                assert_eq!(uniform.array_count, 1);
+                let values = match uniform.name.as_str() {
+                    "Projection" => projection.to_cols_array().to_vec(),
+                    "Model" => model.to_cols_array().to_vec(),
+                    "_Time" => vec![2., 3., 5., 7.],
+                    name => panic!("unexpected built-in: {name}"),
+                };
+                assert_eq!(uniform.uniform_type.size(), values.len() * 4);
+                assert_eq!(
+                    *msl_type,
+                    if values.len() == 16 {
+                        "float4x4"
+                    } else {
+                        "float4"
+                    }
+                );
+                msl_offsets.insert(*msl_name, bytes.len());
+                bytes.extend(values.into_iter().flat_map(f32::to_ne_bytes));
+            }
+            assert_eq!(bytes.len(), 144);
+            let matrix = |name| {
+                let offset = msl_offsets[name];
+                Mat4::from_cols_array(&std::array::from_fn(|i| {
+                    f32::from_ne_bytes(
+                        bytes[offset + i * 4..offset + i * 4 + 4]
+                            .try_into()
+                            .unwrap(),
+                    )
+                }))
+            };
+            let position = vec4(4., 16., 0., 1.);
+            assert_eq!(
+                matrix("Projection") * matrix("Model") * position,
+                vec4(-0.25, -0.5, 0., 1.)
+            );
+            assert_ne!(model * projection * position, vec4(-0.25, -0.5, 0., 1.));
+            assert!(METAL.contains("uniforms.Projection * uniforms.Model * float4(v.position, 1)"));
+        }
+
+        #[test]
+        fn material_metal_documentation_and_examples_use_the_builtin_prefix() {
+            let expected = builtin_fields(METAL);
+            let documentation = include_str!("material.rs")
+                .lines()
+                .map(|line| line.trim_start_matches("///"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(builtin_fields(&documentation), expected);
+            let examples = include_str!("../examples/custom_material.rs");
+            let declarations: Vec<_> = examples.match_indices("struct Uniforms").collect();
+            assert_eq!(declarations.len(), 2);
+            for (offset, _) in declarations {
+                assert_eq!(builtin_fields(&examples[offset..]), expected);
+            }
         }
     }
 }
