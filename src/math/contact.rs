@@ -206,6 +206,28 @@ impl Capsule {
     /// assert_eq!(contact.penetration, 0.0);
     /// assert_eq!(contact.normal, Vec3::Y);
     /// ```
+    ///
+    /// A floor check is that contact: an upward normal and a shallow overlap. A
+    /// wall fails the upward test. The cutoff is the caller's slope limit.
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, Capsule, vec3};
+    ///
+    /// fn on_ground(body: &Capsule, floor: &Aabb) -> bool {
+    ///     let Some(contact) = body.contact_aabb(floor) else {
+    ///         return false;
+    ///     };
+    ///     contact.normal.y > 0.7 && contact.penetration < 0.05
+    /// }
+    ///
+    /// let body = Capsule::new(vec3(0.0, 0.5, 0.0), vec3(0.0, 1.5, 0.0), 0.5);
+    /// let floor = Aabb::from_min_max(vec3(-2.0, -1.0, -2.0), vec3(2.0, 0.0, 2.0));
+    /// assert!(on_ground(&body, &floor));
+    /// let wall = Aabb::from_min_max(vec3(0.5, 0.0, -1.0), vec3(1.5, 2.0, 1.0));
+    /// assert!(!on_ground(&body, &wall));
+    /// let airborne = Capsule::new(vec3(0.0, 2.0, 0.0), vec3(0.0, 3.0, 0.0), 0.5);
+    /// assert!(!on_ground(&airborne, &floor));
+    /// ```
     pub fn contact_aabb(&self, aabb: &Aabb) -> Option<Contact> {
         if !capsule_is_usable(self) || !box_is_usable(aabb) {
             return None;

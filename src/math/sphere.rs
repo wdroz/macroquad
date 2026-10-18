@@ -186,6 +186,21 @@ impl Sphere {
     /// assert_eq!(hit.t, 1.0);
     /// assert_eq!(hit.point, -Vec3::X);
     /// ```
+    ///
+    /// An origin inside the sphere reports `t == 0` and a zero normal. An origin
+    /// on the surface keeps the outward normal when `direction` points inward.
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let ball = Sphere::new(Vec3::ZERO, 1.0);
+    /// let inside = ball.ray_intersect(Vec3::ZERO, Vec3::X).unwrap();
+    /// assert_eq!(inside.t, 0.0);
+    /// assert_eq!(inside.normal, Vec3::ZERO);
+    /// let entering = ball.ray_intersect(-Vec3::X, Vec3::X).unwrap();
+    /// assert_eq!(entering.t, 0.0);
+    /// assert_eq!(entering.normal, -Vec3::X);
+    /// ```
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         if !self.radius.is_finite() || self.radius < 0.0 {
             return None;

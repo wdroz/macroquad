@@ -214,6 +214,9 @@ impl Plane {
     /// assert_eq!(hit.t, 4.0);
     /// assert_eq!(hit.point, vec3(1.0, 0.0, 2.0));
     /// assert_eq!(hit.normal, Vec3::Y);
+    /// let already = ground.ray_intersect(vec3(1.0, 0.0, 2.0), -Vec3::Y).unwrap();
+    /// assert_eq!(already.t, 0.0);
+    /// assert_eq!(already.normal, Vec3::Y);
     /// ```
     pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
         if !origin.is_finite()

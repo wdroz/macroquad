@@ -53,6 +53,30 @@ struct SlideHit {
 /// assert!((moved.x - 1.0).abs() < 1e-4);
 /// assert!((moved.y - 0.5).abs() < 1e-4);
 /// ```
+///
+/// Gravity stays in the caller. Add it to the velocity, then slide. A downward
+/// step that the floor refuses clears that speed. This is not a rigid body.
+///
+/// ```
+/// use macroquad::math::{slide_sphere, Aabb, Vec3, vec3};
+///
+/// fn step_sphere(center: &mut Vec3, velocity: &mut Vec3, solids: &[Aabb], dt: f32) {
+///     *velocity += vec3(0.0, -9.8, 0.0) * dt;
+///     let next = slide_sphere(*center, 0.5, *velocity * dt, solids, &[]);
+///     if velocity.y < 0.0 && next.y > center.y + velocity.y * dt + 1e-4 {
+///         velocity.y = 0.0;
+///     }
+///     *center = next;
+/// }
+///
+/// let floor = Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(8.0, 1.0, 8.0));
+/// let mut center = vec3(0.0, 0.5, 0.0);
+/// let mut velocity = vec3(2.0, 0.0, 0.0);
+/// step_sphere(&mut center, &mut velocity, &[floor], 1.0 / 60.0);
+/// assert!((center.y - 0.5).abs() < 1e-3);
+/// assert!(center.x > 0.0);
+/// assert_eq!(velocity.y, 0.0);
+/// ```
 pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs: &[Obb]) -> Vec3 {
     if !center.is_finite() || !delta.is_finite() {
         return center;

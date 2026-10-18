@@ -38,8 +38,24 @@
 //! Node `extras` are preferred: `mq_shape` is `box`, `sphere`, or `capsule`,
 //! and `mq_role` is `collider`, `trigger`, or `spawn`. When `mq_role` is
 //! absent, a name ending in `_collider`, `_trigger`, or `_spawn` supplies the
-//! role. A spawn stores the world translation and the node name, and ignores
-//! `mq_shape`.
+//! role. That ending is case-sensitive: `Crate_collider` is a collider role
+//! and `Player_Spawn` is not a spawn. An empty with a role but no `mq_shape`
+//! and no mesh is still not emitted as a collider. A spawn stores the world
+//! translation and the node name, and ignores `mq_shape`.
+//!
+//! ```
+//! use macroquad::gltf::GltfScene;
+//!
+//! let scene = GltfScene::from_bytes(
+//!     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"nodes":[
+//!         {"name":"Crate_collider","scale":[2.0,1.0,0.5],"extras":{"mq_shape":"box"}},
+//!         {"name":"Player_Spawn","translation":[1.0,0.0,0.0]}
+//!     ]}"#,
+//! )
+//! .unwrap();
+//! assert_eq!(scene.colliders.len(), 1);
+//! assert!(scene.spawns.is_empty());
+//! ```
 //!
 //! An empty `box` or `sphere` is centered on the world-matrix translation. Its
 //! size is the length of each column of that matrix's upper 3×3, so a parent's

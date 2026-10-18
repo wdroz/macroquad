@@ -50,11 +50,15 @@ clamp sampling; use WebGL 2 for full NPOT sampler behavior.
 `Texture2D::from_rgba8_mipmapped` also exposes managed mipmapped texture creation
 with preallocated mip levels for Metal.
 
-`Aabb`, `Sphere`, `Ray`, `Plane`, `Triangle`, and `Obb` live in
-`macroquad::math` and the prelude. [docs/3d-guide.md](docs/3d-guide.md) covers
-those queries, and the small amount of physics and character movement a game
-can write with them today. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)
-is the export and loading tutorial. Bot-added examples are listed in
+`Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, and `Obb` live in
+`macroquad::math` and the prelude. `Contact` describes an overlapping pair,
+`SweepHit` is a moving box or sphere against one static box, and
+`slide_sphere` keeps the leftover motion along a face. There is no rigid-body
+world and no character controller. [docs/3d-guide.md](docs/3d-guide.md) covers
+the queries and the application code a game writes for gravity and a capsule
+on a floor. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)
+is the export and loading tutorial, including `with_up_axis` and the
+collider / trigger / spawn names. Bot-added examples are listed in
 [examples/README.md](examples/README.md).
 
 The default mesh chunk limits fit macroquad's default buffers. For larger

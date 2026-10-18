@@ -59,7 +59,7 @@ Requires `--features gltf`. With no argument it draws `assets/textured_quad.glb`
 
 Requires `--features gltf`. A rolling-ball maze. The level is `assets/marble_maze.glb` (regenerate with Blender: `blender --background --python assets/gen_marble_maze.py`). The marble starts at `player_spawn`. Arrow keys or WASD accelerate it on the XZ plane. Up and W roll toward -Z. Gravity is applied in the example. R returns to the spawn. The gold ring is the `goal_trigger` sphere. Escape quits.
 
-The chase camera sets `up: Vec3::Y`. `Camera3D`'s default up is +Z, and this file is Y-up. Walls are mesh nodes whose names end in `_collider` and have no `mq_shape`, so a rotated mesh is still the world `Aabb` of its positions. The example builds an `Obb` from that node's world matrix. A node with `mq_shape` = `box` would already be an `Obb` sized to the mesh.
+The chase camera sets `up: Vec3::Y`. `Camera3D`'s default up is +Z, and this file is Y-up, so the example does not call `GltfScene::with_up_axis` or `GltfModel::with_up_axis`. Walls are mesh nodes whose names end in `_collider` and have no `mq_shape`, so a rotated mesh is still the world `Aabb` of its positions. The example builds an `Obb` from that node's world matrix. A node with `mq_shape` = `box` would already be an `Obb` sized to the mesh. The overlap probe is 0.02 smaller than the drawn marble. `slide_sphere` accepts the full radius; this example keeps the probe it shipped with. Falling below the floor returns to the spawn. The goal sphere is drawn by the example; the imported trigger is not a mesh.
 
 ## Assets
 

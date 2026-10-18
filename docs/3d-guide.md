@@ -6,7 +6,7 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 
 `draw_cube` / `draw_cube_wires` take a center and a **full** size. `Aabb::from_center_size` uses that same pair. `Obb::half_extents` is half of that full size. `Capsule` `a` and `b` are the inner segment, so the hull extends `radius` past each end.
 
-There is no rigid-body world and no character controller in the library yet. The last two sections show the application code those features will replace. The narrative for loading a Blender level is [blender-to-macroquad.md](blender-to-macroquad.md).
+There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, and `slide_sphere` are queries a game uses to write those itself. The physics and character sections below are that application code. The narrative for loading a Blender level is [blender-to-macroquad.md](blender-to-macroquad.md).
 
 ## Ray hits
 
@@ -14,9 +14,17 @@ Every ray query returns `Option<RayHit>`:
 
 - `t` is the parameter along `origin + direction * t`. It is a distance only when `direction` is a unit vector.
 - `point` is the world position of the hit.
-- `normal` is the outward unit normal, except when the origin is already inside a solid (`t == 0`), where it is zero.
+- `normal` is a unit vector, or zero. `t == 0` does not by itself mean the normal is zero.
 
 Hits with `t < 0` are behind the origin and are rejected. Boundaries are inclusive, same as `Rect`: touching a face, edge, or corner counts. A non-finite origin, direction, or shape misses.
+
+`Aabb`, `Obb`, `Sphere`, and `Capsule` have an interior:
+
+- An origin inside the shape reports `t == 0` and a zero normal.
+- An origin on the surface with `direction` pointing outward, or a zero direction, also reports `t == 0` and a zero normal.
+- An origin on the surface with `direction` pointing inward or tangent reports `t == 0` and the outward normal.
+
+`Plane` and `Triangle` have no interior. A hit reports the plane normal or the triangle's winding normal, including when the origin already lies on the shape. That normal is not flipped to face the ray.
 
 ```rust
 use macroquad::math::{Aabb, vec3, Vec3};
@@ -179,7 +187,7 @@ assert!(body.overlaps_sphere(&Sphere::new(vec3(1.0, 0.5, 0.0), 0.5)));
 
 `Contact` is one overlapping pair: `normal`, `penetration`, and `point`. It does not move either shape. The normal points from the second shape toward the first. A pair that only touches still returns a contact with penetration `0`, so a sphere sitting on a floor is a contact. Separated shapes return `None`.
 
-`Aabb::contact`, `Sphere::contact`, `Sphere::contact_aabb`, `Capsule::contact_sphere`, and `Capsule::contact_aabb` are the queries. Mass and impulses are not here.
+`Aabb::contact`, `Sphere::contact`, `Sphere::contact_aabb`, `Capsule::contact_sphere`, and `Capsule::contact_aabb` are the queries. Mass and impulses are not here. A capsule whose inner segment runs through a thin box is separated on the short face, not along the segment.
 
 ```rust
 use macroquad::math::{Aabb, Sphere, Vec3, vec3};
@@ -190,34 +198,6 @@ let contact = ball.contact_aabb(&floor).unwrap();
 assert_eq!(contact.penetration, 0.0);
 assert_eq!(contact.normal, Vec3::Y);
 ```
-
-## Physics
-
-The library does not integrate velocity, apply gravity, or solve contacts. There is no `RigidBody` type. A game that needs a falling body keeps the velocity itself and uses the queries above to accept or reject a step.
-
-This is application code, not a macroquad type. It only handles a floor. It does not slide along a wall, separate an overlap that already exists, or apply restitution. A step that starts overlapping the floor never moves. A step that would enter the floor is discarded, so the body stops a little above the surface instead of snapping to it. Touching already counts as an overlap.
-
-```rust
-use macroquad::math::{Aabb, Vec3, vec3};
-
-struct Body {
-    shape: Aabb,
-    velocity: Vec3,
-}
-
-fn step_body(body: &mut Body, floor: &Aabb, dt: f32) {
-    let gravity = vec3(0.0, -9.8, 0.0);
-    body.velocity += gravity * dt;
-    let next = body.shape.offset(body.velocity * dt);
-    if next.overlaps(floor) {
-        body.velocity.y = body.velocity.y.max(0.0);
-    } else {
-        body.shape = next;
-    }
-}
-```
-
-`Contact` reports an overlap. It does not assign mass or apply an impulse, and there is no solver. Those stay later roadmap items.
 
 ## Sweep
 
@@ -243,7 +223,7 @@ assert!(ball.sweep_aabb(vec3(1.0, 0.0, 0.0), &floor).is_none());
 
 ## Sphere slide
 
-`slide_sphere(center, radius, delta, aabbs, obbs)` returns the new center. The sphere moves by `delta`, stops on an `Aabb` or `Obb`, and keeps the motion along that face. A sphere that only touches a floor still strafes, so the caller does not shrink the radius. A center that starts inside a box is pushed out along the nearest face first. There is no gravity here.
+`slide_sphere(center, radius, delta, aabbs, obbs)` returns the new center. The sphere moves by `delta`, stops on an `Aabb` or `Obb`, and keeps the motion along that face. A sphere that only touches a floor still strafes, so the caller does not shrink the radius. A center that starts inside a box is pushed out along that box's shortest axis before the move: a world axis for an `Aabb`, one of the box's own axes for an `Obb`. There is no gravity here.
 
 ```rust
 use macroquad::math::{slide_sphere, Aabb, vec3};
@@ -254,36 +234,45 @@ assert!((moved.x - 1.0).abs() < 1e-4);
 assert!((moved.y - 0.5).abs() < 1e-4);
 ```
 
-## Character movement
+## Physics
 
-There is no character controller. `on_ground`, slope limits, and step offsets are not in the library. `Capsule` is the body shape that controller will use; nothing here moves one yet. `slide_sphere` already slides a sphere, and `Aabb::sweep` / `Sphere::sweep_aabb` are the continuous tests against one box.
+The library does not integrate velocity, apply gravity, or solve contacts. There is no `RigidBody` type. A game keeps the velocity and calls `slide_sphere` for a sphere against boxes. Gravity is added to the velocity first. The slide keeps the part of the step that lies on a face, so a resting sphere still strafes and a wall removes only the component into the wall. Restitution and mass are not applied. `Contact` describes an overlap that already exists; it does not move either shape.
 
-The pattern below is the discrete fallback. It moves a kinematic AABB and blocks the whole step when the next position overlaps a static box. Touching counts as an overlap, so a move that stays in contact with the floor is rejected if the floor is in `static_boxes`. A large step can tunnel through a thin wall, and a slope blocks the move the same way a wall does. `Aabb::sweep` against one box reports that crossing; it does not walk a slice or a slope.
+This is application code, not a macroquad type. The floor is one of the solids. A downward step that the slide refuses clears the vertical speed. A step in open air keeps it.
 
 ```rust
-use macroquad::math::{Aabb, Vec3, vec3};
+use macroquad::math::{slide_sphere, Aabb, Vec3, vec3};
 
-fn try_move(body: &mut Aabb, wish: Vec3, static_boxes: &[Aabb]) -> bool {
-    let next = body.offset(wish);
-    if static_boxes.iter().any(|solid| next.overlaps(solid)) {
-        return false;
+fn step_sphere(center: &mut Vec3, velocity: &mut Vec3, solids: &[Aabb], dt: f32) {
+    *velocity += vec3(0.0, -9.8, 0.0) * dt;
+    let next = slide_sphere(*center, 0.5, *velocity * dt, solids, &[]);
+    if velocity.y < 0.0 && next.y > center.y + velocity.y * dt + 1e-4 {
+        velocity.y = 0.0;
     }
-    *body = next;
-    true
-}
-
-fn on_ground(body: &Aabb, static_boxes: &[Aabb]) -> bool {
-    // Inclusive overlap means a body standing on a floor already touches it.
-    // Probe the thin slab under the feet instead of shifting the whole body.
-    let probe = Aabb::from_min_max(
-        vec3(body.min.x, body.min.y - 0.05, body.min.z),
-        vec3(body.max.x, body.min.y, body.max.z),
-    );
-    static_boxes.iter().any(|solid| probe.overlaps(solid))
+    *center = next;
 }
 ```
 
-Keep the floor out of the horizontal test, then move vertically on its own, if sideways motion should slide along the ground. That split is still a discrete overlap test. `Aabb::sweep` against the floor alone reports the vertical impact, and a sideways delta that only touches the floor is `None`.
+Rejecting a whole step with `overlaps` sticks a sphere that is only touching a floor, because boundaries are inclusive. `slide_sphere` is the call that still moves along that face. A center that starts inside a box is pushed out along the shortest axis before `delta` is applied. Reading `Sphere::contact_aabb` reports that overlap; it does not perform the push.
+
+## Character movement
+
+There is no character controller. `on_ground`, slope limits, and step offsets are not library fields. `Capsule` is the body shape that controller will use. Nothing here moves a capsule: `slide_sphere` takes a sphere, and the sweep queries are `Aabb::sweep` and `Sphere::sweep_aabb` against one static box.
+
+A capsule standing on a floor is a `Contact` with an upward normal and a penetration of `0`. That is the ground test. A wall's normal fails the upward check, so the same query does not treat a wall as a floor. A slope limit is the cutoff on `normal.y` in this function; the library does not store one.
+
+```rust
+use macroquad::math::{Aabb, Capsule, vec3};
+
+fn on_ground(body: &Capsule, floor: &Aabb) -> bool {
+    let Some(contact) = body.contact_aabb(floor) else {
+        return false;
+    };
+    contact.normal.y > 0.7 && contact.penetration < 0.05
+}
+```
+
+Wish velocity is still the caller's. Add it to the capsule with `offset`, then test `overlaps_aabb` or `contact_aabb` against each static box. A touch counts as an overlap, so a capsule that stays on the floor is rejected when the floor is in that list. Keep the floor out of the horizontal test, then move vertically on its own. A large step can tunnel through a thin wall. `Aabb::sweep` against one box reports that crossing; a sideways delta that only touches the floor is `None`. Neither query walks a slope or a step offset. Those stay in the game until the character controller exists.
 
 ## Drawing
 

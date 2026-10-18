@@ -21,11 +21,14 @@
 //! ## 3D collision and glTF
 //!
 //! [`math`] contains [`math::Aabb`], [`math::Sphere`], [`math::Capsule`],
-//! [`math::Ray`], [`math::Plane`], [`math::Triangle`], and [`math::Obb`]. They
-//! do not assume an up axis. The `gltf` feature parses a Blender glTF 2.0
-//! export without a window and can draw a `.glb` once one is running. Guides:
-//! `docs/3d-guide.md`
-//! and `docs/blender-to-macroquad.md`.
+//! [`math::Ray`], [`math::Plane`], [`math::Triangle`], and [`math::Obb`].
+//! [`math::Contact`] describes an overlap, [`math::SweepHit`] is a moving box
+//! or sphere against a static box, and [`math::slide_sphere`] keeps the motion
+//! along a face. They do not assume an up axis. The `gltf` feature parses a
+//! Blender glTF 2.0 export without a window and can draw a `.glb` once one is
+//! running. `GltfScene::with_up_axis` and `GltfModel::with_up_axis` share one
+//! caller-chosen up axis; `Vec3::Y` leaves a file unchanged. Guides:
+//! `docs/3d-guide.md` and `docs/blender-to-macroquad.md`.
 //!
 //! ```
 //! use macroquad::math::{Aabb, vec3};
