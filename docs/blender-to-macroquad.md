@@ -148,7 +148,7 @@ For glass, submit all opaque geometry first, then blended geometry back to front
 
 `GltfModel::from_bytes_with_limits` splits a mesh into 16-bit chunks. The default limit matches `Conf`'s default draw-call capacities (10_000 vertices, 5_000 indices). A larger chunk needs both a higher `GltfMeshLimits` and higher `draw_call_vertex_capacity` / `draw_call_index_capacity`.
 
-The draw-call capacities are upper limits, not a GPU reservation for every material group. Each streaming vertex/index buffer starts at the submitted chunk's actual size and grows geometrically only when a later draw needs more space, bounded by the configured limit. Buffers retain their high-water capacity for reuse; changing the limits releases them for lazy recreation. Clearing queued draws also discards their queued CPU geometry. This keeps large permitted chunks affordable in scenes that contain hundreds of small meshes.
+The draw-call capacities are upper limits, not a GPU reservation for every material group. Each streaming vertex/index buffer starts at the submitted chunk's actual size and grows geometrically only when a later draw needs more space, bounded by the configured limit. Buffers retain their high-water capacity for reuse; changing the limits releases them for lazy recreation. Clearing queued draws also discards their queued CPU geometry. This keeps large permitted chunks affordable in scenes that contain hundreds of small meshes. Final GLB mesh chunks discard unused vector capacity, and conversion releases each source mesh after its last node instance so later image decoding can reuse that CPU memory.
 
 For a browser or a scene with many large images, opt into a texture budget:
 

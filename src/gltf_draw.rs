@@ -16,7 +16,7 @@ use miniquad::{MipmapFilterMode, TextureWrap};
 
 use crate::{
     color::Color,
-    gltf::{GltfPrimitive, GltfScene},
+    gltf::{GltfMesh, GltfPrimitive, GltfScene},
     models::{draw_mesh, Mesh, Vertex},
     texture::{FilterMode, Texture2D},
 };
@@ -384,7 +384,7 @@ impl GltfModel {
         if options.max_texture_size == Some(0) {
             return Err("max_texture_size must be greater than zero".into());
         }
-        let (scene, document, binary) = prepare_glb(bytes)?;
+        let (mut scene, document, binary) = prepare_glb(bytes)?;
         // The CPU loader visits nodes in preorder and meshes in first-use order.
         // Recreate that same source-mesh mapping, rather than assuming indices
         // happen to match the file (unused meshes and instances are legal).
@@ -422,6 +422,12 @@ impl GltfModel {
         let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
         let mut root_names = Vec::new();
         let mut paths: Vec<String> = Vec::with_capacity(scene.nodes.len());
+        let mut mesh_uses = vec![0usize; scene.meshes.len()];
+        for node in &scene.nodes {
+            if let Some(mesh) = node.mesh {
+                mesh_uses[mesh] += 1;
+            }
+        }
         for (node_index, node) in scene.nodes.iter().enumerate() {
             let mesh_name = node
                 .mesh
@@ -543,6 +549,7 @@ impl GltfModel {
                     });
                 }
             }
+            release_mesh_after_instance(&mut scene.meshes[mesh_index], &mut mesh_uses[mesh_index]);
         }
         if parts.is_empty() {
             bounds_min = Vec3::ZERO;
@@ -1043,6 +1050,24 @@ fn validate_limits(limits: GltfMeshLimits) -> Result<(), String> {
     Ok(())
 }
 
+// The model owns its converted chunks. Release source arrays as soon as the
+// last node instance has copied them, allowing later image decodes to reuse
+// that memory instead of retaining both full representations until return.
+fn release_mesh_after_instance(mesh: &mut GltfMesh, remaining: &mut usize) {
+    *remaining -= 1;
+    if *remaining == 0 {
+        mesh.primitives.clear();
+    }
+}
+
+fn packed_chunk(mut vertices: Vec<Vertex>, mut indices: Vec<u16>) -> (Vec<Vertex>, Vec<u16>) {
+    // Final chunks live for the model's lifetime. Geometric growth slack is
+    // useful while building them, but can waste nearly another mesh afterward.
+    vertices.shrink_to_fit();
+    indices.shrink_to_fit();
+    (vertices, indices)
+}
+
 fn split_triangles(
     vertices: &[Vertex],
     indices: &[u32],
@@ -1071,7 +1096,7 @@ fn split_triangles(
             && (chunk_vertices.len() + additional > limits.vertices
                 || chunk_indices.len() + 3 > limits.indices)
         {
-            result.push((
+            result.push(packed_chunk(
                 std::mem::take(&mut chunk_vertices),
                 std::mem::take(&mut chunk_indices),
             ));
@@ -1087,7 +1112,7 @@ fn split_triangles(
         }
     }
     if !chunk_indices.is_empty() {
-        result.push((chunk_vertices, chunk_indices));
+        result.push(packed_chunk(chunk_vertices, chunk_indices));
     }
     Ok(result)
 }
@@ -1389,6 +1414,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(chunks.len(), 2);
+        assert!(chunks
+            .iter()
+            .all(|(vertices, indices)| vertices.capacity() == vertices.len()
+                && indices.capacity() == indices.len()));
         let restored: Vec<_> = chunks
             .iter()
             .flat_map(|(v, i)| i.iter().map(|&index| v[index as usize].position.x as u32))
@@ -1397,6 +1426,21 @@ mod tests {
         assert!(chunks
             .iter()
             .all(|(v, i)| v.len() <= 60_000 && i.len() <= 60_000 && i.len() % 3 == 0));
+    }
+
+    #[test]
+    fn source_mesh_is_released_only_after_its_last_instance() {
+        let (mut scene, _, _) =
+            prepare_glb(include_bytes!("../examples/assets/textured_quad.glb")).unwrap();
+        let mesh = &mut scene.meshes[0];
+        let expected = mesh.primitives[0].positions.clone();
+        let mut remaining = 2;
+        release_mesh_after_instance(mesh, &mut remaining);
+        assert_eq!(remaining, 1);
+        assert_eq!(mesh.primitives[0].positions, expected);
+        release_mesh_after_instance(mesh, &mut remaining);
+        assert_eq!(remaining, 0);
+        assert!(mesh.primitives.is_empty());
     }
 
     #[test]
