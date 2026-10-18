@@ -46,6 +46,7 @@ async fn main() {
         if is_key_pressed(KeyCode::Escape) {
             break;
         }
+        let retire_resources = is_key_pressed(KeyCode::R);
         clear_background(Color::new(0.06, 0.08, 0.12, 1.));
         let camera = Camera3D {
             position: vec3(0., 1., 6.),
@@ -80,7 +81,7 @@ async fn main() {
             WHITE,
         );
         draw_text(
-            format!("{submitted} visible chunks | CPU geometry released | Escape exits"),
+            format!("{submitted} chunks | CPU geometry released | R trims caches | Escape exits"),
             20.,
             58.,
             20.,
@@ -103,6 +104,16 @@ async fn main() {
         // while drawing the retained instances contributes no new uploads.
         previous = telemetry::renderer_diagnostics().counters;
         telemetry::reset_renderer_diagnostics();
+        if retire_resources {
+            // A finished-frame boundary is suitable for scene transitions.
+            // All three live instances remain valid. UI streaming caches are
+            // released here and allocated again on their next draw.
+            retire_unused_render_resources();
+            println!(
+                "After retirement (not driver/process memory): {:#?}",
+                telemetry::renderer_diagnostics()
+            );
+        }
     }
 }
 

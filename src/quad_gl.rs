@@ -1321,24 +1321,28 @@ impl QuadGl {
         self.max_indices = max_indices;
         self.clear_draw_calls();
         self.collect_retained_meshes(ctx);
-        // This explicit, infrequent reset is also used between large scenes.
-        // Release old CPU high-water allocations so the next asset load can
-        // reuse that memory; ordinary frame clears retain capacity as usual.
-        self.batch_vertex_buffer.shrink_to_fit();
-        self.batch_index_buffer.shrink_to_fit();
+        self.trim_drawcall_buffers(ctx);
+    }
 
-        for draw_call in &mut self.draw_calls {
-            draw_call.indices_start = 0;
-            draw_call.vertices_start = 0;
-        }
-        // Capacity changes discard the old buffers. Recreate only the slots
-        // needed by the next draw, using their geometry size at that point.
+    // The caller must submit or explicitly cancel pending work first. This
+    // releases cache allocations without changing draw limits or live state.
+    pub(crate) fn trim_drawcall_buffers(&mut self, ctx: &mut dyn RenderingBackend) {
+        debug_assert_eq!(self.draw_calls_count, 0);
+        debug_assert!(self.batch_vertex_buffer.is_empty());
+        debug_assert!(self.batch_index_buffer.is_empty());
+        self.batch_vertex_buffer = Vec::new();
+        self.batch_index_buffer = Vec::new();
+        self.draw_calls = Vec::new();
+        self.retained_bindings = None;
+        self.retained_meshes.shrink_to_fit();
+        // Recreate only the slots needed by the next draw, at that draw's size.
         for binding in self.draw_calls_bindings.drain(..) {
             ctx.delete_buffer(binding.index_buffer);
             for vertex_buffer in &binding.vertex_buffers {
                 ctx.delete_buffer(*vertex_buffer);
             }
         }
+        self.draw_calls_bindings = Vec::new();
     }
 
     pub(crate) fn set_diagnostics_enabled(&mut self, enabled: bool) {

@@ -145,8 +145,43 @@ benchmark. Model and renderer buffer totals overlap: do not add them together.
 
 Dropped handles can remain in the renderer report until a flush collects them;
 pending draws deliberately keep their resources alive. Compare snapshots at
-the same frame boundary when testing repeated load/drop cycles. Diagnostics do
-not add a new resource-retirement operation.
+the same frame boundary when testing repeated load/drop cycles.
+
+## Retiring unused render resources
+
+At a scene transition, use `macroquad::window::retire_unused_render_resources()`
+after finishing the outgoing frame and dropping its resources, before loading
+the replacement scene. Select a surviving camera and material first; release
+obsolete models, textures, render targets and custom material texture bindings.
+For example, a scene drawn with the default material can be released with:
+
+```rust,no_run
+use macroquad::gltf_draw::RetainedGltfModel;
+use macroquad::prelude::*;
+# async fn unload_scene(scene: RetainedGltfModel) {
+next_frame().await;
+set_default_camera();
+gl_use_default_material();
+drop(scene);
+retire_unused_render_resources();
+// Load the replacement scene here.
+# }
+```
+
+The operation flushes any pending draws before collecting unused managed
+textures and retained meshes. A queued draw still renders even if its last
+application mesh or texture handle was dropped. Custom materials used by queued
+draws must stay alive through retirement, even after switching materials.
+Live handles and shared model instances remain
+valid; resources still owned by a camera, material binding or another handle
+are not unused. Ordinary pause does not retire live scene resources.
+
+Retirement also releases cached streaming CPU/GPU buffers and draw slots while
+preserving configured batch-capacity limits. Later immediate draws allocate
+these caches again, so use this at transitions rather than every frame. The
+operation releases renderer-owned allocations; it does not promise a reduction
+in total process memory or immediate reclamation by the graphics driver. Take
+resource-diagnostic snapshots at this same boundary to compare load/drop cycles.
 
 ## Loading and materials
 

@@ -33,6 +33,62 @@ pub fn gl_set_drawcall_buffer_capacity(max_vertices: usize, max_indices: usize) 
         .update_drawcall_capacity(get_quad_context(), max_vertices, max_indices);
 }
 
+/// Flushes queued geometry and releases unused renderer resources.
+///
+/// Use this at an infrequent scene-transition boundary, after
+/// [`next_frame().await`](next_frame) has finished the old frame and before
+/// loading the replacement scene. Switch away from the old camera/render target
+/// and material before dropping them. Drop the old scene and release any
+/// material texture bindings that still own its textures, then call this
+/// function. Any geometry queued since the last frame is submitted first, so
+/// dropping a mesh or texture used by that geometry does not cancel its draw.
+/// Deferred UI work is rendered by `next_frame`, not by this operation.
+///
+/// Managed textures and retained mesh buffers are collected only after their
+/// last owner is gone. Live textures, retained meshes, materials and render
+/// targets remain valid; keep the active camera's render target and material
+/// alive until switching away from them. Custom materials referenced by queued
+/// draws must stay alive through this call, even after switching materials.
+/// Weak and unmanaged handles do not own resources. Drawing state and
+/// configured draw-call capacity limits are kept.
+/// Users of raw internal geometry must rebind any texture they have released.
+///
+/// Cached immediate CPU geometry, draw-call storage and streaming GPU buffers
+/// are released and recreated as needed on subsequent draws. This may cause
+/// allocation work next frame, so do not call it every frame or for an ordinary
+/// pause. Pausing and normal frame boundaries do not perform this trim. The
+/// graphics driver may defer deletion; this is not a guarantee that process or
+/// driver memory usage immediately decreases. Requires a live window and its
+/// render thread, like the drawing functions.
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// # async fn unload_scene(old_scene: RetainedMesh) {
+/// next_frame().await;
+/// set_default_camera();
+/// gl_use_default_material();
+/// drop(old_scene);
+/// retire_unused_render_resources();
+/// // Load the next scene here; surviving shared handles can still be drawn.
+/// # }
+/// ```
+pub fn retire_unused_render_resources() {
+    let context = get_context();
+    context.perform_render_passes();
+    context.gl.trim_drawcall_buffers(get_quad_context());
+    let quad_context = get_quad_context();
+    if quad_context.info().backend == miniquad::Backend::OpenGl {
+        // miniquad 0.4.11's GL texture deletion leaves texture bindings cached.
+        // Clear them before deletion, as the ordinary end-of-frame path does,
+        // so reused GL names cannot corrupt subsequent texture uploads. On GL,
+        // commit_frame only clears bindings; Metal must not commit mid-frame.
+        quad_context.commit_frame();
+    }
+    // Submission releases queued mesh/texture owners. Collect afterwards,
+    // including textures whose last owner was a just-submitted draw.
+    context.textures.garbage_collect(quad_context);
+}
+
 pub struct InternalGlContext<'a> {
     pub quad_context: &'a mut dyn miniquad::RenderingBackend,
     pub quad_gl: &'a mut crate::quad_gl::QuadGl,
