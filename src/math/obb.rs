@@ -272,7 +272,7 @@ impl Obb {
     }
 
     /// Unit rotation of a usable box, or [`None`] when a query should miss.
-    fn pose(&self) -> Option<Quat> {
+    pub(crate) fn pose(&self) -> Option<Quat> {
         if self.is_empty() || !self.center.is_finite() || !self.half_extents.is_finite() {
             return None;
         }

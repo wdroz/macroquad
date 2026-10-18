@@ -2,8 +2,9 @@
 //!
 //! Consists of re-exported `glam` types with some additions, including 2D
 //! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Capsule`],
-//! [`Ray`], [`Plane`], and [`Triangle`]. The 3D types are unitless and do not
-//! assume an up axis. `docs/3d-guide.md` walks through them.
+//! [`Ray`], [`Plane`], and [`Triangle`]. [`slide_sphere`] moves a sphere along
+//! [`Aabb`] and [`Obb`] faces. The 3D types are unitless and do not assume an
+//! up axis. `docs/3d-guide.md` walks through them.
 //!
 //! ```
 //! use macroquad::math::{Aabb, Ray, vec3, Vec3};
@@ -22,6 +23,7 @@ mod obb;
 mod plane;
 mod ray;
 mod rect;
+mod slide;
 mod sphere;
 mod triangle;
 
@@ -32,6 +34,7 @@ pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};
 pub use rect::{Rect, RectOffset};
+pub use slide::slide_sphere;
 pub use sphere::Sphere;
 pub use triangle::Triangle;
 
