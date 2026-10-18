@@ -13,7 +13,19 @@ async fn main() {
     };
     set_gltf_resource_diagnostics_enabled(true);
     telemetry::set_renderer_diagnostics_enabled(true);
-    let cpu = GltfModel::from_bytes(include_bytes!("assets/textured_quad.glb")).unwrap();
+    // Reject oversized source images before decoding. The separate upload cap
+    // resizes only accepted images; neither value bounds decoder scratch memory.
+    let settings = GltfLoadOptions {
+        max_texture_size: Some(512),
+        ..Default::default()
+    }
+    .with_image_limits(GltfImageLimits {
+        max_source_pixels: Some(2048 * 2048),
+        max_decoded_bytes: Some(16 * 1024 * 1024),
+    });
+    let cpu =
+        GltfModel::from_bytes_with_settings(include_bytes!("assets/textured_quad.glb"), settings)
+            .unwrap();
     let center = (cpu.bounds_min + cpu.bounds_max) * 0.5;
     let scale = 1.4 / (cpu.bounds_max - cpu.bounds_min).length().max(0.001);
     // `false` releases the CPU vertices and indices after upload.

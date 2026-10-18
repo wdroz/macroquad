@@ -45,7 +45,9 @@
 //!
 //! CPU images are decoded at their source resolution. The draw loader's
 //! [`crate::gltf_draw::GltfLoadOptions::max_texture_size`] does not limit this
-//! separate scene parse. If only drawing is needed, load a
+//! separate scene parse. Use [`GltfScene::from_bytes_with_image_limits`] to
+//! reject oversized source images before decoding; its RGBA8 estimate does
+//! not bound decoder scratch memory or total scene memory. If only drawing is needed, load a
 //! [`crate::gltf_draw::GltfModel`] directly; parse a [`GltfScene`] as well when
 //! the application needs its CPU geometry, images, node hierarchy, or markers.
 //! A [`crate::gltf_draw::RetainedGltfModel`] can share the uploaded geometry
@@ -106,6 +108,9 @@ use std::{
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
 use crate::math::{Aabb, Capsule, Obb, Sphere};
+
+pub(crate) mod image_limits;
+pub use image_limits::GltfImageLimits;
 
 /// A parsed glTF scene: the default scene's nodes, the meshes they use, and
 /// the base-color images those meshes sample.
@@ -517,6 +522,31 @@ impl GltfScene {
     /// }
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<GltfScene, GltfError> {
+        Self::from_bytes_with_image_limits(bytes, GltfImageLimits::default())
+    }
+
+    /// Load a scene with per-image source-pixel and estimated RGBA8 byte limits.
+    ///
+    /// Checks every base-color image used by the selected scene before decoding
+    /// any image. Other texture slots and unused images remain ignored. The
+    /// limits do not bound decoder scratch memory or aggregate scene memory;
+    /// prepare oversized images offline. Images retain their source dimensions.
+    ///
+    /// ```
+    /// use macroquad::gltf::{GltfImageLimits, GltfScene};
+    /// let scene = GltfScene::from_bytes_with_image_limits(
+    ///     include_bytes!("../examples/assets/triangle.glb"),
+    ///     GltfImageLimits {
+    ///         max_source_pixels: Some(1024 * 1024),
+    ///         max_decoded_bytes: Some(4 * 1024 * 1024),
+    ///     },
+    /// ).unwrap();
+    /// assert_eq!(scene.images[0].pixels.len(), 4);
+    /// ```
+    pub fn from_bytes_with_image_limits(
+        bytes: &[u8],
+        image_limits: GltfImageLimits,
+    ) -> Result<GltfScene, GltfError> {
         if bytes.starts_with(b"glTF") {
             // gltf::Gltf::from_slice owns (and copies) the complete binary
             // chunk. Parse/validate its JSON separately so large embedded
@@ -527,12 +557,17 @@ impl GltfScene {
             let gltf = gltf::Gltf::from_slice(&glb.json).map_err(|error| {
                 GltfError::new(format!("glTF document could not be parsed: {error}"))
             })?;
-            Self::from_document(&gltf.document, glb.bin.as_deref(), true)
+            Self::from_document_with_image_limits(
+                &gltf.document,
+                glb.bin.as_deref(),
+                true,
+                image_limits,
+            )
         } else {
             let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| {
                 GltfError::new(format!("glTF document could not be parsed: {error}"))
             })?;
-            Self::from_document(&gltf.document, None, true)
+            Self::from_document_with_image_limits(&gltf.document, None, true, image_limits)
         }
     }
 
@@ -545,6 +580,20 @@ impl GltfScene {
         document: &gltf::Document,
         binary: Option<&[u8]>,
         decode_images: bool,
+    ) -> Result<GltfScene, GltfError> {
+        Self::from_document_with_image_limits(
+            document,
+            binary,
+            decode_images,
+            GltfImageLimits::default(),
+        )
+    }
+
+    fn from_document_with_image_limits(
+        document: &gltf::Document,
+        binary: Option<&[u8]>,
+        decode_images: bool,
+        image_limits: GltfImageLimits,
     ) -> Result<GltfScene, GltfError> {
         let buffers = load_buffers(document, binary)?;
         let Some(scene) = document
@@ -559,6 +608,25 @@ impl GltfScene {
                 spawns: Vec::new(),
             });
         };
+
+        if decode_images && image_limits != GltfImageLimits::default() {
+            let mut checked_images = HashSet::new();
+            for mesh in used_meshes(document) {
+                for primitive in mesh.primitives() {
+                    let material = primitive.material();
+                    if let Some(info) = material.pbr_metallic_roughness().base_color_texture() {
+                        let image = info.texture().source();
+                        if checked_images.insert(image.index()) {
+                            let context = image_context(&image, &material, "base-color");
+                            let data = image_bytes(&image, &buffers)
+                                .map_err(|error| GltfError::new(format!("{context}: {error}")))?;
+                            image_limits::check_image(&data, image_limits)
+                                .map_err(|error| GltfError::new(format!("{context}: {error}")))?;
+                        }
+                    }
+                }
+            }
+        }
 
         let mut loaded = GltfScene {
             nodes: Vec::new(),
@@ -938,16 +1006,15 @@ fn base_color_image(
         return Ok(None);
     };
     let image = info.texture().source();
+    let context = image_context(&image, &primitive.material(), "base-color");
     let gltf_index = image.index();
     if let Some(index) = state.image_of.get(&gltf_index) {
         return Ok(Some(*index));
     }
-    let bytes = image_bytes(&image, state.buffers)?;
-    let decoded = image::load_from_memory(&bytes).map_err(|error| {
-        GltfError::new(format!(
-            "glTF image {gltf_index} could not be decoded: {error}"
-        ))
-    })?;
+    let bytes = image_bytes(&image, state.buffers)
+        .map_err(|error| GltfError::new(format!("{context}: {error}")))?;
+    let decoded = image::load_from_memory(&bytes)
+        .map_err(|error| GltfError::new(format!("{context} could not be decoded: {error}")))?;
     let rgba = decoded.into_rgba8();
     let index = loaded.images.len();
     loaded.images.push(GltfImage {
@@ -958,6 +1025,56 @@ fn base_color_image(
     });
     state.image_of.insert(gltf_index, index);
     Ok(Some(index))
+}
+
+/// Source meshes in the same first-use preorder as the scene loader. Repeated
+/// nodes are skipped here; the scene loader reports invalid scene graphs.
+pub(crate) fn used_meshes(document: &gltf::Document) -> Vec<gltf::Mesh<'_>> {
+    let mut meshes = Vec::new();
+    let mut seen_meshes = HashSet::new();
+    let mut seen_nodes = HashSet::new();
+    let mut pending = document
+        .default_scene()
+        .or_else(|| document.scenes().next())
+        .map(|scene| scene.nodes().collect::<Vec<_>>())
+        .unwrap_or_default();
+    pending.reverse();
+    while let Some(node) = pending.pop() {
+        if !seen_nodes.insert(node.index()) {
+            continue;
+        }
+        if let Some(mesh) = node.mesh() {
+            if seen_meshes.insert(mesh.index()) {
+                meshes.push(mesh);
+            }
+        }
+        let children: Vec<_> = node.children().collect();
+        pending.extend(children.into_iter().rev());
+    }
+    meshes
+}
+
+pub(crate) fn image_context(
+    image: &gltf::Image<'_>,
+    material: &gltf::Material<'_>,
+    slot: &str,
+) -> String {
+    let image_name = image
+        .name()
+        .map(|name| format!(" ({name:?})"))
+        .unwrap_or_default();
+    let material_name = material
+        .name()
+        .map(|name| format!(" ({name:?})"))
+        .unwrap_or_default();
+    let material_index = material
+        .index()
+        .map(|index| index.to_string())
+        .unwrap_or_else(|| "default".into());
+    format!(
+        "glTF image {}{image_name}, material {material_index}{material_name} {slot}",
+        image.index()
+    )
 }
 
 fn image_bytes<'a>(

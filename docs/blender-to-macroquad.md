@@ -299,9 +299,27 @@ let model = GltfModel::from_bytes_with_options(&bytes, GltfLoadOptions {
 
 Both image dimensions stay at or below this limit; a 4096×2048 image becomes 512×256. Smaller images stay unchanged, and the aspect ratio, UVs, and sampler settings are preserved. This applies to embedded base-color and emissive images and their mipmaps. `None` is the default, preserving the original full-resolution behavior of the existing loading methods. The cap bounds retained GPU image memory, but the decoder still briefly holds the original image in CPU memory. It does not edit or re-encode the source GLB. Supply `mesh_limits` in the same options value when changing mesh chunk sizes as well.
 
+For an explicit source-size guard, wrap those options with
+`options.with_image_limits(GltfImageLimits { max_source_pixels: Some(2048 * 2048),
+max_decoded_bytes: Some(16 * 1024 * 1024) })` and pass the result to
+`GltfModel::from_bytes_with_settings`. Import `GltfImageLimits` from
+`macroquad::gltf_draw`. The loader checks metadata for every consumed base-color
+and emissive image before decoding pixels or creating textures. Rejections name
+the image and material. Each limit is per image; the byte estimate is source
+width × height × 4 for RGBA8, not total model or decoder memory. Existing
+constructors and defaults stay uncapped. See the [3D guide](3d-guide.md#loading-and-materials)
+for a complete example.
+
+An image that fails these limits needs offline preparation before export or
+loading. Upload resizing cannot make it pass a source-size check. Decoder
+scratch buffers and higher-bit-depth intermediates can exceed the RGBA8
+estimate, so these limits do not guarantee a process-memory ceiling.
+
 The cap does not resize the separate `GltfScene::images` CPU list. Retaining
 that scene keeps its decoded images and local mesh arrays alive even after
 `RetainedGltfModel::from_model(cpu, false)` releases draw-model geometry.
+Use `GltfScene::from_bytes_with_image_limits(bytes, limits)` to apply the same
+per-image rejection policy to that CPU loader's sampled base-color images.
 Extract the markers you need and drop the scene data when appropriate, as in
 the sample. `model.stats` reports counts rather than memory estimates or
 process/driver memory measurements.

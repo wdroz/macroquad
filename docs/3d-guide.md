@@ -185,7 +185,40 @@ selection follow the retained shader contract above.
 
 `GltfLoadOptions::max_texture_size` caps uploaded base-color and emissive image
 dimensions while preserving aspect ratio. Full-resolution decoding still
-happens first; it is not a bound on peak CPU memory. `GltfModelStats` contains
+happens first; it is not a bound on peak CPU memory. To reject oversized sources
+before pixel decoding and texture allocation, add per-image limits without
+changing an existing `GltfLoadOptions` literal:
+
+```rust,no_run
+use macroquad::gltf_draw::{GltfImageLimits, GltfLoadOptions, GltfModel};
+# fn load(bytes: &[u8]) -> Result<GltfModel, String> {
+let settings = GltfLoadOptions {
+    max_texture_size: Some(512),
+    ..Default::default()
+}.with_image_limits(GltfImageLimits {
+    max_source_pixels: Some(2048 * 2048),
+    max_decoded_bytes: Some(16 * 1024 * 1024),
+});
+let model = GltfModel::from_bytes_with_settings(bytes, settings)?;
+# Ok(model) }
+```
+
+The limits check source width × height and its checked RGBA8 byte estimate
+(four bytes per pixel). They apply to each sampled base-color/emissive image,
+not their sum. The loader preflights consumed images before decoding or
+uploading any of them; errors identify the source image and material. Unused
+images are skipped. Existing constructors and default limits remain uncapped.
+For the separate CPU scene path, use
+`GltfScene::from_bytes_with_image_limits(bytes, limits)`; this checks its sampled
+base-color images and does not resize them.
+
+These are rejection limits, not a decoder-memory sandbox. Decoder scratch
+buffers, higher-bit-depth intermediates, resizing, encoded inputs, geometry
+and the sum of retained images can consume additional memory. Prepare oversized
+images offline and load the prepared GLB. Lowering `max_texture_size` alone
+still cannot remove full-resolution decode peaks.
+
+`GltfModelStats` contains
 load counts, not measured memory or per-frame GPU costs. Skinning, animation,
 morph weights, normal/roughness maps, and an automatic material renderer remain
 roadmap work.

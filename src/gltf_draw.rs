@@ -11,6 +11,10 @@
 //!
 //! Load with [`GltfLoadOptions`] to cap uploaded texture dimensions. The cap
 //! applies after decoding, so it does not bound the temporary source image.
+//! Use [`GltfLoadOptions::with_image_limits`] and
+//! [`GltfModel::from_bytes_with_settings`] to reject oversized source images
+//! before any decode or upload. The RGBA8 estimate does not bound decoder
+//! scratch memory; prepare oversized source assets offline.
 //! Convert the finished model with [`RetainedGltfModel::from_model`] to upload
 //! geometry once. Retained clones share buffers and textures, and each draw
 //! accepts an additional scene transform without rewriting CPU vertices.
@@ -66,6 +70,7 @@ use crate::{
 mod retained;
 pub use retained::*;
 mod diagnostics;
+pub use crate::gltf::GltfImageLimits;
 pub use diagnostics::*;
 
 /// CPU-side material values, retained for a custom shader.
@@ -279,6 +284,39 @@ pub struct GltfLoadOptions {
     pub max_texture_size: Option<u16>,
 }
 
+/// Existing draw options together with opt-in, per-source-image decode limits.
+///
+/// Defaults preserve uncapped loading. [`GltfLoadOptions::max_texture_size`]
+/// remains a separate post-decode upload cap. The image limits estimate RGBA8
+/// bytes, not decoder scratch memory, aggregate scene memory, or GPU memory.
+/// Oversized source images need offline preparation.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct GltfLoadSettings {
+    /// Mesh batching and post-decode texture upload options.
+    pub options: GltfLoadOptions,
+    /// Source dimensions checked before any image decode or texture upload.
+    pub image_limits: GltfImageLimits,
+}
+
+impl GltfLoadOptions {
+    /// Add per-image limits without changing existing option struct literals.
+    ///
+    /// ```
+    /// use macroquad::gltf_draw::{GltfImageLimits, GltfLoadOptions};
+    /// let settings = GltfLoadOptions::default().with_image_limits(GltfImageLimits {
+    ///     max_source_pixels: Some(1024 * 1024),
+    ///     max_decoded_bytes: Some(4 * 1024 * 1024),
+    /// });
+    /// assert_eq!(settings.options.max_texture_size, None);
+    /// ```
+    pub fn with_image_limits(self, image_limits: GltfImageLimits) -> GltfLoadSettings {
+        GltfLoadSettings {
+            options: self,
+            image_limits,
+        }
+    }
+}
+
 /// Counts from a [`GltfModel`] load.
 ///
 /// These describe the loaded model, not bytes or measured rendering work.
@@ -438,6 +476,37 @@ impl GltfModel {
     /// # Ok(()) }
     /// ```
     pub fn from_bytes_with_options(bytes: &[u8], options: GltfLoadOptions) -> Result<Self, String> {
+        Self::from_bytes_with_settings(bytes, options.with_image_limits(GltfImageLimits::default()))
+    }
+
+    /// Load with optional limits on each source image before RGBA decoding.
+    ///
+    /// Preflights all base-color and emissive images sampled by the selected
+    /// scene before decoding or uploading any image. Errors identify the image
+    /// and material. Unused images and unsupported texture slots are ignored.
+    /// Limits estimate RGBA8 output; decoder scratch and total process memory
+    /// are not bounded. Prepare oversized images offline: upload resizing
+    /// still happens after full-resolution decoding.
+    ///
+    /// ```no_run
+    /// use macroquad::gltf_draw::{GltfImageLimits, GltfLoadOptions, GltfModel};
+    /// let settings = GltfLoadOptions {
+    ///     max_texture_size: Some(512),
+    ///     ..Default::default()
+    /// }.with_image_limits(GltfImageLimits {
+    ///     max_source_pixels: Some(4096 * 4096),
+    ///     max_decoded_bytes: Some(64 * 1024 * 1024),
+    /// });
+    /// // Call inside a running macroquad application.
+    /// let model = GltfModel::from_bytes_with_settings(
+    ///     include_bytes!("../examples/assets/textured_quad.glb"), settings,
+    /// ).unwrap();
+    /// ```
+    pub fn from_bytes_with_settings(
+        bytes: &[u8],
+        settings: GltfLoadSettings,
+    ) -> Result<Self, String> {
+        let options = settings.options;
         let limits = options.mesh_limits;
         validate_limits(limits)?;
         if options.max_texture_size == Some(0) {
@@ -447,34 +516,8 @@ impl GltfModel {
         // The CPU loader visits nodes in preorder and meshes in first-use order.
         // Recreate that same source-mesh mapping, rather than assuming indices
         // happen to match the file (unused meshes and instances are legal).
-        let mut source_meshes = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        fn visit(
-            node: gltf::Node<'_>,
-            seen: &mut std::collections::HashSet<usize>,
-            out: &mut Vec<usize>,
-        ) {
-            if let Some(mesh) = node.mesh() {
-                if seen.insert(mesh.index()) {
-                    out.push(mesh.index());
-                }
-            }
-            for child in node.children() {
-                visit(child, seen, out);
-            }
-        }
-        if let Some(source_scene) = document
-            .default_scene()
-            .or_else(|| document.scenes().next())
-        {
-            for node in source_scene.nodes() {
-                visit(node, &mut seen, &mut source_meshes);
-            }
-        }
-        let source_meshes: Vec<_> = source_meshes
-            .iter()
-            .map(|index| document.meshes().nth(*index).unwrap())
-            .collect();
+        let source_meshes = crate::gltf::used_meshes(&document);
+        preflight_images(&source_meshes, binary.as_ref(), settings.image_limits)?;
         let mut textures: HashMap<usize, Texture2D> = HashMap::new();
         let mut parts = Vec::new();
         let mut bounds_min = Vec3::splat(f32::INFINITY);
@@ -526,6 +569,16 @@ impl GltfModel {
                             &mut textures,
                             options.max_texture_size,
                         )
+                        .map_err(|error| {
+                            format!(
+                                "{}: {error}",
+                                crate::gltf::image_context(
+                                    &info.texture().source(),
+                                    &material,
+                                    "base-color"
+                                )
+                            )
+                        })
                     })
                     .transpose()?;
                 let emissive_texture = material
@@ -537,6 +590,16 @@ impl GltfModel {
                             &mut textures,
                             options.max_texture_size,
                         )
+                        .map_err(|error| {
+                            format!(
+                                "{}: {error}",
+                                crate::gltf::image_context(
+                                    &info.texture().source(),
+                                    &material,
+                                    "emissive"
+                                )
+                            )
+                        })
                     })
                     .transpose()?;
                 let strength = material
@@ -795,6 +858,63 @@ fn rotated_bounds(rotation: Quat, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
     (new_min, new_max)
 }
 
+fn preflight_images(
+    meshes: &[gltf::Mesh<'_>],
+    binary: &[u8],
+    limits: GltfImageLimits,
+) -> Result<(), String> {
+    // Preserve the legacy decoding path when no source limit was requested.
+    if limits == GltfImageLimits::default() {
+        return Ok(());
+    }
+    let mut checked = std::collections::HashSet::new();
+    for mesh in meshes {
+        for primitive in mesh.primitives() {
+            let material = primitive.material();
+            let base_color = material.pbr_metallic_roughness().base_color_texture();
+            let emissive = material.emissive_texture();
+            for (slot, info) in [("base-color", base_color), ("emissive", emissive)] {
+                if let Some(info) = info {
+                    let image = info.texture().source();
+                    if checked.insert(image.index()) {
+                        let context = crate::gltf::image_context(&image, &material, slot);
+                        let data = embedded_image_bytes(&image, binary)
+                            .map_err(|error| format!("{context}: {error}"))?;
+                        crate::gltf::image_limits::check_image(data, limits)
+                            .map_err(|error| format!("{context}: {error}"))?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn embedded_image_bytes<'a>(image: &gltf::Image<'_>, binary: &'a [u8]) -> Result<&'a [u8], String> {
+    match image.source() {
+        gltf::image::Source::View { view, .. } => {
+            if view.buffer().index() != 0
+                || !matches!(view.buffer().source(), gltf::buffer::Source::Bin)
+            {
+                return Err("image buffers must use the GLB binary chunk".into());
+            }
+            let end = view
+                .offset()
+                .checked_add(view.length())
+                .ok_or("image buffer range overflow")?;
+            if end > view.buffer().length() {
+                return Err("image buffer is outside its declared buffer length".into());
+            }
+            binary
+                .get(view.offset()..end)
+                .ok_or_else(|| "image buffer is out of bounds".into())
+        }
+        gltf::image::Source::Uri { .. } => {
+            Err("external image URIs are unsupported; embed images in the GLB".into())
+        }
+    }
+}
+
 fn load_texture(
     texture: gltf::Texture<'_>,
     binary: &[u8],
@@ -804,25 +924,7 @@ fn load_texture(
     let key = texture.index();
     if !textures.contains_key(&key) {
         let image = texture.source();
-        let data = match image.source() {
-            gltf::image::Source::View { view, .. } => {
-                if view.buffer().index() != 0
-                    || !matches!(view.buffer().source(), gltf::buffer::Source::Bin)
-                {
-                    return Err("image buffers must use the GLB binary chunk".into());
-                }
-                let end = view
-                    .offset()
-                    .checked_add(view.length())
-                    .ok_or("image buffer range overflow")?;
-                binary
-                    .get(view.offset()..end)
-                    .ok_or("image buffer is out of bounds")?
-            }
-            gltf::image::Source::Uri { .. } => {
-                return Err("external image URIs are unsupported; embed images in the GLB".into())
-            }
-        };
+        let data = embedded_image_bytes(&image, binary)?;
         let decoded =
             image::load_from_memory(data).map_err(|e| format!("image {}: {e}", image.index()))?;
         let source_dimensions = (decoded.width(), decoded.height());
@@ -894,12 +996,7 @@ fn load_texture(
                 },
             );
         }
-        diagnostics::record_source_image(
-            &gpu,
-            image.index(),
-            image.name(),
-            source_dimensions,
-        );
+        diagnostics::record_source_image(&gpu, image.index(), image.name(), source_dimensions);
         textures.insert(key, gpu);
     }
     Ok(textures.get(&key).unwrap().clone())
