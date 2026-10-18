@@ -38,14 +38,15 @@ struct DrawCall {
 
     clip: Option<(i32, i32, i32, i32)>,
     viewport: Option<(i32, i32, i32, i32)>,
-    texture: Option<miniquad::TextureId>,
+    texture: Option<MiniquadTexture>,
 
     model: glam::Mat4,
 
     draw_mode: DrawMode,
     pipeline: GlPipeline,
     uniforms: Option<Vec<u8>>,
-    textures: BTreeMap<String, MiniquadTexture>,
+    // Preserve each material binding until this draw is submitted or cancelled.
+    textures: BTreeMap<String, Texture2D>,
     render_pass: Option<RenderPass>,
     capture: bool,
     retained: Option<crate::models::RetainedMesh>,
@@ -312,7 +313,7 @@ struct PipelineExt {
     uniforms: Vec<Uniform>,
     uniforms_data: Vec<u8>,
     textures: Vec<String>,
-    textures_data: BTreeMap<String, MiniquadTexture>,
+    textures_data: BTreeMap<String, Texture2D>,
 }
 
 impl PipelineExt {
@@ -752,6 +753,7 @@ impl QuadGl {
     pub fn clear_draw_calls(&mut self) {
         for dc in &mut self.draw_calls[..self.draw_calls_count] {
             dc.retained = None;
+            dc.textures.clear();
         }
         self.draw_calls_count = 0;
         // Discard the geometry belonging to the cancelled calls too. Repeated
@@ -911,7 +913,11 @@ impl QuadGl {
                 .resize(2 + pipeline.textures.len(), white_texture);
 
             for (pos, name) in pipeline.textures.iter().enumerate() {
-                bindings.images[2 + pos] = dc.textures.get(name).copied().unwrap_or(white_texture);
+                bindings.images[2 + pos] = dc
+                    .textures
+                    .get(name)
+                    .map(Texture2D::raw_miniquad_id)
+                    .unwrap_or(white_texture);
             }
 
             ctx.apply_pipeline(&pipeline.pipeline);
@@ -984,6 +990,9 @@ impl QuadGl {
             dc.vertices_start = 0;
             dc.indices_start = 0;
             dc.retained = None;
+            // Draw-call slots are cached, but their texture ownership lasts
+            // only until submission. Keep unused slots from pinning old assets.
+            dc.textures.clear();
         }
 
         self.draw_calls_count = 0;
@@ -1299,11 +1308,7 @@ impl QuadGl {
                     name, pipeline.textures
                 )
             });
-        let quad_texture = texture.raw_miniquad_id();
-        *pipeline
-            .textures_data
-            .entry(name.to_owned())
-            .or_insert(quad_texture) = quad_texture;
+        pipeline.textures_data.insert(name.to_owned(), texture);
     }
 
     pub(crate) fn update_drawcall_capacity(

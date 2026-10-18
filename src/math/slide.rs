@@ -632,7 +632,7 @@ fn cast_edge(center: Vec3, radius: f32, delta: Vec3, start: Vec3, end: Vec3) -> 
     if delta_perp.length_squared() <= 1e-12 {
         return None;
     }
-    let (t_enter, _) = super::sphere_quadratic_roots(offset_perp, delta_perp, radius)?;
+    let t_enter = radial_entry_time(offset_perp, delta_perp, radius)?;
     accept_radial(center, delta, start, axis, length, t_enter)
 }
 
@@ -641,7 +641,7 @@ fn cast_corner(center: Vec3, radius: f32, delta: Vec3, corner: Vec3) -> Option<S
     if delta.length_squared() <= 1e-12 {
         return None;
     }
-    let (t_enter, _) = super::sphere_quadratic_roots(offset, delta, radius)?;
+    let t_enter = radial_entry_time(offset, delta, radius)?;
     if !t_enter.is_finite() || t_enter > 1.0 || t_enter < -PLANE_SLOP {
         return None;
     }
@@ -652,6 +652,20 @@ fn cast_corner(center: Vec3, radius: f32, delta: Vec3, corner: Vec3) -> Option<S
         return None;
     }
     Some(SlideHit { t, normal })
+}
+
+fn radial_entry_time(offset: Vec3, delta: Vec3, radius: f32) -> Option<f32> {
+    let (t_enter, _) = super::sphere_quadratic_roots(offset, delta, radius)?;
+    if t_enter < 0.0 {
+        // Push-out deliberately leaves tiny overlaps alone. Measure that
+        // overlap in world units: a small inward delta can otherwise put the
+        // entry far enough before t=0 that the radial cast discards the hit.
+        let penetration = radius - offset.length();
+        if (0.0..=PLANE_SLOP).contains(&penetration) {
+            return Some(0.0);
+        }
+    }
+    Some(t_enter)
 }
 
 fn accept_radial(
@@ -1000,6 +1014,36 @@ mod tests {
         // The tangent plane leaves a round rock. The inward step is gone.
         let gap = (into - rock.center).length() - rock.radius - radius;
         assert!(gap > -1e-3, "sank into the rock: gap {gap}");
+    }
+
+    #[test]
+    fn a_shallow_round_overlap_blocks_inward_motion_without_sticking() {
+        let rock = Sphere::new(Vec3::Y, 0.5);
+        let column = Capsule::new(Vec3::ZERO, Vec3::Y * 2.0, 0.5);
+        let radius = 0.4;
+        // A nine-micrometer overlap is below the push-out threshold. Its
+        // negative entry time must not discard a four-centimeter inward move.
+        let resting = vec3(-0.899991, 1.0, 0.0);
+        let spheres = [rock];
+        let capsules = [column];
+        for (spheres, capsules) in [(&spheres[..], &[][..]), (&[][..], &capsules[..])] {
+            let inward = slide_sphere_solids(
+                resting,
+                radius,
+                vec3(0.04, 0.0, 0.0),
+                &[],
+                &[],
+                spheres,
+                capsules,
+            );
+            assert_close(inward, resting);
+
+            for delta in [vec3(0.0, 0.0, 0.04), vec3(-0.04, 0.0, 0.0)] {
+                let moved =
+                    slide_sphere_solids(resting, radius, delta, &[], &[], spheres, capsules);
+                assert_close(moved, resting + delta);
+            }
+        }
     }
 
     #[test]

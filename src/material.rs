@@ -39,6 +39,13 @@ impl Material {
             .set_uniform_array(self.pipeline.0, name, uniform);
     }
 
+    /// Set a named custom texture declared in [`MaterialParams::textures`].
+    ///
+    /// The material keeps this handle until the binding is replaced or the
+    /// last material handle is dropped. Queued draws preserve their previous
+    /// bindings until submitted or cancelled. Pass a clone to keep using an owned
+    /// texture elsewhere; weak and unmanaged handles retain their borrowed
+    /// lifetime and do not keep the underlying GPU texture alive.
     pub fn set_texture(&self, name: &str, texture: Texture2D) {
         get_context().gl.set_texture(self.pipeline.0, name, texture);
     }
