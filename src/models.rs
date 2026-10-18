@@ -755,6 +755,9 @@ pub fn draw_cylinder_ex(
 /// This is [`draw_cube_wires`] with [`Aabb::center`](crate::math::Aabb::center)
 /// and [`Aabb::size`](crate::math::Aabb::size), so the outline matches
 /// [`draw_cube`] and [`Aabb::from_center_size`](crate::math::Aabb::from_center_size).
+/// An inverted box (`min` past `max` on an axis) still outlines that span,
+/// because the wires are drawn from the center by half of `max - min`. Overlap
+/// and ray queries miss until [`Aabb::normalized`](crate::math::Aabb::normalized).
 /// A non-finite corner draws nothing.
 ///
 /// # Example
@@ -843,10 +846,11 @@ pub fn draw_triangle_wires(triangle: Triangle, color: Color) {
 /// Twelve edges of `obb`.
 ///
 /// [`Obb::half_extents`](crate::math::Obb::half_extents) are half of the full
-/// size [`draw_cube`] takes. A negative component still outlines that absolute
-/// box; overlap queries treat the box as empty. A zero or non-finite rotation
-/// is drawn as [`Quat::IDENTITY`] so the center stays visible; those queries
-/// miss. A non-finite center or extent draws nothing.
+/// size [`draw_cube`] takes. A negative component is empty and draws nothing,
+/// matching the overlap queries. A zero extent still draws the flat box. A
+/// zero or non-finite rotation is drawn as [`Quat::IDENTITY`] so the center
+/// stays visible; those queries miss. A non-finite center or extent draws
+/// nothing.
 ///
 /// # Example
 ///
@@ -993,6 +997,11 @@ fn unit_quat(rotation: Quat) -> Quat {
 
 fn obb_corners(obb: Obb) -> Option<[Vec3; 8]> {
     if !obb.center.is_finite() || !obb.half_extents.is_finite() {
+        return None;
+    }
+    // A negative extent is empty for every Obb query. Drawing the absolute
+    // box would show a solid the queries reject.
+    if obb.half_extents.x < 0.0 || obb.half_extents.y < 0.0 || obb.half_extents.z < 0.0 {
         return None;
     }
     let rotation = unit_quat(obb.rotation);
@@ -1179,13 +1188,9 @@ mod debug_draw_tests {
             assert!(near(*left, *right));
         }
 
-        let flipped =
-            obb_corners(Obb::new(Vec3::ZERO, vec3(-1.0, 2.0, 3.0), Quat::IDENTITY)).unwrap();
-        let positive =
-            obb_corners(Obb::new(Vec3::ZERO, vec3(1.0, 2.0, 3.0), Quat::IDENTITY)).unwrap();
-        for corner in flipped {
-            assert!(positive.iter().any(|other| near(corner, *other)));
-        }
+        assert!(obb_corners(Obb::new(Vec3::ZERO, vec3(-1.0, 2.0, 3.0), Quat::IDENTITY)).is_none());
+        let flat = obb_corners(Obb::new(Vec3::ZERO, vec3(1.0, 0.0, 1.0), Quat::IDENTITY)).unwrap();
+        assert!(flat.iter().all(|corner| corner.y.abs() < 1e-4));
 
         assert!(obb_corners(Obb::new(Vec3::NAN, Vec3::ONE, Quat::IDENTITY)).is_none());
     }

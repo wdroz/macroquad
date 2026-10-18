@@ -200,7 +200,7 @@ assert!(body.overlaps_aabb(&floor));
 assert!(body.overlaps_sphere(&Sphere::new(vec3(1.0, 0.5, 0.0), 0.5)));
 ```
 
-`Ray::closest_capsule` matches the other slice queries. `examples/capsule_overlap.rs` moves one with the arrow keys. The wireframe in that example is local; `draw_capsule_wires` is a later item.
+`Ray::closest_capsule` matches the other slice queries. `examples/capsule_overlap.rs` moves one with the arrow keys. `draw_capsule_wires` outlines it: sphere wires at `a` and `b`, and four lines `radius` out from the inner segment.
 
 ## Contact
 
@@ -297,7 +297,7 @@ Wish velocity is still the caller's. Add it to the capsule with `offset`, then t
 
 Set a `Camera3D` before any of these calls. The samples use `up: Vec3::Y`.
 
-`draw_aabb(aabb, color)` is `draw_cube_wires(aabb.center(), aabb.size(), color)`. `draw_sphere` / `draw_sphere_wires` take a center and a radius, the same fields as `Sphere`. `draw_ray(ray, t, color)` is the segment from the origin to `ray.point_at(t)`; a negative `t` extends behind the origin. `draw_triangle_wires` is the three edges. `draw_obb` is the twelve edges. `half_extents` is half of `draw_cube`'s full size. A negative extent still outlines the absolute box, and a zero rotation is drawn as identity. `draw_capsule_wires` draws `draw_sphere_wires` at `a` and `b` and four lines `radius` out from the inner segment. A negative radius draws nothing.
+`draw_aabb(aabb, color)` is `draw_cube_wires(aabb.center(), aabb.size(), color)`. An inverted box still outlines that span; call `Aabb::normalized` before an overlap or ray query, which miss on the inverted box. `draw_sphere` / `draw_sphere_wires` take a center and a radius, the same fields as `Sphere`. `draw_ray(ray, t, color)` is the segment from the origin to `ray.point_at(t)`; a negative `t` extends behind the origin. `draw_triangle_wires` is the three edges. `draw_obb` is the twelve edges. `half_extents` is half of `draw_cube`'s full size. A negative half extent draws nothing, the same as the overlap queries. A zero rotation is drawn as identity; those queries miss. `draw_capsule_wires` draws `draw_sphere_wires` at `a` and `b` and four lines `radius` out from the inner segment. A negative radius draws nothing.
 
 `draw_plane(center, size, texture, color)` is an older helper: a quad in the XZ plane. `size` is the half-extent on X and Z, and the quad can take a texture. `draw_plane_wires(plane, center, size, color)` follows `plane.normal`. `size` is the full side length. `center` is projected onto the plane. A non-unit normal is normalized and `distance` is scaled by the same factor.
 

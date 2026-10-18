@@ -195,8 +195,11 @@ pub struct Camera3D {
     pub target: Vec3,
     /// Camera up vector (rotation over its axis).
     pub up: Vec3,
-    /// Camera field-of-view aperture in Y (radians)
-    /// in perspective, used as near plane width in orthographic.
+    /// Camera field-of-view aperture in Y (radians) for perspective.
+    ///
+    /// For [`Projection::Orthographics`] this is the full vertical size of the
+    /// view (`top = fovy / 2`), the same value [`Camera::matrix`] uses. It is
+    /// not a width: the horizontal size is `fovy * aspect`.
     pub fovy: f32,
     /// Screen aspect ratio.
     ///
