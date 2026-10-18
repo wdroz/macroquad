@@ -1,20 +1,9 @@
 //! Move a capsule with the arrow keys and watch it overlap a box and a sphere.
 //!
 //! `a` and `b` are the inner segment. The rounded ends extend `radius` past
-//! them. The wire spheres are this example's own outline; `draw_capsule_wires`
-//! is a later roadmap item.
+//! them. The outline is `draw_capsule_wires`.
 
 use macroquad::prelude::*;
-
-fn draw_capsule_wires(capsule: Capsule, color: Color) {
-    let axis = capsule.b - capsule.a;
-    let radius = capsule.radius.max(0.0);
-    for step in 0..=4 {
-        let t = step as f32 / 4.0;
-        draw_sphere_wires(capsule.a + axis * t, radius, None, color);
-    }
-    draw_line_3d(capsule.a, capsule.b, color);
-}
 
 #[macroquad::main("Capsule overlap")]
 async fn main() {

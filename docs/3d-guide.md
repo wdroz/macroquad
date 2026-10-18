@@ -295,9 +295,22 @@ Wish velocity is still the caller's. Add it to the capsule with `offset`, then t
 
 ## Drawing
 
-Wire helpers for these shapes are not a separate API yet. `draw_cube_wires(aabb.center(), aabb.size(), color)` matches an `Aabb`. `draw_sphere` / `draw_sphere_wires` match a `Sphere`. `draw_line_3d` draws a ray segment or a triangle edge. An oriented box has to be outlined by the caller; `examples/obb_overlap.rs` does that. `examples/plane_hit.rs` draws a finite patch of a plane with `draw_affine_parallelogram`.
+Set a `Camera3D` before any of these calls. The samples use `up: Vec3::Y`.
 
-Set a `Camera3D` before any of those calls. The samples use `up: Vec3::Y`.
+`draw_aabb(aabb, color)` is `draw_cube_wires(aabb.center(), aabb.size(), color)`. `draw_sphere` / `draw_sphere_wires` take a center and a radius, the same fields as `Sphere`. `draw_ray(ray, t, color)` is the segment from the origin to `ray.point_at(t)`; a negative `t` extends behind the origin. `draw_triangle_wires` is the three edges. `draw_obb` is the twelve edges. `half_extents` is half of `draw_cube`'s full size. A negative extent still outlines the absolute box, and a zero rotation is drawn as identity. `draw_capsule_wires` draws `draw_sphere_wires` at `a` and `b` and four lines `radius` out from the inner segment. A negative radius draws nothing.
+
+`draw_plane(center, size, texture, color)` is an older helper: a quad in the XZ plane. `size` is the half-extent on X and Z, and the quad can take a texture. `draw_plane_wires(plane, center, size, color)` follows `plane.normal`. `size` is the full side length. `center` is projected onto the plane. A non-unit normal is normalized and `distance` is scaled by the same factor.
+
+```rust
+use macroquad::prelude::*;
+
+let floor = Aabb::from_center_size(vec3(0.0, -0.05, 0.0), vec3(8.0, 0.1, 8.0));
+let ground = Plane::new(Vec3::Y, 0.0);
+draw_aabb(floor, DARKGREEN);
+draw_plane_wires(ground, Vec3::ZERO, 4.0, GREEN);
+```
+
+`examples/debug_draw.rs` draws one of each wireframe. Call these after `set_camera`.
 
 ## Feature flags
 

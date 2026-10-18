@@ -1,16 +1,10 @@
 //! Yaw a ray and mark the closest triangle.
 //!
 //! `Ray::closest_triangle` uses Möller–Trumbore and keeps both winding
-//! orders. Edges are drawn with `draw_line_3d`; the hit normal is the
-//! triangle's winding normal.
+//! orders. Edges are `draw_triangle_wires`; the hit normal is the triangle's
+//! winding normal.
 
 use macroquad::prelude::*;
-
-fn draw_outline(triangle: Triangle, color: Color) {
-    draw_line_3d(triangle.a, triangle.b, color);
-    draw_line_3d(triangle.b, triangle.c, color);
-    draw_line_3d(triangle.c, triangle.a, color);
-}
 
 #[macroquad::main("Triangle hit")]
 async fn main() {
@@ -59,7 +53,7 @@ async fn main() {
             let hit = closest
                 .map(|closest| closest.index == index)
                 .unwrap_or(false);
-            draw_outline(*triangle, if hit { RED } else { DARKGREEN });
+            draw_triangle_wires(*triangle, if hit { RED } else { DARKGREEN });
         }
 
         let ray_end = if let Some(closest) = closest {

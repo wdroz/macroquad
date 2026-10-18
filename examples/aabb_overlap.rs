@@ -1,13 +1,9 @@
 //! Move an AABB with the arrow keys and watch it overlap static boxes.
 //!
-//! A ray along -Z reports the closest slab hit. Wireframes use the same
-//! center and size as `Aabb::from_center_size`, via `draw_cube_wires`.
+//! A ray along -Z reports the closest slab hit. Wireframes are `draw_aabb`,
+//! which uses the same center and full size as `Aabb::from_center_size`.
 
 use macroquad::prelude::*;
-
-fn draw_aabb(aabb: Aabb, color: Color) {
-    draw_cube_wires(aabb.center(), aabb.size(), color);
-}
 
 #[macroquad::main("AABB overlap")]
 async fn main() {
@@ -76,16 +72,17 @@ async fn main() {
         }
         draw_aabb(player, if overlapping { ORANGE } else { BLUE });
 
-        let ray_end = if let Some(hit) = closest {
+        let ray = Ray::new(ray_origin, ray_direction);
+        let ray_t = if let Some(hit) = closest {
             draw_sphere(hit.point, 0.12, None, YELLOW);
             if hit.normal != Vec3::ZERO {
                 draw_line_3d(hit.point, hit.point + hit.normal * 0.75, ORANGE);
             }
-            hit.point
+            hit.t
         } else {
-            ray_origin + ray_direction * 12.0
+            12.0
         };
-        draw_line_3d(ray_origin, ray_end, YELLOW);
+        draw_ray(ray, ray_t, YELLOW);
 
         set_default_camera();
         draw_text(

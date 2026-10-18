@@ -25,7 +25,11 @@
 //! [`math::Frustum`].
 //! [`math::Contact`] describes an overlap, [`math::SweepHit`] is a moving box
 //! or sphere against a static box, and [`math::slide_sphere`] keeps the motion
-//! along a face. They do not assume an up axis. The `gltf` feature parses a
+//! along a face. Wireframes are [`models::draw_aabb`], [`models::draw_obb`],
+//! [`models::draw_capsule_wires`], [`models::draw_triangle_wires`],
+//! [`models::draw_ray`], and [`models::draw_plane_wires`]. The queries and
+//! these wireframes do not assume an up axis. [`models::draw_plane`] stays
+//! the XZ quad. The `gltf` feature parses a
 //! Blender glTF 2.0 export without a window and can draw a `.glb` once one is
 //! running. A parsed scene stores the base-color images it samples as RGBA
 //! bytes. `GltfScene::with_up_axis` and `GltfModel::with_up_axis` share one

@@ -1,43 +1,9 @@
 //! Yaw an oriented box into a static AABB and a sphere.
 //!
 //! `Obb::from_world_matrix` uses the same full size as `draw_cube`. The wire
-//! box is this example's own outline; `draw_obb` is a later roadmap item.
+//! box is `draw_obb`.
 
 use macroquad::prelude::*;
-
-fn draw_obb(obb: Obb, color: Color) {
-    let rotation = obb.rotation.normalize();
-    let half = obb.half_extents;
-    let corner =
-        |x: f32, y: f32, z: f32| obb.center + rotation * vec3(x * half.x, y * half.y, z * half.z);
-    let corners = [
-        corner(-1.0, -1.0, -1.0),
-        corner(1.0, -1.0, -1.0),
-        corner(1.0, 1.0, -1.0),
-        corner(-1.0, 1.0, -1.0),
-        corner(-1.0, -1.0, 1.0),
-        corner(1.0, -1.0, 1.0),
-        corner(1.0, 1.0, 1.0),
-        corner(-1.0, 1.0, 1.0),
-    ];
-    let edges = [
-        (0, 1),
-        (1, 2),
-        (2, 3),
-        (3, 0),
-        (4, 5),
-        (5, 6),
-        (6, 7),
-        (7, 4),
-        (0, 4),
-        (1, 5),
-        (2, 6),
-        (3, 7),
-    ];
-    for (start, end) in edges {
-        draw_line_3d(corners[start], corners[end], color);
-    }
-}
 
 #[macroquad::main("OBB overlap")]
 async fn main() {

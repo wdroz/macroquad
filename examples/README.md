@@ -15,12 +15,13 @@ cargo run --example capsule_overlap
 cargo run --example sweep_hit
 cargo run --example picking_ray
 cargo run --example frustum_cull
+cargo run --example debug_draw
 cargo run --features gltf --example gltf_textured
 ```
 
 ## `aabb_overlap`
 
-Moves an `Aabb` with the arrow keys. The box turns a different color when it overlaps one of the static boxes. A ray from +Z finds the closest slab hit. Wireframes use `draw_cube_wires(center, size)`, the same center and full size as `Aabb::from_center_size`.
+Moves an `Aabb` with the arrow keys. The box turns a different color when it overlaps one of the static boxes. A ray from +Z finds the closest slab hit. Wireframes are `draw_aabb`, the same center and full size as `Aabb::from_center_size`. The ray segment is `draw_ray`.
 
 ## `sphere_overlap`
 
@@ -36,15 +37,15 @@ Moves a marker with the arrow keys. `Q` raises it and `E` lowers it. The marker'
 
 ## `triangle_hit`
 
-Left and right yaw a ray. `Ray::closest_triangle` keeps both winding orders. Edges are `draw_line_3d`. The hit normal is the triangle winding normal.
+Left and right yaw a ray. `Ray::closest_triangle` keeps both winding orders. Edges are `draw_triangle_wires`. The hit normal is the triangle winding normal.
 
 ## `obb_overlap`
 
-Arrow keys move an oriented box. The box yaws on its own around Y. `Obb::from_world_matrix` takes the same full size a rotated `draw_cube` would. The example tests `overlaps_aabb`, `overlaps_sphere`, and `ray_intersect`, and draws its own wire outline. There is no `draw_obb` yet.
+Arrow keys move an oriented box. The box yaws on its own around Y. `Obb::from_world_matrix` takes the same full size a rotated `draw_cube` would. The example tests `overlaps_aabb`, `overlaps_sphere`, and `ray_intersect`. The outline is `draw_obb`.
 
 ## `capsule_overlap`
 
-Moves a vertical `Capsule` with the arrow keys. `a` and `b` are the inner segment; the rounded ends extend past them by `radius`. The capsule turns a different color when `overlaps_aabb` or `overlaps_sphere` hits. One ray reports `Capsule::ray_intersect`. The wires are the example's own spheres along the segment. There is no `draw_capsule_wires` yet.
+Moves a vertical `Capsule` with the arrow keys. `a` and `b` are the inner segment; the rounded ends extend past them by `radius`. The capsule turns a different color when `overlaps_aabb` or `overlaps_sphere` hits. One ray reports `Capsule::ray_intersect`. The outline is `draw_capsule_wires`: sphere wires at the inner ends and four lines on the hull.
 
 ## `sweep_hit`
 
@@ -57,6 +58,10 @@ Moves the mouse. `Camera3D::screen_to_ray` unprojects the cursor with the same v
 ## `frustum_cull`
 
 Looks at a grid of boxes from the side. The yellow wireframe is a second `Camera3D`. `Camera3D::frustum` builds a `Frustum`, and `intersects_aabb` turns the boxes it meets green. Left and right yaw that camera. Space hides boxes outside it. Escape quits.
+
+## `debug_draw`
+
+A static scene of one of each wireframe: `draw_aabb`, `draw_obb`, `draw_capsule_wires`, `draw_triangle_wires`, `draw_plane_wires`, and `draw_ray`. `draw_plane_wires` takes the full side length and projects its center onto the plane. `draw_plane` is still the XZ quad. Escape quits.
 
 ## `gltf_textured`
 

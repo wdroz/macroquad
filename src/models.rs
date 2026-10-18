@@ -1,5 +1,11 @@
 //! 3D shapes and models, loading 3d models from files, drawing 3D primitives.
+//!
+//! Collision wireframes for the [`macroquad::math`](crate::math) shapes are
+//! [`draw_aabb`], [`draw_ray`], [`draw_plane_wires`], [`draw_triangle_wires`],
+//! [`draw_obb`], and [`draw_capsule_wires`]. [`draw_sphere`] takes a center and
+//! a radius, the same fields as a [`Sphere`](crate::math::Sphere).
 
+use crate::math::{Aabb, Capsule, Obb, Plane, Ray, Triangle};
 use crate::{color::Color, get_context};
 
 use crate::{quad_gl::DrawMode, texture::Texture2D};
@@ -117,6 +123,20 @@ pub fn draw_grid_ex(
     }
 }
 
+/// Draws a quad in the XZ plane, centered at `center`.
+///
+/// `size.x` and `size.y` are half the width and depth: the quad extends
+/// `size` away from `center` on X and Z, and Y stays at `center.y`. This is a
+/// horizontal patch when up is +Y. It is not a [`Plane`](crate::math::Plane).
+/// A plane that may be tilted is [`draw_plane_wires`], whose `size` is the
+/// full side length.
+///
+/// # Example
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// draw_plane(Vec3::ZERO, vec2(2.0, 2.0), None, GREEN);
+/// ```
 pub fn draw_plane(center: Vec3, size: Vec2, texture: Option<&Texture2D>, color: Color) {
     let v1 = Vertex::new2(center + vec3(-size.x, 0., -size.y), vec2(0., 0.), color);
     let v2 = Vertex::new2(center + vec3(-size.x, 0., size.y), vec2(0., 1.), color);
@@ -727,5 +747,464 @@ pub fn draw_cylinder_ex(
             ],
             &[0, 1, 2],
         );
+    }
+}
+
+/// Wireframe of an [`Aabb`](crate::math::Aabb).
+///
+/// This is [`draw_cube_wires`] with [`Aabb::center`](crate::math::Aabb::center)
+/// and [`Aabb::size`](crate::math::Aabb::size), so the outline matches
+/// [`draw_cube`] and [`Aabb::from_center_size`](crate::math::Aabb::from_center_size).
+/// A non-finite corner draws nothing.
+///
+/// # Example
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// let crate_ = Aabb::from_center_size(vec3(0.0, 0.5, 0.0), Vec3::ONE);
+/// draw_aabb(crate_, GREEN);
+/// ```
+pub fn draw_aabb(aabb: Aabb, color: Color) {
+    if !aabb.min.is_finite() || !aabb.max.is_finite() {
+        return;
+    }
+    draw_cube_wires(aabb.center(), aabb.size(), color);
+}
+
+/// Draws `ray` from its origin to `ray.point_at(t)`.
+///
+/// `t` is the same parameter as [`RayHit::t`](crate::math::RayHit::t). A
+/// negative `t` extends behind the origin. A non-finite origin, direction, or
+/// `t` draws nothing.
+///
+/// # Example
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// let ray = Ray::new(Vec3::ZERO, Vec3::X);
+/// draw_ray(ray, 4.0, YELLOW);
+/// ```
+pub fn draw_ray(ray: Ray, t: f32, color: Color) {
+    let Some((start, end)) = ray_segment(ray, t) else {
+        return;
+    };
+    draw_line_3d(start, end, color);
+}
+
+/// Wire square lying on `plane`, centered on the projection of `center`.
+///
+/// `size` is the full side length, the same convention as [`draw_cube`].
+/// `center` is moved onto the plane with
+/// [`Plane::closest_point`](crate::math::Plane::closest_point) after a
+/// non-unit normal is normalized and `distance` is divided by that same
+/// length, so the square sits on the geometric plane. A zero or non-finite
+/// normal, a non-finite distance or center, or a non-positive `size` draws
+/// nothing.
+///
+/// [`draw_plane`] is a different helper: an axis-aligned quad in the XZ plane
+/// whose `size` is a half-extent and which can take a texture.
+///
+/// # Example
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// let ground = Plane::new(Vec3::Y, 0.0);
+/// draw_plane_wires(ground, Vec3::ZERO, 4.0, GREEN);
+/// ```
+pub fn draw_plane_wires(plane: Plane, center: Vec3, size: f32, color: Color) {
+    let Some(corners) = plane_wire_corners(plane, center, size) else {
+        return;
+    };
+    for index in 0..4 {
+        draw_line_3d(corners[index], corners[(index + 1) % 4], color);
+    }
+}
+
+/// Three edges of `triangle`.
+///
+/// A non-finite corner draws nothing.
+///
+/// # Example
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+/// draw_triangle_wires(triangle, PURPLE);
+/// ```
+pub fn draw_triangle_wires(triangle: Triangle, color: Color) {
+    let Some(edges) = triangle_edges(triangle) else {
+        return;
+    };
+    for (start, end) in edges {
+        draw_line_3d(start, end, color);
+    }
+}
+
+/// Twelve edges of `obb`.
+///
+/// [`Obb::half_extents`](crate::math::Obb::half_extents) are half of the full
+/// size [`draw_cube`] takes. A negative component still outlines that absolute
+/// box; overlap queries treat the box as empty. A zero or non-finite rotation
+/// is drawn as [`Quat::IDENTITY`] so the center stays visible; those queries
+/// miss. A non-finite center or extent draws nothing.
+///
+/// # Example
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// let box_ = Obb::new(Vec3::ZERO, vec3(0.5, 0.5, 0.5), Quat::IDENTITY);
+/// draw_obb(box_, BLUE);
+/// ```
+pub fn draw_obb(obb: Obb, color: Color) {
+    let Some(corners) = obb_corners(obb) else {
+        return;
+    };
+    for (start, end) in obb_edge_indices() {
+        draw_line_3d(corners[start], corners[end], color);
+    }
+}
+
+/// Wire capsule: sphere wires at the inner endpoints and four lines on the hull.
+///
+/// `a` and `b` are the inner segment. The side lines sit `radius` out from
+/// that segment. The spheres are [`draw_sphere_wires`], so each cap extends
+/// `radius` past its endpoint. A negative or non-finite radius draws nothing.
+/// A zero radius draws the segment. Coincident endpoints draw one sphere.
+///
+/// # Example
+///
+/// ```no_run
+/// # use macroquad::prelude::*;
+/// let body = Capsule::new(vec3(0.0, 0.4, 0.0), vec3(0.0, 1.2, 0.0), 0.3);
+/// draw_capsule_wires(body, ORANGE);
+/// ```
+pub fn draw_capsule_wires(capsule: Capsule, color: Color) {
+    if !capsule.a.is_finite() || !capsule.b.is_finite() || !capsule.radius.is_finite() {
+        return;
+    }
+    if capsule.radius < 0.0 {
+        return;
+    }
+    if capsule.radius == 0.0 {
+        draw_line_3d(capsule.a, capsule.b, color);
+        return;
+    }
+    draw_sphere_wires(capsule.a, capsule.radius, None, color);
+    if (capsule.b - capsule.a).length_squared() > 1e-8 {
+        draw_sphere_wires(capsule.b, capsule.radius, None, color);
+        if let Some(lines) = capsule_side_lines(capsule) {
+            for (start, end) in lines {
+                draw_line_3d(start, end, color);
+            }
+        }
+    }
+}
+
+fn ray_segment(ray: Ray, t: f32) -> Option<(Vec3, Vec3)> {
+    if !ray.origin.is_finite() || !ray.direction.is_finite() || !t.is_finite() {
+        return None;
+    }
+    let end = ray.point_at(t);
+    if !end.is_finite() {
+        None
+    } else {
+        Some((ray.origin, end))
+    }
+}
+
+/// Unit plane for the same geometric plane as `plane`.
+///
+/// A non-unit normal is normalized and `distance` is scaled by the same
+/// factor. A zero or non-finite normal is `None`.
+fn unit_plane(plane: Plane) -> Option<Plane> {
+    if !plane.normal.is_finite() || !plane.distance.is_finite() {
+        return None;
+    }
+    let length = plane.normal.length();
+    if !length.is_finite() || length <= 1e-8 {
+        return None;
+    }
+    Some(Plane::new(plane.normal / length, plane.distance / length))
+}
+
+fn plane_tangents(normal: Vec3) -> Option<(Vec3, Vec3)> {
+    let helper = if normal.cross(Vec3::Y).length_squared() > 1e-8 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let tangent = normal.cross(helper);
+    if tangent.length_squared() <= 1e-12 {
+        return None;
+    }
+    let tangent = tangent.normalize();
+    let bitangent = normal.cross(tangent).normalize();
+    if tangent.is_finite() && bitangent.is_finite() {
+        Some((tangent, bitangent))
+    } else {
+        None
+    }
+}
+
+fn plane_wire_corners(plane: Plane, center: Vec3, size: f32) -> Option<[Vec3; 4]> {
+    if !center.is_finite() || !size.is_finite() || size <= 0.0 {
+        return None;
+    }
+    let plane = unit_plane(plane)?;
+    let (tangent, bitangent) = plane_tangents(plane.normal)?;
+    let center = plane.closest_point(center);
+    if !center.is_finite() {
+        return None;
+    }
+    let half = size * 0.5;
+    let corners = [
+        center + (tangent + bitangent) * half,
+        center + (-tangent + bitangent) * half,
+        center + (-tangent - bitangent) * half,
+        center + (tangent - bitangent) * half,
+    ];
+    if corners.iter().any(|corner| !corner.is_finite()) {
+        None
+    } else {
+        Some(corners)
+    }
+}
+
+fn triangle_edges(triangle: Triangle) -> Option<[(Vec3, Vec3); 3]> {
+    if triangle.a.is_finite() && triangle.b.is_finite() && triangle.c.is_finite() {
+        Some([
+            (triangle.a, triangle.b),
+            (triangle.b, triangle.c),
+            (triangle.c, triangle.a),
+        ])
+    } else {
+        None
+    }
+}
+
+fn unit_quat(rotation: Quat) -> Quat {
+    let length_sq = rotation.length_squared();
+    if length_sq.is_finite() && length_sq > 1e-12 {
+        rotation * length_sq.sqrt().recip()
+    } else {
+        Quat::IDENTITY
+    }
+}
+
+fn obb_corners(obb: Obb) -> Option<[Vec3; 8]> {
+    if !obb.center.is_finite() || !obb.half_extents.is_finite() {
+        return None;
+    }
+    let rotation = unit_quat(obb.rotation);
+    let corners = std::array::from_fn(|index| {
+        let local = vec3(
+            if index & 1 == 0 {
+                -obb.half_extents.x
+            } else {
+                obb.half_extents.x
+            },
+            if index & 2 == 0 {
+                -obb.half_extents.y
+            } else {
+                obb.half_extents.y
+            },
+            if index & 4 == 0 {
+                -obb.half_extents.z
+            } else {
+                obb.half_extents.z
+            },
+        );
+        obb.center + rotation * local
+    });
+    if corners.iter().any(|corner| !corner.is_finite()) {
+        None
+    } else {
+        Some(corners)
+    }
+}
+
+/// Twelve edges of an 8-corner box. Index bit 0 is X, bit 1 is Y, bit 2 is Z.
+fn obb_edge_indices() -> [(usize, usize); 12] {
+    let mut edges = [(0, 0); 12];
+    let mut count = 0;
+    for index in 0..8 {
+        if index & 1 == 0 {
+            edges[count] = (index, index + 1);
+            count += 1;
+        }
+        if index & 2 == 0 {
+            edges[count] = (index, index + 2);
+            count += 1;
+        }
+        if index & 4 == 0 {
+            edges[count] = (index, index + 4);
+            count += 1;
+        }
+    }
+    edges
+}
+
+fn capsule_side_lines(capsule: Capsule) -> Option<[(Vec3, Vec3); 4]> {
+    if !capsule.a.is_finite()
+        || !capsule.b.is_finite()
+        || !capsule.radius.is_finite()
+        || capsule.radius <= 0.0
+    {
+        return None;
+    }
+    let axis = capsule.b - capsule.a;
+    if !axis.is_finite() || axis.length_squared() <= 1e-8 {
+        return None;
+    }
+    let (tangent, bitangent) = plane_tangents(axis.normalize())?;
+    let radius = capsule.radius;
+    let lines = [
+        tangent * radius,
+        -tangent * radius,
+        bitangent * radius,
+        -bitangent * radius,
+    ]
+    .map(|offset| (capsule.a + offset, capsule.b + offset));
+    if lines
+        .iter()
+        .any(|(start, end)| !start.is_finite() || !end.is_finite())
+    {
+        None
+    } else {
+        Some(lines)
+    }
+}
+
+#[cfg(test)]
+mod debug_draw_tests {
+    use super::*;
+    use glam::Vec3;
+
+    fn near(a: Vec3, b: Vec3) -> bool {
+        (a - b).length() < 1e-4
+    }
+
+    #[test]
+    fn ray_segment_scales_direction_and_rejects_non_finite() {
+        let ray = Ray::new(vec3(1.0, 2.0, 3.0), vec3(0.0, 0.0, 2.0));
+        let (start, end) = ray_segment(ray, 0.5).unwrap();
+        assert!(near(start, ray.origin));
+        assert!(near(end, vec3(1.0, 2.0, 4.0)));
+
+        let (start, end) = ray_segment(ray, -1.0).unwrap();
+        assert!(near(start, ray.origin));
+        assert!(near(end, vec3(1.0, 2.0, 1.0)));
+
+        assert!(ray_segment(ray, f32::NAN).is_none());
+        assert!(ray_segment(Ray::new(Vec3::NAN, Vec3::X), 1.0).is_none());
+    }
+
+    #[test]
+    fn plane_wire_is_a_square_on_the_plane() {
+        let ground = Plane::new(Vec3::Y, 0.0);
+        let corners = plane_wire_corners(ground, vec3(2.0, 5.0, -1.0), 2.0).unwrap();
+        let centroid = (corners[0] + corners[1] + corners[2] + corners[3]) * 0.25;
+        assert!(near(centroid, vec3(2.0, 0.0, -1.0)));
+        for corner in corners {
+            assert!(ground.signed_distance(corner).abs() < 1e-4);
+        }
+        for index in 0..4 {
+            let edge = corners[(index + 1) % 4] - corners[index];
+            assert!((edge.length() - 2.0).abs() < 1e-4);
+        }
+        let diagonal = corners[2] - corners[0];
+        assert!((diagonal.length() - 2.0 * std::f32::consts::SQRT_2).abs() < 1e-4);
+    }
+
+    #[test]
+    fn plane_wire_normalizes_a_non_unit_normal_and_rejects_a_bad_plane() {
+        let raised = Plane::new(vec3(0.0, 2.0, 0.0), 4.0);
+        let corners = plane_wire_corners(raised, vec3(0.0, 10.0, 0.0), 2.0).unwrap();
+        for corner in corners {
+            assert!((corner.y - 2.0).abs() < 1e-4);
+        }
+        assert!(plane_wire_corners(Plane::new(Vec3::ZERO, 0.0), Vec3::ZERO, 1.0).is_none());
+        assert!(plane_wire_corners(Plane::new(Vec3::Y, 0.0), Vec3::ZERO, 0.0).is_none());
+        assert!(plane_wire_corners(Plane::new(Vec3::Y, 0.0), Vec3::ZERO, -2.0).is_none());
+        assert!(plane_wire_corners(Plane::new(Vec3::Y, f32::NAN), Vec3::ZERO, 1.0).is_none());
+    }
+
+    #[test]
+    fn triangle_edges_follow_winding_and_reject_non_finite() {
+        let triangle = Triangle::new(Vec3::ZERO, Vec3::X, Vec3::Y);
+        let edges = triangle_edges(triangle).unwrap();
+        assert!(near(edges[0].0, Vec3::ZERO) && near(edges[0].1, Vec3::X));
+        assert!(near(edges[1].0, Vec3::X) && near(edges[1].1, Vec3::Y));
+        assert!(near(edges[2].0, Vec3::Y) && near(edges[2].1, Vec3::ZERO));
+        assert!(triangle_edges(Triangle::new(Vec3::NAN, Vec3::X, Vec3::Y)).is_none());
+    }
+
+    #[test]
+    fn obb_corners_match_half_extents_and_a_yaw() {
+        let identity = Obb::new(vec3(1.0, 2.0, 3.0), vec3(1.0, 2.0, 3.0), Quat::IDENTITY);
+        let corners = obb_corners(identity).unwrap();
+        assert!(corners.iter().any(|corner| near(*corner, Vec3::ZERO)));
+        assert!(corners
+            .iter()
+            .any(|corner| near(*corner, vec3(2.0, 4.0, 6.0))));
+        assert_eq!(obb_edge_indices().len(), 12);
+
+        let yaw = Obb::new(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
+        );
+        let yawed = obb_corners(yaw).unwrap();
+        // +90° about Y sends local (x, y, z) to (z, y, -x).
+        assert!(yawed
+            .iter()
+            .any(|corner| near(*corner, vec3(1.0, 1.0, -1.0))));
+        assert!(yawed.iter().all(|corner| {
+            (corner.x.abs() - 1.0).abs() < 1e-4
+                && (corner.y.abs() - 1.0).abs() < 1e-4
+                && (corner.z.abs() - 1.0).abs() < 1e-4
+        }));
+    }
+
+    #[test]
+    fn obb_draws_identity_for_a_bad_rotation_and_skips_a_bad_center() {
+        let zero = obb_corners(Obb::new(
+            Vec3::ZERO,
+            Vec3::ONE,
+            Quat::from_xyzw(0.0, 0.0, 0.0, 0.0),
+        ))
+        .unwrap();
+        let identity = obb_corners(Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY)).unwrap();
+        for (left, right) in zero.iter().zip(identity.iter()) {
+            assert!(near(*left, *right));
+        }
+
+        let flipped =
+            obb_corners(Obb::new(Vec3::ZERO, vec3(-1.0, 2.0, 3.0), Quat::IDENTITY)).unwrap();
+        let positive =
+            obb_corners(Obb::new(Vec3::ZERO, vec3(1.0, 2.0, 3.0), Quat::IDENTITY)).unwrap();
+        for corner in flipped {
+            assert!(positive.iter().any(|other| near(corner, *other)));
+        }
+
+        assert!(obb_corners(Obb::new(Vec3::NAN, Vec3::ONE, Quat::IDENTITY)).is_none());
+    }
+
+    #[test]
+    fn capsule_side_lines_sit_on_the_hull() {
+        let capsule = Capsule::new(Vec3::ZERO, vec3(0.0, 2.0, 0.0), 0.5);
+        let lines = capsule_side_lines(capsule).unwrap();
+        for (start, end) in lines {
+            let start_radius = (start.x * start.x + start.z * start.z).sqrt();
+            let end_radius = (end.x * end.x + end.z * end.z).sqrt();
+            assert!((start_radius - 0.5).abs() < 1e-4);
+            assert!((end_radius - 0.5).abs() < 1e-4);
+            assert!(start.y.abs() < 1e-4);
+            assert!((end.y - 2.0).abs() < 1e-4);
+            assert!(((end - start).dot(Vec3::Y) - 2.0).abs() < 1e-4);
+        }
+        assert!(capsule_side_lines(Capsule::new(Vec3::ZERO, Vec3::Y, -1.0)).is_none());
+        assert!(capsule_side_lines(Capsule::new(Vec3::ZERO, Vec3::ZERO, 0.5)).is_none());
+        assert!(capsule_side_lines(Capsule::new(Vec3::ZERO, Vec3::Y, 0.0)).is_none());
     }
 }
