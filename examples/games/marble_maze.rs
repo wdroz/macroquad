@@ -18,16 +18,17 @@ const MARBLE_RADIUS: f32 = 0.35;
 
 /// Inclusive overlap treats a marble sitting on the floor as already inside it,
 /// so a test at the full radius rejects every sideways move. The probe is this
-/// much smaller than the drawn marble. `slide_sphere` does not exist yet.
+/// much smaller than the drawn marble. `slide_sphere` accepts the full radius;
+/// this example keeps the probe it shipped with.
 #[cfg(feature = "gltf")]
 const SKIN: f32 = 0.02;
 
 #[cfg(feature = "gltf")]
 enum Solid {
-    /// Box collider. The imported shape is an [`Aabb`] even when the node is
-    /// rotated, so this is [`Obb::from_world_matrix`] on the node instead.
-    /// That matches the mesh only because the Blender cubes were created at
-    /// size 1 (vertices at ±0.5). A default Blender cube is size 2.
+    /// Box collider. A mesh with only a `_collider` suffix is still the world
+    /// [`Aabb`] of its positions, which fills a rotated bumper, so that case
+    /// is [`Obb::from_world_matrix`] on the node. The cubes were created at
+    /// size 1 (vertices at ±0.5), which is the scale that helper expects.
     Box(Obb),
     Sphere(Sphere),
 }
@@ -50,14 +51,18 @@ impl Level {
                 goals.push(collider.shape);
                 continue;
             }
-            // `GltfColliderShape` has no overlap helper, and a rotated box is
-            // stored as the mesh's world AABB, which fills the bumper's gap.
-            solids.push(match collider.shape {
+            // These cubes have no `mq_shape`, so a rotated mesh is still the
+            // world AABB of its positions. Rebuild that one from the node.
+            // `mq_shape = box` already arrives as an `Obb` sized to the mesh.
+            let solid = match collider.shape {
                 GltfColliderShape::Sphere(sphere) => Solid::Sphere(sphere),
+                GltfColliderShape::Obb(obb) => Solid::Box(obb),
                 GltfColliderShape::Aabb(_) => {
                     Solid::Box(Obb::from_world_matrix(scene.nodes[collider.node].world))
                 }
-            });
+                GltfColliderShape::Capsule(_) => continue,
+            };
+            solids.push(solid);
         }
         let spawn = scene
             .spawns
@@ -73,10 +78,7 @@ impl Level {
 
     fn reached(&self, center: Vec3) -> bool {
         let marble = Sphere::new(center, MARBLE_RADIUS);
-        self.goals.iter().any(|goal| match *goal {
-            GltfColliderShape::Sphere(sphere) => marble.overlaps(&sphere),
-            GltfColliderShape::Aabb(aabb) => marble.overlaps_aabb(&aabb),
-        })
+        self.goals.iter().any(|goal| goal.overlaps_sphere(&marble))
     }
 }
 
@@ -257,6 +259,7 @@ async fn main() {
                 GltfColliderShape::Aabb(aabb) => {
                     draw_cube_wires(aabb.center(), aabb.size(), YELLOW);
                 }
+                GltfColliderShape::Obb(_) | GltfColliderShape::Capsule(_) => {}
             }
         }
         draw_sphere(

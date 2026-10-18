@@ -29,22 +29,14 @@ Put custom properties on the **object**, not on the mesh data. The exporter writ
 
 `mq_shape` is `box`, `sphere`, or `capsule`.
 
-- A `box` is an `Aabb`. The center is the world-matrix translation. The full size is the length of each column of the world matrix's upper 3×3, in column order. Parent scale is included. A negative scale stays a positive length. Those lengths are **not** reordered onto world axes, and a rotated empty is **not** turned into an `Obb`.
-- A `sphere` uses that same center. The radius is the **largest** of the three column lengths, not half of it. An empty scaled `(2, 2, 2)` has radius `2`.
-- `capsule` is recognized and then skipped. `Capsule` is in `macroquad::math`, but this loader does not build one yet. The segment will run along the node's world +Y, the radius will be the larger of the world X and Z column lengths, and the world Y column length will be the distance from the center to an endpoint of the inner segment.
+- An empty `box` is centered on the world-matrix translation. The full size is the length of each column of the world matrix's upper 3×3. Parent scale is included. A negative scale stays a positive length. When the world rotation leaves the faces on the world axes, including a quarter turn, the shape is an `Aabb` and the size sits on those world axes (a 90° yaw swaps local X and Z). Any other rotation is an `Obb` from `Obb::from_world_matrix`: `half_extents` are half of that full size, and a negative scale stays a positive extent.
+- A mesh with `mq_shape` = `box` uses the **mesh's** local bounds, posed by the same world matrix, not the node scale alone. A default Blender cube is size 2 (vertices at ±1). With node scale 1 that box has full size 2. A cube created at size 1 (vertices at ±0.5) keeps the node scale as its full size. A rotated mesh box is an `Obb` of those bounds. A mesh with no `mq_shape` is still the axis-aligned bound of the transformed positions, which is larger than a rotated cube.
+- A `sphere` uses that same center. The radius is the **largest** of the three column lengths, not half of it. An empty scaled `(2, 2, 2)` has radius `2`. The mesh is ignored when `mq_shape` is `sphere`.
+- A `capsule` is a `Capsule` along the node's world +Y (the Y column of the world matrix, so a rotated empty leans). The radius is the larger of the world X and Z column lengths. The world Y column length is the distance from the center to an endpoint of the **inner** segment. The rounded caps extend `radius` past those endpoints. An empty scaled `(0.5, 1.0, 0.5)` has radius `0.5` and inner endpoints 1.0 above and below the center. The mesh is ignored when `mq_shape` is `capsule`.
 - A collider or trigger with no `mq_shape` and with a mesh becomes an `Aabb` around the mesh positions after the node world matrix.
 - An empty with a role, no `mq_shape`, and no mesh is not a collider.
 
-A rotated box still imports as an `Aabb` of those column lengths. If the gameplay code needs the orientation, read the node's world matrix and build an `Obb` yourself. `Obb::from_world_matrix` uses the same center and treats the matrix scale as the full size:
-
-```rust
-use macroquad::gltf::GltfScene;
-use macroquad::math::Obb;
-
-fn oriented_box(scene: &GltfScene, node_index: usize) -> Obb {
-    Obb::from_world_matrix(scene.nodes[node_index].world)
-}
-```
+`GltfColliderShape::overlaps_sphere` and `overlaps_aabb` cover `Aabb`, `Sphere`, `Obb`, and `Capsule`.
 
 `GltfCollider::node` is an index into `GltfScene::nodes`, which is preorder of the default scene. It is not the index in the glTF file when some nodes were left out of the scene.
 
@@ -77,8 +69,8 @@ A minimal room:
 Parsing bytes does not need a window. `include_bytes!` is the path unit tests use.
 
 ```rust
-use macroquad::gltf::{GltfColliderShape, GltfScene};
-use macroquad::math::vec3;
+use macroquad::gltf::GltfScene;
+use macroquad::math::Sphere;
 
 let scene = GltfScene::from_bytes(include_bytes!("scene.glb")).expect("level");
 
@@ -87,19 +79,11 @@ let spawn = scene
     .iter()
     .find(|spawn| spawn.name.as_deref() == Some("player_spawn"))
     .expect("spawn");
-let start = spawn.position;
+let body = Sphere::new(spawn.position, 0.5);
 
 for collider in &scene.colliders {
-    match collider.shape {
-        GltfColliderShape::Aabb(aabb) => {
-            let _ = aabb.contains(start);
-        }
-        GltfColliderShape::Sphere(sphere) => {
-            let _ = sphere.contains(start);
-        }
-    }
-    if collider.trigger {
-        let _ = vec3(0.0, 0.0, 0.0);
+    if !collider.trigger && collider.shape.overlaps_sphere(&body) {
+        // `body` starts inside this solid.
     }
 }
 ```
@@ -166,8 +150,6 @@ With no path, the example shows the checkerboard. A path is loaded with `load_fi
 
 ## What the loader does not do yet
 
-- Capsule markers are ignored. `Capsule` in `macroquad::math` is the shape they will become; the loader does not build one yet.
-- A rotated `box` stays an `Aabb`. Build an `Obb` from `node.world` when you need the rotation.
 - There is no up-axis conversion after import.
 - Images are not stored on `GltfScene`. Only `GltfModel` uploads them, and only from a `.glb`.
 - Skins, animations, morph targets, and PBR shading are not implemented.

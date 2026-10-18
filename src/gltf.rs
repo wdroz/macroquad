@@ -34,22 +34,34 @@
 //! Node `extras` are preferred: `mq_shape` is `box`, `sphere`, or `capsule`,
 //! and `mq_role` is `collider`, `trigger`, or `spawn`. When `mq_role` is
 //! absent, a name ending in `_collider`, `_trigger`, or `_spawn` supplies the
-//! role. `capsule` is recognized and skipped: [`crate::math::Capsule`] exists,
-//! but this loader does not emit one yet. A `box` or `sphere`
-//! is centered on the world-matrix translation. Its size is the length of each
-//! column of that matrix's upper 3×3, in column order, so a parent's scale is
-//! included and a negative scale stays positive. Those lengths are not turned
-//! into a world-aligned bound of a rotated box: the box stays an [`Aabb`] of
-//! that size. A collider or trigger with no `mq_shape` and a mesh becomes an
-//! [`Aabb`] around the mesh positions after the node's world matrix. An empty
-//! node with a role but no `mq_shape` and no mesh is not a collider. A spawn
-//! stores the world translation and the node name, and ignores `mq_shape`.
+//! role. A spawn stores the world translation and the node name, and ignores
+//! `mq_shape`.
+//!
+//! An empty `box` or `sphere` is centered on the world-matrix translation. Its
+//! size is the length of each column of that matrix's upper 3×3, so a parent's
+//! scale is included and a negative scale stays positive. A `sphere` uses the
+//! largest of those three lengths as the radius. A `box` whose world rotation
+//! leaves the faces on the world axes, including a quarter turn, is an [`Aabb`]
+//! of that world-aligned size. Any other rotation is an [`Obb`] from
+//! [`Obb::from_world_matrix`]. A mesh with `mq_shape` = `box` uses the mesh's
+//! local bounds in that pose, not the node scale alone: a default Blender cube
+//! is size 2 (vertices at ±1), so a node scale of 1 is a box of size 2.
+//!
+//! A `capsule` is a [`Capsule`] along the node's world +Y (the Y column of the
+//! world matrix). The radius is the larger of the world X and Z column lengths.
+//! The Y column length is the distance from the center to an endpoint of the
+//! inner segment. The rounded caps extend `radius` past those endpoints.
+//!
+//! A collider or trigger with no `mq_shape` and a mesh becomes an [`Aabb`]
+//! around the mesh positions after the node's world matrix, even when that
+//! node is rotated. An empty node with a role but no `mq_shape` and no mesh
+//! is not a collider.
 
 use std::collections::{HashMap, HashSet};
 
-use glam::{Mat4, Quat, Vec2, Vec3};
+use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
-use crate::math::{Aabb, Sphere};
+use crate::math::{Aabb, Capsule, Obb, Sphere};
 
 /// A parsed glTF scene: the default scene's nodes and the meshes they use.
 ///
@@ -194,24 +206,29 @@ pub struct GltfPrimitive {
     pub base_color_factor: [f32; 4],
 }
 
-/// Box or sphere produced from a glTF marker.
+/// Shape produced from a glTF collider or trigger.
 ///
-/// A rotated `box` stays an [`Aabb`] sized by the world-matrix column lengths.
-/// It is not an oriented box. See the module docs.
+/// See the module docs for which node becomes which variant. [`Self::overlaps_sphere`]
+/// and [`Self::overlaps_aabb`] test every variant, so a game does not match on
+/// the shape by hand.
 ///
 /// # Example
 ///
 /// ```
 /// use macroquad::gltf::GltfColliderShape;
-/// use macroquad::math::{Aabb, vec3};
+/// use macroquad::math::{Aabb, Sphere, vec3};
 ///
 /// let shape = GltfColliderShape::Aabb(Aabb::from_center_size(
 ///     vec3(0.0, 1.0, 0.0),
 ///     vec3(2.0, 1.0, 0.5),
 /// ));
+/// let ball = Sphere::new(vec3(0.0, 1.5, 0.0), 0.5);
+/// assert!(shape.overlaps_sphere(&ball));
 /// match shape {
 ///     GltfColliderShape::Aabb(aabb) => assert_eq!(aabb.size(), vec3(2.0, 1.0, 0.5)),
-///     GltfColliderShape::Sphere(_) => panic!("expected a box"),
+///     GltfColliderShape::Sphere(_)
+///     | GltfColliderShape::Obb(_)
+///     | GltfColliderShape::Capsule(_) => panic!("expected a box"),
 /// }
 /// ```
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -220,6 +237,64 @@ pub enum GltfColliderShape {
     Aabb(Aabb),
     /// Sphere. The radius is the largest column length, not half of it.
     Sphere(Sphere),
+    /// Oriented box. `half_extents` are half of the full size.
+    Obb(Obb),
+    /// Capsule. `a` and `b` are the inner segment, not the rounded hull.
+    Capsule(Capsule),
+}
+
+impl GltfColliderShape {
+    /// Returns true when this shape and `sphere` overlap, including a touch.
+    ///
+    /// A sphere sitting on a face counts. A negative or non-finite radius on
+    /// either shape does not overlap, matching [`Sphere`] and [`Capsule`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfColliderShape;
+    /// use macroquad::math::{Aabb, Sphere, vec3};
+    ///
+    /// let floor = GltfColliderShape::Aabb(Aabb::from_center_size(
+    ///     vec3(0.0, -0.1, 0.0),
+    ///     vec3(4.0, 0.2, 4.0),
+    /// ));
+    /// let resting = Sphere::new(vec3(0.0, 0.5, 0.0), 0.5);
+    /// assert!(floor.overlaps_sphere(&resting));
+    /// ```
+    pub fn overlaps_sphere(&self, sphere: &Sphere) -> bool {
+        match *self {
+            GltfColliderShape::Aabb(aabb) => sphere.overlaps_aabb(&aabb),
+            GltfColliderShape::Sphere(other) => other.overlaps(sphere),
+            GltfColliderShape::Obb(obb) => obb.overlaps_sphere(sphere),
+            GltfColliderShape::Capsule(capsule) => capsule.overlaps_sphere(sphere),
+        }
+    }
+
+    /// Returns true when this shape and `aabb` overlap, including a touch.
+    ///
+    /// An inverted `aabb` (`min` greater than `max` on an axis) overlaps
+    /// nothing. A negative or non-finite capsule or sphere radius overlaps
+    /// nothing.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfColliderShape;
+    /// use macroquad::math::{Aabb, Sphere, vec3};
+    ///
+    /// let orb = GltfColliderShape::Sphere(Sphere::new(vec3(0.0, 1.0, 0.0), 0.5));
+    /// let floor = Aabb::from_center_size(vec3(0.0, 0.0, 0.0), vec3(2.0, 1.0, 2.0));
+    /// assert!(orb.overlaps_aabb(&floor));
+    /// ```
+    pub fn overlaps_aabb(&self, aabb: &Aabb) -> bool {
+        match *self {
+            GltfColliderShape::Aabb(other) => other.overlaps(aabb),
+            GltfColliderShape::Sphere(sphere) => sphere.overlaps_aabb(aabb),
+            GltfColliderShape::Obb(obb) => obb.overlaps_aabb(aabb),
+            GltfColliderShape::Capsule(capsule) => capsule.overlaps_aabb(aabb),
+        }
+    }
 }
 
 /// A collider or trigger taken from one glTF node.
@@ -333,7 +408,9 @@ impl GltfScene {
     /// assert_eq!(scene.spawns[0].position, vec3(4.0, 0.0, 1.0));
     /// match scene.colliders[0].shape {
     ///     GltfColliderShape::Aabb(aabb) => assert_eq!(aabb.size(), vec3(2.0, 1.0, 0.5)),
-    ///     GltfColliderShape::Sphere(_) => panic!("expected a box"),
+    ///     GltfColliderShape::Sphere(_)
+    ///     | GltfColliderShape::Obb(_)
+    ///     | GltfColliderShape::Capsule(_) => panic!("expected a box"),
     /// }
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<GltfScene, GltfError> {
@@ -725,9 +802,8 @@ fn marker_shape(
     world: Mat4,
 ) -> Option<GltfColliderShape> {
     match explicit_shape(node) {
-        Some(MarkerShape::Capsule) => None,
-        Some(MarkerShape::Box) => world_extent(world)
-            .map(|(center, size)| GltfColliderShape::Aabb(Aabb::from_center_size(center, size))),
+        Some(MarkerShape::Capsule) => capsule_shape(world),
+        Some(MarkerShape::Box) => box_shape(loaded, index, world),
         Some(MarkerShape::Sphere) => world_extent(world).map(|(center, size)| {
             GltfColliderShape::Sphere(Sphere::new(center, size.max_element()))
         }),
@@ -737,6 +813,78 @@ fn marker_shape(
             .map(GltfColliderShape::Aabb),
     }
 }
+
+/// Empty boxes use `world` as the full size. A mesh box uses the local bounds
+/// of that mesh, posed by `world`, so a Blender cube of size 2 is not half the
+/// drawn mesh.
+fn box_shape(loaded: &GltfScene, index: usize, world: Mat4) -> Option<GltfColliderShape> {
+    let posed = if let Some(mesh) = loaded.nodes[index].mesh {
+        let local = mesh_local_aabb(loaded, mesh)?;
+        world * Mat4::from_scale_rotation_translation(local.size(), Quat::IDENTITY, local.center())
+    } else {
+        world
+    };
+    shape_from_box_matrix(posed)
+}
+
+/// An axis-aligned rotation, including a quarter turn, is an [`Aabb`] whose
+/// size lies on the world axes. Any other rotation stays an [`Obb`].
+fn shape_from_box_matrix(posed: Mat4) -> Option<GltfColliderShape> {
+    let obb = Obb::from_world_matrix(posed);
+    if !obb.center.is_finite() || !obb.half_extents.is_finite() {
+        return None;
+    }
+    if rotation_is_axis_aligned(obb.rotation) {
+        Some(GltfColliderShape::Aabb(aabb_from_aligned_obb(obb)))
+    } else {
+        Some(GltfColliderShape::Obb(obb))
+    }
+}
+
+fn rotation_is_axis_aligned(rotation: Quat) -> bool {
+    if !rotation.is_finite() || rotation.length_squared() <= f32::EPSILON {
+        return false;
+    }
+    let matrix = Mat3::from_quat(rotation.normalize());
+    [matrix.x_axis, matrix.y_axis, matrix.z_axis]
+        .into_iter()
+        .all(|column| {
+            let abs = column.abs();
+            let dominant = abs.max_element();
+            dominant >= 1.0 - AXIS_ALIGN_EPSILON
+                && abs.x + abs.y + abs.z - dominant <= AXIS_ALIGN_EPSILON
+        })
+}
+
+fn aabb_from_aligned_obb(obb: Obb) -> Aabb {
+    let matrix = Mat3::from_quat(obb.rotation.normalize());
+    let full = obb.half_extents * 2.0;
+    let size =
+        matrix.x_axis.abs() * full.x + matrix.y_axis.abs() * full.y + matrix.z_axis.abs() * full.z;
+    Aabb::from_center_size(obb.center, size)
+}
+
+/// Capsule along the world matrix's Y column.
+///
+/// That column's length is the distance from the center to one inner endpoint.
+/// The radius is the larger of the X and Z column lengths.
+fn capsule_shape(world: Mat4) -> Option<GltfColliderShape> {
+    let center = world.transform_point3(Vec3::ZERO);
+    let x_len = world.x_axis.truncate().length();
+    let y_axis = world.y_axis.truncate();
+    let y_len = y_axis.length();
+    let z_len = world.z_axis.truncate().length();
+    if !center.is_finite() || !x_len.is_finite() || !y_len.is_finite() || !z_len.is_finite() {
+        return None;
+    }
+    Some(GltfColliderShape::Capsule(Capsule::new(
+        center - y_axis,
+        center + y_axis,
+        x_len.max(z_len),
+    )))
+}
+
+const AXIS_ALIGN_EPSILON: f32 = 1.0e-3;
 
 /// Center and full size from the world matrix.
 ///
@@ -754,6 +902,19 @@ fn world_extent(world: Mat4) -> Option<(Vec3, Vec3)> {
     } else {
         None
     }
+}
+
+fn mesh_local_aabb(loaded: &GltfScene, mesh: usize) -> Option<Aabb> {
+    let mut points = Vec::new();
+    for primitive in &loaded.meshes[mesh].primitives {
+        for position in &primitive.positions {
+            if !position.is_finite() {
+                return None;
+            }
+            points.push(*position);
+        }
+    }
+    Aabb::from_points(points)
 }
 
 fn mesh_aabb(loaded: &GltfScene, mesh: usize, world: Mat4) -> Option<Aabb> {
@@ -1327,7 +1488,16 @@ mod tests {
             .as_bytes(),
         )
         .unwrap();
-        assert!(skipped.colliders.is_empty());
+        assert_eq!(skipped.colliders.len(), 1);
+        assert_eq!(skipped.colliders[0].name.as_deref(), Some("pill_collider"));
+        assert!(!skipped.colliders[0].trigger);
+        let GltfColliderShape::Capsule(pill) = skipped.colliders[0].shape else {
+            panic!("capsule empty");
+        };
+        // Identity scale: radius 1, and the Y column reaches 1 on each side.
+        assert_vec3_close(pill.a, vec3(0.0, -1.0, 0.0));
+        assert_vec3_close(pill.b, vec3(0.0, 1.0, 0.0));
+        assert!((pill.radius - 1.0).abs() < 1e-5);
         assert!(skipped.spawns.is_empty());
     }
 
@@ -1359,7 +1529,7 @@ mod tests {
     }
 
     #[test]
-    fn a_rotated_box_keeps_its_scale_and_does_not_become_an_obb() {
+    fn a_quarter_turn_box_stays_an_aabb_and_a_yaw_is_an_obb() {
         let scene = GltfScene::from_bytes(
             scene_json(
                 r#"{"name":"turn_collider","translation":[1,2,3],"scale":[2,3,4],"rotation":[0,0.7071067811865476,0,0.7071067811865476],"extras":{"mq_shape":"box","mq_role":"collider"}}"#,
@@ -1369,12 +1539,176 @@ mod tests {
         )
         .unwrap();
         let GltfColliderShape::Aabb(aabb) = scene.colliders[0].shape else {
-            panic!("rotated box stays an AABB");
+            panic!("quarter turn stays an AABB");
         };
-        assert_vec3_close(aabb.center(), vec3(1.0, 2.0, 3.0));
-        // Quarter turn about Y would swap local X and Z on a world-aligned
-        // bound (size 4, 3, 2). Column lengths stay in column order.
-        assert_vec3_close(aabb.size(), vec3(2.0, 3.0, 4.0));
+        let center = vec3(1.0, 2.0, 3.0);
+        assert_vec3_close(aabb.center(), center);
+        // 90° about Y maps local X (size 2) onto world Z and local Z (size 4)
+        // onto world X. The faces are still on the world axes.
+        assert_vec3_close(aabb.size(), vec3(4.0, 3.0, 2.0));
+        assert!(aabb.contains(center + vec3(2.0, 0.0, 0.0)));
+        assert!(!aabb.contains(center + vec3(2.2, 0.0, 0.0)));
+        assert!(aabb.contains(center + vec3(0.0, 0.0, -1.0)));
+        assert!(!aabb.contains(center + vec3(0.0, 0.0, -1.2)));
+
+        let yaw = Quat::from_rotation_y(45.0_f32.to_radians());
+        let yawed = GltfScene::from_bytes(
+            scene_json(
+                &format!(
+                    r#"{{"name":"yaw_collider","translation":[1,2,3],"scale":[2,3,4],"rotation":[{},{},{},{}],"extras":{{"mq_shape":"box","mq_role":"collider"}}}},{{"rotation":[{},{},{},{}],"children":[2]}},{{"name":"child_collider","scale":[2,2,2],"extras":{{"mq_shape":"box","mq_role":"collider"}}}}"#,
+                    yaw.x, yaw.y, yaw.z, yaw.w, yaw.x, yaw.y, yaw.z, yaw.w
+                ),
+                r#"{"nodes":[0,1]}"#,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let GltfColliderShape::Obb(obb) = yawed.colliders[0].shape else {
+            panic!("45° box is an Obb");
+        };
+        assert_vec3_close(obb.center, center);
+        assert_vec3_close(obb.half_extents, vec3(1.0, 1.5, 2.0));
+        assert!(obb.rotation.dot(yaw).abs() > 1.0 - 1e-4);
+        let on_face = Sphere::new(obb.center + obb.rotation * vec3(1.0, 0.0, 0.0), 0.0);
+        assert!(yawed.colliders[0].shape.overlaps_sphere(&on_face));
+        let clear = Sphere::new(obb.center + obb.rotation * vec3(1.5, 0.0, 0.0), 0.1);
+        assert!(!yawed.colliders[0].shape.overlaps_sphere(&clear));
+
+        let GltfColliderShape::Obb(child) = yawed.colliders[1].shape else {
+            panic!("a child of a yawed parent is an Obb");
+        };
+        assert_eq!(yawed.colliders[1].node, 2);
+        assert_vec3_close(child.half_extents, Vec3::ONE);
+        assert!(child.rotation.dot(yaw).abs() > 1.0 - 1e-4);
+    }
+
+    #[test]
+    fn capsule_empty_uses_world_y_and_the_wider_horizontal_scale() {
+        let turn = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2);
+        let scene = GltfScene::from_bytes(
+            scene_json(
+                &format!(
+                    r#"{{"name":"pill_trigger","translation":[1,2,3],"scale":[0.4,1.5,0.25],"extras":{{"mq_shape":"capsule","mq_role":"trigger"}}}},{{"name":"lean_collider","translation":[1,2,3],"scale":[0.4,1.5,0.25],"rotation":[{},{},{},{}],"extras":{{"mq_shape":"capsule","mq_role":"collider"}}}},{{"scale":[2,3,4],"children":[3]}},{{"name":"child_collider","extras":{{"mq_shape":"capsule","mq_role":"collider"}}}}"#,
+                    turn.x, turn.y, turn.z, turn.w
+                ),
+                r#"{"nodes":[0,1,2]}"#,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        assert_eq!(scene.colliders.len(), 3);
+
+        assert!(scene.colliders[0].trigger);
+        let GltfColliderShape::Capsule(upright) = scene.colliders[0].shape else {
+            panic!("capsule");
+        };
+        assert_vec3_close(upright.a, vec3(1.0, 0.5, 3.0));
+        assert_vec3_close(upright.b, vec3(1.0, 3.5, 3.0));
+        assert!((upright.radius - 0.4).abs() < 1e-5);
+        let floor = Aabb::from_center_size(vec3(1.0, 0.5, 3.0), vec3(0.8, 0.0, 0.8));
+        assert!(scene.colliders[0].shape.overlaps_aabb(&floor));
+
+        let GltfColliderShape::Capsule(leaning) = scene.colliders[1].shape else {
+            panic!("rotated capsule");
+        };
+        // 90° about Z sends local +Y to world -X, so the Y column is (-1.5, 0, 0).
+        assert_vec3_close(leaning.a, vec3(2.5, 2.0, 3.0));
+        assert_vec3_close(leaning.b, vec3(-0.5, 2.0, 3.0));
+        assert!((leaning.radius - 0.4).abs() < 1e-5);
+
+        let GltfColliderShape::Capsule(child) = scene.colliders[2].shape else {
+            panic!("child capsule");
+        };
+        assert_eq!(scene.colliders[2].node, 3);
+        assert_vec3_close(child.a, vec3(0.0, -3.0, 0.0));
+        assert_vec3_close(child.b, vec3(0.0, 3.0, 0.0));
+        assert!((child.radius - 4.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_mesh_box_uses_vertex_bounds_not_the_node_scale_alone() {
+        let yaw = Quat::from_rotation_y(45.0_f32.to_radians());
+        let default_cube = mesh_marker_glb(
+            &format!(
+                r#"{{"name":"cube_collider","translation":[4,0,0],"rotation":[{},{},{},{}],"mesh":0,"extras":{{"mq_shape":"box","mq_role":"collider"}}}}"#,
+                yaw.x, yaw.y, yaw.z, yaw.w
+            ),
+            &[
+                vec3(-1.0, -1.0, -1.0),
+                vec3(1.0, 1.0, 1.0),
+                vec3(1.0, -1.0, 1.0),
+            ],
+        );
+        let scene = GltfScene::from_bytes(&default_cube).unwrap();
+        let GltfColliderShape::Obb(obb) = scene.colliders[0].shape else {
+            panic!("yawed mesh box is an Obb");
+        };
+        // Vertices at ±1 and node scale 1. `from_world_matrix` on the node
+        // alone would use half extents 0.5.
+        assert_vec3_close(obb.center, vec3(4.0, 0.0, 0.0));
+        assert_vec3_close(obb.half_extents, Vec3::ONE);
+        let on_face = obb.center + obb.rotation * Vec3::X;
+        assert!(obb.contains(on_face));
+        assert!(!obb.contains(obb.center + obb.rotation * vec3(1.2, 0.0, 0.0)));
+
+        let offset = mesh_marker_glb(
+            r#"{"name":"offset_collider","translation":[10,0,0],"mesh":0,"extras":{"mq_shape":"box","mq_role":"collider"}}"#,
+            &[
+                vec3(0.0, 0.0, 0.0),
+                vec3(2.0, 0.0, 0.0),
+                vec3(0.0, 2.0, 2.0),
+            ],
+        );
+        let offset = GltfScene::from_bytes(&offset).unwrap();
+        let GltfColliderShape::Aabb(aabb) = offset.colliders[0].shape else {
+            panic!("axis-aligned mesh box stays an AABB");
+        };
+        assert_vec3_close(aabb.center(), vec3(11.0, 1.0, 1.0));
+        assert_vec3_close(aabb.size(), vec3(2.0, 2.0, 2.0));
+
+        let unit = mesh_marker_glb(
+            r#"{"name":"unit_collider","translation":[0,1,0],"scale":[2,4,6],"mesh":0,"extras":{"mq_shape":"box","mq_role":"collider"}}"#,
+            &[
+                vec3(-0.5, -0.5, -0.5),
+                vec3(0.5, 0.5, 0.5),
+                vec3(0.5, -0.5, 0.5),
+            ],
+        );
+        let unit = GltfScene::from_bytes(&unit).unwrap();
+        let GltfColliderShape::Aabb(unit_aabb) = unit.colliders[0].shape else {
+            panic!("size-1 cube");
+        };
+        // Vertices at ±0.5, so the node scale is the full size.
+        assert_vec3_close(unit_aabb.center(), vec3(0.0, 1.0, 0.0));
+        assert_vec3_close(unit_aabb.size(), vec3(2.0, 4.0, 6.0));
+    }
+
+    fn mesh_marker_glb(node: &str, positions: &[Vec3]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for position in positions {
+            for value in [position.x, position.y, position.z] {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        let mut min = positions[0];
+        let mut max = positions[0];
+        for position in positions {
+            min = min.min(*position);
+            max = max.max(*position);
+        }
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{node}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}}}}]}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":{},"type":"VEC3","min":[{},{},{}],"max":[{},{},{}]}}],"bufferViews":[{{"buffer":0,"byteLength":{}}}],"buffers":[{{"byteLength":{}}}]}}"#,
+            positions.len(),
+            min.x,
+            min.y,
+            min.z,
+            max.x,
+            max.y,
+            max.z,
+            bytes.len(),
+            bytes.len()
+        );
+        glb(&json, &bytes)
     }
 
     #[test]
@@ -1389,7 +1723,7 @@ mod tests {
         }
         let json = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,2,3,4]}],"nodes":[{"translation":[0,5,0],"children":[1]},{"name":"hull_collider","translation":[10,0,0],"mesh":0},{"name":"orb_collider","translation":[4,0,0],"scale":[1,2,0.5],"mesh":0,"extras":{"mq_shape":"sphere"}},{"name":"zone_trigger","scale":[2,2,2],"mesh":0},{"name":"pill_collider","mesh":0,"extras":{"mq_shape":"capsule","mq_role":"collider"}}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}},{"attributes":{"POSITION":1}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,2,0]},{"bufferView":1,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,3],"max":[0,0,3]}],"bufferViews":[{"buffer":0,"byteOffset":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":36}],"buffers":[{"byteLength":72}]}"#;
         let scene = GltfScene::from_bytes(&glb(json, &bytes)).unwrap();
-        assert_eq!(scene.colliders.len(), 3);
+        assert_eq!(scene.colliders.len(), 4);
         assert!(scene.spawns.is_empty());
 
         let hull = &scene.colliders[0];
@@ -1419,6 +1753,45 @@ mod tests {
         };
         assert_vec3_close(zone_aabb.min, Vec3::ZERO);
         assert_vec3_close(zone_aabb.max, vec3(2.0, 4.0, 6.0));
+
+        // `mq_shape = capsule` ignores the mesh and uses the world matrix.
+        let pill = &scene.colliders[3];
+        assert_eq!(pill.name.as_deref(), Some("pill_collider"));
+        assert_eq!(pill.node, 4);
+        let GltfColliderShape::Capsule(capsule) = pill.shape else {
+            panic!("capsule wins over the mesh");
+        };
+        assert_vec3_close(capsule.a, vec3(0.0, -1.0, 0.0));
+        assert_vec3_close(capsule.b, vec3(0.0, 1.0, 0.0));
+        assert!((capsule.radius - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn collider_shapes_overlap_a_touching_sphere_and_aabb() {
+        let floor = GltfColliderShape::Aabb(Aabb::from_center_size(
+            vec3(0.0, -0.1, 0.0),
+            vec3(4.0, 0.2, 4.0),
+        ));
+        let resting = Sphere::new(vec3(0.0, 0.5, 0.0), 0.5);
+        assert!(floor.overlaps_sphere(&resting));
+        assert!(!floor.overlaps_sphere(&Sphere::new(vec3(0.0, 1.0, 0.0), 0.4)));
+
+        let orb = GltfColliderShape::Sphere(Sphere::new(vec3(0.0, 1.0, 0.0), 1.0));
+        let pad = Aabb::from_center_size(vec3(0.0, 0.0, 0.0), vec3(2.0, 0.0, 2.0));
+        assert!(orb.overlaps_aabb(&pad));
+
+        let obb =
+            GltfColliderShape::Obb(Obb::new(Vec3::ZERO, Vec3::ONE, Quat::from_rotation_y(0.4)));
+        assert!(obb.overlaps_aabb(&Aabb::from_center_size(Vec3::ZERO, Vec3::splat(0.2))));
+        assert!(obb.overlaps_sphere(&Sphere::new(vec3(1.2, 0.0, 0.0), 0.3)));
+
+        let body = GltfColliderShape::Capsule(Capsule::new(Vec3::ZERO, vec3(0.0, 2.0, 0.0), 0.5));
+        assert!(body.overlaps_aabb(&Aabb::from_min_max(
+            vec3(-1.0, -0.5, -1.0),
+            vec3(1.0, 0.0, 1.0),
+        )));
+        assert!(body.overlaps_sphere(&Sphere::new(vec3(0.5, 1.0, 0.0), 0.0)));
+        assert!(!body.overlaps_sphere(&Sphere::new(vec3(2.0, 1.0, 0.0), 0.4)));
     }
 
     #[test]
