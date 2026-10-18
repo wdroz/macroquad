@@ -13,7 +13,14 @@ On this fork the dependency is the crate in the repository root. Tests and examp
 
 Blender is Z-up. glTF is Y-up, right-handed, and in meters. Blender's glTF exporter converts Z-up to Y-up when **+Y Up** is checked, which is the default. `GltfScene::from_bytes` stores those glTF axes as written. It does not convert them again.
 
-Macroquad still does not assume an up axis. A camera that should match the file uses `up: Vec3::Y`. There is no helper yet that reorients a loaded scene onto another up axis. Leaving **+Y Up** checked is the path the examples use.
+`scene.with_up_axis(up)` rotates the loaded nodes, mesh placement, colliders, and spawns so glTF +Y points along `up`. `Vec3::Y` returns an equal scene. `Vec3::Z` matches `Camera3D`'s default up, which is +Z. That camera default stays +Z.
+
+```rust
+let scene = GltfScene::from_bytes(&bytes).expect("level");
+let scene = scene.with_up_axis(Vec3::Z);
+```
+
+`GltfModel` parses the file on its own and stays Y-up. A camera that draws `model.draw()` uses `up: Vec3::Y` unless you exported a different orientation. Leaving **+Y Up** checked is the path the examples use.
 
 ## Mark colliders, triggers, and spawns
 
@@ -150,7 +157,7 @@ With no path, the example shows the checkerboard. A path is loaded with `load_fi
 
 ## What the loader does not do yet
 
-- There is no up-axis conversion after import.
+- `GltfModel` is not reoriented by `GltfScene::with_up_axis`. Draw and markers stay in agreement when the camera uses the same up axis as the file, which is Y for a normal Blender export.
 - Images are not stored on `GltfScene`. Only `GltfModel` uploads them, and only from a `.glb`.
 - Skins, animations, morph targets, and PBR shading are not implemented.
 - A full room asset is not checked in yet. The triangle and checkerboard files are the fixtures the tests and the draw example use.

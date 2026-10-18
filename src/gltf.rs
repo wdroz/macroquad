@@ -21,7 +21,10 @@
 //!
 //! glTF is Y-up and right-handed, in meters. Blender is Z-up; its glTF exporter
 //! converts to Y-up, and this loader stores those axes as written. It does not
-//! apply a second conversion. Macroquad does not assume an up axis.
+//! apply a second conversion. [`GltfScene::with_up_axis`] rotates a loaded scene
+//! so glTF +Y points along a caller-chosen axis; [`glam::Vec3::Y`] leaves the
+//! scene unchanged. Macroquad does not assume an up axis.
+//! [`crate::camera::Camera3D`]'s default up is +Z.
 //!
 //! Mesh vertices stay in mesh-local space. [`GltfNode::world`] is the node's
 //! place in the scene. External buffer file URIs are rejected: the bytes passed
@@ -447,6 +450,74 @@ impl GltfScene {
             )?;
         }
         Ok(loaded)
+    }
+
+    /// Rotates the scene so glTF +Y points along `up`.
+    ///
+    /// [`Self::from_bytes`] keeps the file's Y-up axes. Blender's glTF exporter
+    /// writes that Y-up file, so [`Vec3::Y`] (and any positive multiple of it)
+    /// returns an equal scene. `up` is a direction: its length is ignored. A
+    /// zero or non-finite `up` also returns an equal scene.
+    ///
+    /// Node world matrices are multiplied by that rotation. Root translation,
+    /// rotation, and scale are decomposed again; a child's local transform is
+    /// left as it was, so the hierarchy still composes. Mesh vertices stay in
+    /// mesh-local space and move with their node's world matrix. Colliders,
+    /// triggers, and spawns, which are stored in world space, are rotated by
+    /// the same amount. An [`Aabb`] whose faces stay on the world axes stays
+    /// an [`Aabb`]. Any other rotation of a box becomes an [`Obb`].
+    ///
+    /// [`crate::camera::Camera3D`]'s [`Default`] up axis is +Z, not +Y. A
+    /// camera aimed at a scene from [`Self::from_bytes`] needs `up: Vec3::Y`,
+    /// or the scene can be turned with `with_up_axis(Vec3::Z)` to match that
+    /// default. This method does not change the camera default.
+    /// [`crate::gltf_draw::GltfModel`] parses the file on its own and is not
+    /// reoriented.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::camera::Camera3D;
+    /// use macroquad::gltf::GltfScene;
+    /// use macroquad::math::{Vec3, vec3};
+    ///
+    /// let scene = GltfScene::from_bytes(
+    ///     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"name":"player_spawn","translation":[0.0,2.0,0.0]}]}"#,
+    /// )
+    /// .unwrap();
+    /// assert_eq!(
+    ///     scene.with_up_axis(Vec3::Y).spawns[0].position,
+    ///     vec3(0.0, 2.0, 0.0)
+    /// );
+    /// let z_up = scene.with_up_axis(Vec3::Z);
+    /// assert!((z_up.spawns[0].position - vec3(0.0, 0.0, 2.0)).length() < 1.0e-4);
+    /// assert_eq!(Camera3D::default().up, Vec3::Z);
+    /// ```
+    pub fn with_up_axis(&self, up: Vec3) -> GltfScene {
+        let Some(rotation) = up_axis_rotation(up) else {
+            return self.clone();
+        };
+        if rotation.dot(Quat::IDENTITY).abs() > 1.0 - 1.0e-5 {
+            return self.clone();
+        }
+        let mut scene = self.clone();
+        let basis = Mat4::from_quat(rotation);
+        for node in &mut scene.nodes {
+            node.world = basis * node.world;
+            if node.parent.is_none() {
+                let (scale, rotation, translation) = node.world.to_scale_rotation_translation();
+                node.scale = scale;
+                node.rotation = rotation;
+                node.translation = translation;
+            }
+        }
+        for collider in &mut scene.colliders {
+            collider.shape = rotate_shape(rotation, collider.shape);
+        }
+        for spawn in &mut scene.spawns {
+            spawn.position = rotation * spawn.position;
+        }
+        scene
     }
 }
 
@@ -885,6 +956,56 @@ fn capsule_shape(world: Mat4) -> Option<GltfColliderShape> {
 }
 
 const AXIS_ALIGN_EPSILON: f32 = 1.0e-3;
+
+/// Rotation that carries glTF +Y onto `up`.
+///
+/// [`None`] when `up` is zero or not finite. [`Quat::IDENTITY`] when `up`
+/// already points along +Y.
+fn up_axis_rotation(up: Vec3) -> Option<Quat> {
+    if !up.is_finite() {
+        return None;
+    }
+    let length_sq = up.length_squared();
+    if length_sq <= f32::EPSILON {
+        return None;
+    }
+    let up = up / length_sq.sqrt();
+    if !up.is_finite() || (up - Vec3::Y).length_squared() <= 1.0e-12 {
+        return Some(Quat::IDENTITY);
+    }
+    let rotation = Quat::from_rotation_arc(Vec3::Y, up);
+    if rotation.is_finite() {
+        Some(rotation)
+    } else {
+        None
+    }
+}
+
+fn rotate_shape(rotation: Quat, shape: GltfColliderShape) -> GltfColliderShape {
+    match shape {
+        GltfColliderShape::Sphere(sphere) => {
+            GltfColliderShape::Sphere(Sphere::new(rotation * sphere.center, sphere.radius))
+        }
+        GltfColliderShape::Capsule(capsule) => GltfColliderShape::Capsule(Capsule::new(
+            rotation * capsule.a,
+            rotation * capsule.b,
+            capsule.radius,
+        )),
+        GltfColliderShape::Obb(obb) => GltfColliderShape::Obb(Obb::new(
+            rotation * obb.center,
+            obb.half_extents,
+            rotation * obb.rotation,
+        )),
+        GltfColliderShape::Aabb(aabb) => {
+            let turned = Obb::new(rotation * aabb.center(), aabb.half_extents(), rotation);
+            if rotation_is_axis_aligned(rotation) {
+                GltfColliderShape::Aabb(aabb_from_aligned_obb(turned))
+            } else {
+                GltfColliderShape::Obb(turned)
+            }
+        }
+    }
+}
 
 /// Center and full size from the world matrix.
 ///
@@ -1847,5 +1968,114 @@ mod tests {
         assert_eq!(scene.spawns[0].name.as_deref(), Some("keep_spawn"));
         assert_eq!(scene.spawns[0].node, 0);
         assert_vec3_close(scene.spawns[0].position, vec3(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn y_up_and_an_unusable_up_leave_the_scene_unchanged() {
+        let scene = GltfScene::from_bytes(include_bytes!("../examples/assets/triangle.gltf"))
+            .expect("triangle.gltf");
+        assert_eq!(scene.with_up_axis(Vec3::Y), scene);
+        assert_eq!(scene.with_up_axis(Vec3::Y * 4.0), scene);
+        assert_eq!(scene.with_up_axis(Vec3::ZERO), scene);
+        assert_eq!(scene.with_up_axis(Vec3::NAN), scene);
+    }
+
+    #[test]
+    fn z_up_maps_gltf_y_onto_z_and_moves_markers_with_meshes() {
+        let positions = [0.0f32, 1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        let mut bytes = Vec::new();
+        for value in positions {
+            bytes.extend(value.to_le_bytes());
+        }
+        let json = r#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,2,3,4,5]}],"nodes":[{"name":"root","translation":[0,5,0],"children":[1]},{"name":"floor_collider","translation":[1,0,0],"scale":[2,0.2,4],"extras":{"mq_shape":"box","mq_role":"collider"}},{"name":"player_spawn","translation":[0,4,1]},{"name":"orb","translation":[0,1,0],"scale":[0.5,0.5,0.5],"mesh":0,"extras":{"mq_shape":"sphere","mq_role":"collider"}},{"name":"ramp_collider","translation":[2,0,0],"rotation":[0,0.3826834323650898,0,0.9238795325112867],"scale":[2,1,0.4],"extras":{"mq_shape":"box"}},{"name":"pill_collider","translation":[0,3,0],"scale":[0.25,1.5,0.1],"extras":{"mq_shape":"capsule","mq_role":"trigger"}}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],"accessors":[{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[0,0,0],"max":[1,1,1]}],"bufferViews":[{"buffer":0,"byteLength":36}],"buffers":[{"byteLength":36}]}"#;
+        let scene = GltfScene::from_bytes(&glb(json, &bytes)).unwrap();
+        // The loader itself stays Y-up.
+        assert_vec3_close(scene.spawns[0].position, vec3(0.0, 4.0, 1.0));
+
+        let turn = Quat::from_rotation_arc(Vec3::Y, Vec3::Z);
+        assert_vec3_close(turn * Vec3::Y, Vec3::Z);
+        let z_up = scene.with_up_axis(Vec3::Z);
+
+        let root = &z_up.nodes[0];
+        let floor = &z_up.nodes[1];
+        assert_eq!(floor.parent, Some(0));
+        assert_eq!(floor.translation, scene.nodes[1].translation);
+        assert_vec3_close(root.translation, turn * scene.nodes[0].translation);
+        let floor_local =
+            Mat4::from_scale_rotation_translation(floor.scale, floor.rotation, floor.translation);
+        assert_mat4_close(root.world * floor_local, floor.world);
+
+        let mesh = &z_up.nodes[3];
+        let local_y = vec3(0.0, 1.0, 0.0);
+        assert_vec3_close(
+            mesh.world.transform_point3(local_y),
+            turn * scene.nodes[3].world.transform_point3(local_y),
+        );
+        let y_column = mesh.world.y_axis.truncate();
+        assert_vec3_close(y_column.normalize(), Vec3::Z);
+
+        let GltfColliderShape::Aabb(floor_box) = z_up.colliders[0].shape else {
+            panic!("quarter turn keeps the floor an Aabb");
+        };
+        let GltfColliderShape::Aabb(old_floor) = scene.colliders[0].shape else {
+            panic!("floor starts axis-aligned");
+        };
+        let expected = Aabb::from_points(
+            [
+                old_floor.min,
+                vec3(old_floor.max.x, old_floor.min.y, old_floor.min.z),
+                vec3(old_floor.min.x, old_floor.max.y, old_floor.min.z),
+                vec3(old_floor.min.x, old_floor.min.y, old_floor.max.z),
+                vec3(old_floor.max.x, old_floor.max.y, old_floor.min.z),
+                vec3(old_floor.max.x, old_floor.min.y, old_floor.max.z),
+                vec3(old_floor.min.x, old_floor.max.y, old_floor.max.z),
+                old_floor.max,
+            ]
+            .into_iter()
+            .map(|corner| turn * corner),
+        )
+        .unwrap();
+        assert_vec3_close(floor_box.min, expected.min);
+        assert_vec3_close(floor_box.max, expected.max);
+        assert_vec3_close(floor_box.center(), vec3(1.0, 0.0, 5.0));
+        assert_vec3_close(floor_box.size(), vec3(2.0, 4.0, 0.2));
+
+        let GltfColliderShape::Sphere(orb) = z_up.colliders[1].shape else {
+            panic!("sphere");
+        };
+        let GltfColliderShape::Sphere(old_orb) = scene.colliders[1].shape else {
+            panic!("sphere");
+        };
+        assert_vec3_close(orb.center, turn * old_orb.center);
+        assert!((orb.radius - old_orb.radius).abs() < 1e-5);
+        assert_vec3_close(orb.center, z_up.nodes[3].world.transform_point3(Vec3::ZERO));
+
+        let GltfColliderShape::Obb(ramp) = z_up.colliders[2].shape else {
+            panic!("yawed box stays an Obb");
+        };
+        let GltfColliderShape::Obb(old_ramp) = scene.colliders[2].shape else {
+            panic!("yawed box");
+        };
+        assert_vec3_close(ramp.center, turn * old_ramp.center);
+        assert_vec3_close(ramp.half_extents, old_ramp.half_extents);
+        assert!(ramp.rotation.dot(turn * old_ramp.rotation).abs() > 1.0 - 1e-4);
+
+        assert!(z_up.colliders[3].trigger);
+        let GltfColliderShape::Capsule(pill) = z_up.colliders[3].shape else {
+            panic!("capsule");
+        };
+        let GltfColliderShape::Capsule(old_pill) = scene.colliders[3].shape else {
+            panic!("capsule");
+        };
+        assert_vec3_close(pill.a, turn * old_pill.a);
+        assert_vec3_close(pill.b, turn * old_pill.b);
+        assert!((pill.radius - old_pill.radius).abs() < 1e-5);
+        assert_vec3_close(z_up.spawns[0].position, turn * scene.spawns[0].position);
+
+        let diagonal = scene.with_up_axis(vec3(0.0, 1.0, 1.0));
+        assert!(
+            matches!(diagonal.colliders[0].shape, GltfColliderShape::Obb(_)),
+            "a diagonal up turns an axis-aligned box into an Obb"
+        );
     }
 }
