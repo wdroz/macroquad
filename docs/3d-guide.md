@@ -94,7 +94,26 @@ let first = if sphere_hit.hit.t < box_hit.hit.t {
 assert!(first.t > 0.0);
 ```
 
-`Camera3D` does not unproject a mouse position into a `Ray` yet. Build the ray from the camera position and a direction you already have, as `examples/ray_cast.rs` does.
+`Camera3D::screen_to_ray` unprojects a screen point into a `Ray`. The point is in pixels of the surface the camera draws to, origin at the top left, y down, which is `mouse_position` when the camera draws to the window. A viewport is that camera's GL viewport, converted the same way as `Camera2D::world_to_screen`. A render target uses the texture's size instead of the window. The direction is a unit vector. A perspective ray starts at `position`, so `t` is the distance from the camera. An orthographic ray starts on the near plane and stays parallel to the look direction. `examples/picking_ray.rs` highlights the box under the mouse. `examples/ray_cast.rs` still builds its ray by hand.
+
+```rust
+use macroquad::camera::{Camera3D, Projection};
+use macroquad::math::{vec2, vec3, Vec3};
+
+let camera = Camera3D {
+    position: vec3(0.0, 0.0, 5.0),
+    target: Vec3::ZERO,
+    up: Vec3::Y,
+    fovy: 90.0_f32.to_radians(),
+    aspect: Some(1.0),
+    projection: Projection::Perspective,
+    viewport: Some((0, 0, 200, 200)),
+    ..Default::default()
+};
+let ray = camera.screen_to_ray(vec2(100.0, 100.0));
+assert_eq!(ray.origin, camera.position);
+assert!(ray.direction.dot(-Vec3::Z) > 0.999);
+```
 
 ## Planes
 

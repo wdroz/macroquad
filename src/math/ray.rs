@@ -5,6 +5,8 @@
 //! [`Obb`](crate::math::Obb), [`Sphere`](crate::math::Sphere),
 //! [`Capsule`](crate::math::Capsule), [`Plane`](crate::math::Plane), and
 //! [`Triangle`](crate::math::Triangle).
+//! [`Camera3D::screen_to_ray`](crate::camera::Camera3D::screen_to_ray) builds
+//! one from a screen point. The queries in this module stay in world space.
 
 use glam::{vec3, Vec3};
 

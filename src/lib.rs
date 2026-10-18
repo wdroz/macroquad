@@ -524,6 +524,33 @@ fn get_context() -> &'static mut Context {
     unsafe { CONTEXT.as_mut().unwrap_or_else(|| panic!()) }
 }
 
+/// Logical window size, in the same units as `screen_width` / `screen_height`.
+///
+/// `None` when macroquad has no live window, so [`camera::Camera3D::screen_to_ray`]
+/// can unproject from a viewport alone in unit tests.
+pub(crate) fn try_screen_size() -> Option<(f32, f32)> {
+    // Read through a pointer. `CONTEXT.as_ref()` is the same static-mut
+    // pattern as `get_context`, and the 2024 lint flags that call.
+    let (width, height) = unsafe {
+        let slot = std::ptr::addr_of_mut!(CONTEXT);
+        let ctx = (*slot).as_ref()?;
+        (ctx.screen_width, ctx.screen_height)
+    };
+    // A context exists only after the macroquad thread has started.
+    thread_assert::same_thread();
+    let dpi = miniquad::window::dpi_scale();
+    if !dpi.is_finite() || dpi == 0.0 {
+        return None;
+    }
+    let width = width / dpi;
+    let height = height / dpi;
+    if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+        Some((width, height))
+    } else {
+        None
+    }
+}
+
 fn get_quad_context() -> &'static mut dyn miniquad::RenderingBackend {
     thread_assert::same_thread();
 

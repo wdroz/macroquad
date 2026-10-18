@@ -13,6 +13,7 @@ cargo run --example triangle_hit
 cargo run --example obb_overlap
 cargo run --example capsule_overlap
 cargo run --example sweep_hit
+cargo run --example picking_ray
 cargo run --features gltf --example gltf_textured
 cargo run --features gltf --example marble_maze
 ```
@@ -48,6 +49,10 @@ Moves a vertical `Capsule` with the arrow keys. `a` and `b` are the inner segmen
 ## `sweep_hit`
 
 Moves a box and a sphere with the arrow keys into one wall. `Aabb::sweep` and `Sphere::sweep_aabb` stop the shape at `SweepHit::t` and the example keeps the leftover motion along `normal`, so holding into the wall slides along it. A pure touch is not an impact. Escape quits.
+
+## `picking_ray`
+
+Moves the mouse. `Camera3D::screen_to_ray` unprojects the cursor with the same view-projection the example passes to `set_camera`. `Ray::closest_aabb` marks the nearest box. The camera is Y-up. Escape quits.
 
 ## `gltf_textured`
 

@@ -1,13 +1,16 @@
 //! 2D and 3D camera.
+//!
+//! [`Camera3D::screen_to_ray`] unprojects a screen point into a world
+//! [`Ray`](crate::math::Ray).
 
 use crate::{
     get_context,
-    math::Rect,
+    math::{Ray, Rect},
     prelude::RenderPass,
     texture::RenderTarget,
     window::{screen_height, screen_width},
 };
-use glam::{vec2, vec3, Mat4, Vec2, Vec3};
+use glam::{vec2, vec3, Mat4, Vec2, Vec3, Vec4};
 
 pub trait Camera {
     fn matrix(&self) -> Mat4;
@@ -246,20 +249,7 @@ impl Camera for Camera3D {
             (screen_width(), screen_height())
         };
         let aspect = self.aspect.unwrap_or(width / height);
-
-        match self.projection {
-            Projection::Perspective => {
-                Mat4::perspective_rh_gl(self.fovy, aspect, self.z_near, self.z_far)
-                    * Mat4::look_at_rh(self.position, self.target, self.up)
-            }
-            Projection::Orthographics => {
-                let top = self.fovy / 2.0;
-                let right = top * aspect;
-
-                Mat4::orthographic_rh_gl(-right, right, -top, top, self.z_near, self.z_far)
-                    * Mat4::look_at_rh(self.position, self.target, self.up)
-            }
-        }
+        self.projection_view(aspect)
     }
 
     fn depth_enabled(&self) -> bool {
@@ -272,6 +262,196 @@ impl Camera for Camera3D {
 
     fn viewport(&self) -> Option<(i32, i32, i32, i32)> {
         self.viewport
+    }
+}
+
+impl Camera3D {
+    /// View-projection used by [`Camera::matrix`] and [`Self::screen_to_ray`].
+    ///
+    /// `aspect` is `width / height` of the framebuffer when [`Camera3D::aspect`]
+    /// is `None`.
+    fn projection_view(&self, aspect: f32) -> Mat4 {
+        let view = Mat4::look_at_rh(self.position, self.target, self.up);
+        match self.projection {
+            Projection::Perspective => {
+                Mat4::perspective_rh_gl(self.fovy, aspect, self.z_near, self.z_far) * view
+            }
+            Projection::Orthographics => {
+                let top = self.fovy / 2.0;
+                let right = top * aspect;
+                Mat4::orthographic_rh_gl(-right, right, -top, top, self.z_near, self.z_far) * view
+            }
+        }
+    }
+
+    /// Unprojects `point` into a world [`Ray`] through the camera's view-projection.
+    ///
+    /// `point` is in pixels of the surface this camera draws to, origin at the
+    /// top left, y down — the same space as [`mouse_position`](crate::input::mouse_position)
+    /// and [`Camera2D::world_to_screen`]. The center of that surface is
+    /// `(x + width / 2, y + height / 2)`.
+    ///
+    /// The view-projection is the one [`Camera::matrix`] builds. [`Self::aspect`],
+    /// when set, wins. Otherwise the aspect is the framebuffer width over its
+    /// height. That framebuffer is the render target's texture when
+    /// [`Self::render_target`] is set, and the window otherwise. A viewport is
+    /// the GL viewport `(x, y, width, height)` with its origin at the bottom
+    /// left of that framebuffer; it is converted to top-left pixels the same
+    /// way as [`Camera2D::world_to_screen`]. The viewport does not change the
+    /// projection, only which pixels the point is measured in.
+    ///
+    /// Perspective rays start at [`Self::position`]. Orthographic rays start on
+    /// the near plane. `direction` is a unit vector, so a later hit's `t` is a
+    /// distance from `origin`. [`Projection::Orthographics`] uses `fovy` as the
+    /// full vertical size, the same value `matrix` uses.
+    ///
+    /// A synthetic camera does not need a window: set `aspect` and a viewport.
+    /// With no window, the framebuffer is the viewport's far corner
+    /// (`x + width`, `y + height`), so the viewport touches the top of that
+    /// surface. A point, viewport, or camera that cannot be unprojected returns
+    /// a ray at `position` with a zero direction.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::camera::{Camera3D, Projection};
+    /// use macroquad::math::{vec2, vec3, Vec3};
+    ///
+    /// let camera = Camera3D {
+    ///     position: vec3(0.0, 0.0, 5.0),
+    ///     target: Vec3::ZERO,
+    ///     up: Vec3::Y,
+    ///     fovy: 90.0_f32.to_radians(),
+    ///     aspect: Some(1.0),
+    ///     projection: Projection::Perspective,
+    ///     viewport: Some((0, 0, 200, 200)),
+    ///     ..Default::default()
+    /// };
+    /// let ray = camera.screen_to_ray(vec2(100.0, 100.0));
+    /// assert_eq!(ray.origin, camera.position);
+    /// assert!(ray.direction.dot(-Vec3::Z) > 0.999);
+    /// ```
+    pub fn screen_to_ray(&self, point: Vec2) -> Ray {
+        let miss = Ray::new(self.position, Vec3::ZERO);
+        if !self.position.is_finite() || !point.x.is_finite() || !point.y.is_finite() {
+            return miss;
+        }
+        let Some((fb_width, fb_height)) = self.framebuffer_size() else {
+            return miss;
+        };
+        let Some(rect) = picking_rect(self.viewport, fb_width, fb_height) else {
+            return miss;
+        };
+        let aspect = self.aspect.unwrap_or(fb_width / fb_height);
+        if !aspect.is_finite() || aspect.abs() <= 1e-8 {
+            return miss;
+        }
+        let inverse = self.projection_view(aspect).inverse();
+        let ndc_x = (point.x - rect.x) / rect.w * 2.0 - 1.0;
+        let ndc_y = 1.0 - (point.y - rect.y) / rect.h * 2.0;
+        let Some(far) = unproject(&inverse, ndc_x, ndc_y, 1.0) else {
+            return miss;
+        };
+        match self.projection {
+            Projection::Perspective => {
+                let direction = (far - self.position).normalize_or_zero();
+                if direction == Vec3::ZERO {
+                    miss
+                } else {
+                    Ray::new(self.position, direction)
+                }
+            }
+            Projection::Orthographics => {
+                let Some(near) = unproject(&inverse, ndc_x, ndc_y, -1.0) else {
+                    return miss;
+                };
+                let direction = (far - near).normalize_or_zero();
+                if direction == Vec3::ZERO {
+                    miss
+                } else {
+                    Ray::new(near, direction)
+                }
+            }
+        }
+    }
+
+    /// Pixel size of the surface this camera draws into.
+    ///
+    /// A render target uses its texture. Otherwise a live window uses the
+    /// screen, matching [`Camera2D::world_to_screen`]. With neither, a viewport
+    /// stands in for a framebuffer whose top-right corner is the viewport's
+    /// far corner, which is enough for a unit test.
+    fn framebuffer_size(&self) -> Option<(f32, f32)> {
+        if let Some(target) = &self.render_target {
+            return positive_size((target.texture.width(), target.texture.height()));
+        }
+        if let Some(size) = crate::try_screen_size() {
+            return positive_size(size);
+        }
+        let (vx, vy, vw, vh) = self.viewport?;
+        if vw <= 0 || vh <= 0 {
+            return None;
+        }
+        positive_size((vx as f32 + vw as f32, vy as f32 + vh as f32))
+    }
+}
+
+/// Top-left pixel rect of `viewport` inside a framebuffer of size `(fb_w, fb_h)`.
+///
+/// `viewport` is the GL viewport, origin at the bottom left. The y conversion
+/// matches [`Camera2D::world_to_screen`]: `top = framebuffer_height - (y + height)`.
+/// `None` means the whole framebuffer.
+fn picking_rect(viewport: Option<(i32, i32, i32, i32)>, fb_w: f32, fb_h: f32) -> Option<Rect> {
+    let rect = if let Some((vx, vy, vw, vh)) = viewport {
+        if vw <= 0 || vh <= 0 {
+            return None;
+        }
+        let top = vy as i64 + vh as i64;
+        Rect {
+            x: vx as f32,
+            y: fb_h - top as f32,
+            w: vw as f32,
+            h: vh as f32,
+        }
+    } else {
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            w: fb_w,
+            h: fb_h,
+        }
+    };
+    if rect.w > 0.0
+        && rect.h > 0.0
+        && rect.x.is_finite()
+        && rect.y.is_finite()
+        && rect.w.is_finite()
+        && rect.h.is_finite()
+    {
+        Some(rect)
+    } else {
+        None
+    }
+}
+
+fn positive_size((width, height): (f32, f32)) -> Option<(f32, f32)> {
+    if width.is_finite() && height.is_finite() && width > 0.0 && height > 0.0 {
+        Some((width, height))
+    } else {
+        None
+    }
+}
+
+fn unproject(inverse: &Mat4, ndc_x: f32, ndc_y: f32, ndc_z: f32) -> Option<Vec3> {
+    let hit = *inverse * Vec4::new(ndc_x, ndc_y, ndc_z, 1.0);
+    if !hit.is_finite() || hit.w.abs() <= 1e-8 {
+        return None;
+    }
+    let world = hit.truncate() / hit.w;
+    if world.is_finite() {
+        Some(world)
+    } else {
+        None
     }
 }
 
@@ -330,5 +510,200 @@ pub fn pop_camera_state() {
         context.gl.render_pass(camera_state.render_pass);
         context.gl.depth_test(camera_state.depth_test);
         context.camera_matrix = camera_state.matrix;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::math::{vec3, Aabb, Vec3};
+
+    fn assert_vec3_close(left: Vec3, right: Vec3) {
+        let delta = left - right;
+        assert!(
+            delta.x.abs() < 1e-4 && delta.y.abs() < 1e-4 && delta.z.abs() < 1e-4,
+            "left {left:?} right {right:?}"
+        );
+    }
+
+    fn perspective_down_z() -> Camera3D {
+        Camera3D {
+            position: vec3(0.0, 0.0, 5.0),
+            target: Vec3::ZERO,
+            up: Vec3::Y,
+            fovy: 90.0_f32.to_radians(),
+            aspect: Some(1.0),
+            projection: Projection::Perspective,
+            viewport: Some((0, 0, 200, 200)),
+            z_near: 0.25,
+            z_far: 40.0,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn perspective_center_ray_looks_down_the_axis_without_a_window() {
+        let camera = perspective_down_z();
+        let ray = camera.screen_to_ray(vec2(100.0, 100.0));
+        assert_eq!(ray.origin, camera.position);
+        assert_vec3_close(ray.direction, -Vec3::Z);
+        assert!((ray.direction.length() - 1.0).abs() < 1e-5);
+
+        let wall = Aabb::from_center_size(vec3(0.0, 0.0, 1.0), Vec3::ONE);
+        let hit = wall
+            .ray_intersect(ray.origin, ray.direction)
+            .expect("center ray meets the wall");
+        assert_vec3_close(hit.point, vec3(0.0, 0.0, 1.5));
+        assert!((hit.t - 3.5).abs() < 1e-4);
+        assert_vec3_close(hit.normal, Vec3::Z);
+    }
+
+    #[test]
+    fn perspective_edges_follow_the_frustum_and_y_is_down() {
+        let camera = perspective_down_z();
+        // 90° vertical fov, aspect 1: the frustum edge is 45° off the axis.
+        let edge = 1.0 / 2.0_f32.sqrt();
+
+        let top = camera.screen_to_ray(vec2(100.0, 0.0));
+        assert_eq!(top.origin, camera.position);
+        assert_vec3_close(top.direction, vec3(0.0, edge, -edge));
+
+        let bottom = camera.screen_to_ray(vec2(100.0, 200.0));
+        assert_vec3_close(bottom.direction, vec3(0.0, -edge, -edge));
+
+        let left = camera.screen_to_ray(vec2(0.0, 100.0));
+        assert_vec3_close(left.direction, vec3(-edge, 0.0, -edge));
+
+        let corner = camera.screen_to_ray(vec2(0.0, 0.0));
+        let corner_dir = vec3(-1.0, 1.0, -1.0).normalize();
+        assert_vec3_close(corner.direction, corner_dir);
+    }
+
+    #[test]
+    fn explicit_aspect_wins_over_a_square_viewport() {
+        let mut camera = perspective_down_z();
+        camera.aspect = Some(2.0);
+        let right = camera.screen_to_ray(vec2(200.0, 100.0));
+        let expected = vec3(2.0, 0.0, -1.0).normalize();
+        assert_vec3_close(right.direction, expected);
+    }
+
+    #[test]
+    fn missing_aspect_uses_the_viewport_size_when_there_is_no_window() {
+        let mut camera = perspective_down_z();
+        camera.aspect = None;
+        camera.viewport = Some((0, 0, 200, 100));
+        let right = camera.screen_to_ray(vec2(200.0, 50.0));
+        let expected = vec3(2.0, 0.0, -1.0).normalize();
+        assert_vec3_close(right.direction, expected);
+    }
+
+    #[test]
+    fn z_up_camera_maps_screen_up_onto_that_axis() {
+        let camera = Camera3D {
+            position: vec3(0.0, -5.0, 0.0),
+            target: Vec3::ZERO,
+            up: Vec3::Z,
+            fovy: 90.0_f32.to_radians(),
+            aspect: Some(1.0),
+            projection: Projection::Perspective,
+            viewport: Some((0, 0, 80, 80)),
+            z_near: 0.1,
+            z_far: 30.0,
+            ..Default::default()
+        };
+        let center = camera.screen_to_ray(vec2(40.0, 40.0));
+        assert_eq!(center.origin, camera.position);
+        assert_vec3_close(center.direction, Vec3::Y);
+
+        let top = camera.screen_to_ray(vec2(40.0, 0.0));
+        assert_vec3_close(top.direction, vec3(0.0, 1.0, 1.0).normalize());
+    }
+
+    #[test]
+    fn viewport_offset_keeps_the_center_pixel_on_the_look_axis() {
+        let mut camera = perspective_down_z();
+        // Synthetic framebuffer is 120×100. The GL viewport sits 20px above
+        // the bottom and 40px from the left, so its top-left pixel is (40, 0).
+        camera.viewport = Some((40, 20, 80, 80));
+        let center = camera.screen_to_ray(vec2(80.0, 40.0));
+        assert_vec3_close(center.direction, -Vec3::Z);
+
+        let left = camera.screen_to_ray(vec2(40.0, 40.0));
+        let edge = 1.0 / 2.0_f32.sqrt();
+        assert_vec3_close(left.direction, vec3(-edge, 0.0, -edge));
+    }
+
+    #[test]
+    fn picking_rect_flips_a_gl_viewport_within_a_taller_framebuffer() {
+        let rect = picking_rect(Some((10, 20, 30, 40)), 200.0, 100.0).unwrap();
+        assert_eq!(
+            rect,
+            Rect {
+                x: 10.0,
+                y: 40.0,
+                w: 30.0,
+                h: 40.0,
+            }
+        );
+        assert!(picking_rect(Some((0, 0, 0, 10)), 100.0, 100.0).is_none());
+        let full = picking_rect(None, 320.0, 180.0).unwrap();
+        assert_eq!(full.w, 320.0);
+        assert_eq!(full.h, 180.0);
+    }
+
+    #[test]
+    fn orthographic_rays_are_parallel_and_start_on_the_near_plane() {
+        let camera = Camera3D {
+            position: vec3(0.0, 0.0, 5.0),
+            target: Vec3::ZERO,
+            up: Vec3::Y,
+            fovy: 4.0,
+            aspect: Some(1.0),
+            projection: Projection::Orthographics,
+            viewport: Some((0, 0, 100, 100)),
+            z_near: 1.0,
+            z_far: 50.0,
+            ..Default::default()
+        };
+        let center = camera.screen_to_ray(vec2(50.0, 50.0));
+        let top = camera.screen_to_ray(vec2(50.0, 0.0));
+        let left = camera.screen_to_ray(vec2(0.0, 50.0));
+
+        assert_vec3_close(center.direction, -Vec3::Z);
+        assert_vec3_close(top.direction, center.direction);
+        assert_vec3_close(left.direction, center.direction);
+        assert_vec3_close(center.origin, vec3(0.0, 0.0, 4.0));
+        assert_vec3_close(top.origin, vec3(0.0, 2.0, 4.0));
+        assert_vec3_close(left.origin, vec3(-2.0, 0.0, 4.0));
+
+        let wall = Aabb::from_center_size(Vec3::ZERO, Vec3::ONE);
+        let hit = wall
+            .ray_intersect(center.origin, center.direction)
+            .expect("ortho center ray meets the wall");
+        assert_vec3_close(hit.point, vec3(0.0, 0.0, 0.5));
+    }
+
+    #[test]
+    fn a_bad_camera_or_point_returns_a_zero_direction() {
+        let mut camera = perspective_down_z();
+        let nan = camera.screen_to_ray(vec2(f32::NAN, 10.0));
+        assert_eq!(nan.origin, camera.position);
+        assert_eq!(nan.direction, Vec3::ZERO);
+
+        camera.viewport = Some((0, 0, 0, 10));
+        let empty = camera.screen_to_ray(vec2(0.0, 0.0));
+        assert_eq!(empty.direction, Vec3::ZERO);
+
+        camera.viewport = Some((0, 0, 200, 200));
+        camera.target = camera.position;
+        let collapsed = camera.screen_to_ray(vec2(100.0, 100.0));
+        assert_eq!(collapsed.origin, camera.position);
+        assert_eq!(collapsed.direction, Vec3::ZERO);
+
+        camera = perspective_down_z();
+        camera.viewport = None;
+        let no_surface = camera.screen_to_ray(vec2(100.0, 100.0));
+        assert_eq!(no_surface.direction, Vec3::ZERO);
     }
 }
