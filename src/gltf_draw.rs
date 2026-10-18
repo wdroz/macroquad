@@ -21,6 +21,9 @@ use crate::{
     texture::{FilterMode, Texture2D},
 };
 
+mod retained;
+pub use retained::*;
+
 /// CPU-side material values, retained for a custom shader.
 ///
 /// [`GltfModel::draw`] does not apply these, except that the base-color

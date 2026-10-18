@@ -1007,6 +1007,11 @@ impl QuadGl {
         self.state.model_stack.push(self.state.model() * matrix);
     }
 
+    #[cfg(feature = "gltf")]
+    pub(crate) fn model_matrix(&self) -> glam::Mat4 {
+        self.state.model()
+    }
+
     pub fn pop_model_matrix(&mut self) {
         if self.state.model_stack.len() > 1 {
             self.state.model_stack.pop();
@@ -1317,6 +1322,84 @@ mod stream_buffer_tests {
 mod retained_buffer_tests {
     use super::*;
     use crate::models::{draw_mesh, draw_retained_mesh, Mesh, RetainedMesh};
+
+    #[cfg(feature = "gltf")]
+    #[test]
+    #[ignore = "requires a native graphics context"]
+    fn retained_gltf_uploads_are_shared_across_instances_and_frames() {
+        use crate::gltf_draw::{GltfModel, RetainedGltfModel};
+        use glam::{Mat4, Vec3};
+
+        crate::Window::new("retained glTF upload counts", async {
+            let source =
+                GltfModel::from_bytes(include_bytes!("../examples/assets/textured_quad.glb"))
+                    .unwrap();
+            let chunks = source.parts.len();
+            let texture = source.parts[0]
+                .mesh
+                .texture
+                .as_ref()
+                .unwrap()
+                .raw_miniquad_id();
+            // A bad later chunk must fail before uploading an earlier valid one.
+            let mut invalid = source.clone();
+            let mut bad_part = invalid.parts[0].clone();
+            bad_part.mesh.indices.push(0);
+            invalid.parts.push(bad_part);
+            assert!(RetainedGltfModel::from_model(invalid, false).is_err());
+            assert_eq!(crate::get_context().gl.retained_buffer_uploads, 0);
+
+            for _ in 0..2 {
+                source.draw();
+                crate::get_context().perform_render_passes();
+                crate::window::next_frame().await;
+            }
+            let immediate_updates = crate::get_context().gl.stream_buffer_updates;
+            assert_eq!(immediate_updates, 4);
+
+            let retained = RetainedGltfModel::from_model(source, false).unwrap();
+            let instance = retained.clone();
+            assert!(retained.cpu_model().is_none());
+            assert!(Arc::ptr_eq(
+                &retained.parts[0].mesh.buffers,
+                &instance.parts[0].mesh.buffers
+            ));
+            assert_eq!(
+                instance.parts[0]
+                    .mesh
+                    .texture
+                    .as_ref()
+                    .unwrap()
+                    .raw_miniquad_id(),
+                texture
+            );
+            for _ in 0..2 {
+                retained.draw(Mat4::IDENTITY);
+                instance.draw(Mat4::from_translation(Vec3::X));
+                crate::get_context().perform_render_passes();
+                crate::window::next_frame().await;
+            }
+            assert_eq!(crate::get_context().gl.retained_buffer_uploads, chunks * 2);
+            assert_eq!(
+                crate::get_context().gl.stream_buffer_updates,
+                immediate_updates
+            );
+            println!(
+                "glTF fixture: {chunks} chunks, {immediate_updates} immediate buffer updates over two frames; {} retained buffers uploaded once, zero additional geometry uploads for two instances over two frames",
+                chunks * 2,
+            );
+            instance.draw(Mat4::IDENTITY);
+            drop(retained);
+            drop(instance);
+            assert_eq!(crate::get_context().gl.retained_meshes.len(), chunks);
+            crate::get_context().perform_render_passes();
+            assert!(crate::get_context().gl.retained_meshes.is_empty());
+            assert_eq!(
+                crate::get_context().gl.retained_buffer_deletions,
+                chunks * 2
+            );
+        });
+    }
 
     // Kept separate from headless tests: this exercises actual native buffer
     // creation and drawing, with counters compiled out of normal builds.

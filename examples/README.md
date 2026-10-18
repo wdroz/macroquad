@@ -21,6 +21,7 @@ cargo run --example debug_draw
 cargo run --features gltf --example gltf_textured
 cargo run --example material_depth_check
 cargo run --example retained_mesh
+cargo run --features gltf --example gltf_retained
 ```
 
 `material_depth_check` is an OpenGL/WebGL shader regression that exits after checking rendered pixels. It verifies that opaque surfaces hide glass, transparent surfaces keep depth testing without writing depth, subsequent clears reset depth, and changing a custom texture preserves the bindings of earlier queued draws. It also exercises adaptive streaming-buffer growth, reuse with smaller geometry, and recreation after the configured capacity changes.
@@ -88,6 +89,15 @@ Requires `--features gltf`. With no argument it draws `assets/textured_quad.glb`
 Uploads one small mesh once and draws it repeatedly with different transforms,
 mixed with ordinary immediate drawing. Handle clones share immutable geometry;
 this is separate draw submission, not hardware instancing. Escape quits.
+
+## `gltf_retained`
+
+Requires `--features gltf`. Converts the small checkerboard GLB to a
+`RetainedGltfModel`, explicitly releases CPU geometry, and draws instances with
+shared buffers and textures. Transformed bounds support frustum culling. The
+adapter preserves current-material drawing; custom lighting and front-face
+selection use `GltfModelTransform`. See the retained geometry section of the
+[3D guide](../docs/3d-guide.md) for that shader contract.
 
 ## Assets
 

@@ -38,8 +38,44 @@ Queued draws keep their mesh alive even if the caller drops its last handle.
 Unused buffers are collected on a renderer flush or the next retained upload;
 ordinary frame completion flushes automatically. Cancelled draws release their
 queued references too. Live retained buffers survive streaming-capacity resets.
-This API does not yet provide a retained glTF adapter or resource diagnostics.
-See `examples/retained_mesh.rs` for a complete example.
+See `examples/retained_mesh.rs` for a complete example. Resource diagnostics
+remain a separate roadmap item.
+
+With `--features gltf`, `RetainedGltfModel::from_model(model, false)` consumes
+an existing `GltfModel`, uploads each chunk once and releases its CPU vertices
+and indices. Pass `true` to keep the original model available through
+`cpu_model()`. Clones share buffers, textures and any retained CPU model.
+Finish CPU geometry edits and `with_up_axis` before this conversion.
+
+```rust,no_run
+use macroquad::gltf_draw::{GltfModel, RetainedGltfModel};
+use macroquad::prelude::*;
+# fn example(model: GltfModel, camera: &Camera3D) -> Result<(), RetainedMeshError> {
+let retained = RetainedGltfModel::from_model(model, false)?;
+let instance = Mat4::from_translation(vec3(2.0, 0.0, 0.0));
+retained.draw(instance);
+if let Some(frustum) = camera.frustum() {
+    retained.draw_culled(instance, &frustum);
+}
+# Ok(()) }
+```
+
+The adapter keeps the current camera and material. Its `parts` retain material,
+node and bounds metadata for application lighting, filtering and alpha sorting.
+`part.draw(transform)` submits one chunk; `part.world_bounds(transform)` encloses
+all transformed corners, including nonuniform scale, reflection and shear.
+`draw_culled` also includes the current low-level model stack.
+
+Custom vertex shaders apply `Model` to positions. For lighting, obtain the
+inverse-transpose `normal_matrix` from `GltfModelTransform::new(transform)` and
+normalize transformed normals. The helper returns `None` for transforms that
+cannot supply finite inverse normals. A mirrored transform reverses triangle
+winding: when culling, select the opposite `FrontFaceOrder` pipeline when the
+helper's `mirrored` flag is true. The adapter does not change a custom material's
+pipeline or uniforms. Include any parent model stack in the helper's transform.
+The default shader is unlit and does not cull. These are shared geometry draws,
+not hardware instancing; no frame-time improvement is implied by buffer reuse.
+See `examples/gltf_retained.rs`.
 
 ## Ray hits
 

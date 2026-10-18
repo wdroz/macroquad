@@ -153,7 +153,7 @@ impl RetainedMesh {
     }
 }
 
-fn validate_retained_mesh(mesh: &Mesh) -> Result<(), RetainedMeshError> {
+pub(crate) fn validate_retained_mesh(mesh: &Mesh) -> Result<(), RetainedMeshError> {
     if mesh.vertices.is_empty() || mesh.indices.is_empty() {
         return Err(RetainedMeshError::EmptyMesh);
     }
