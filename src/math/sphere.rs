@@ -217,29 +217,10 @@ impl Sphere {
             return None;
         }
 
-        // `a t^2 + b t + c = 0` for the line against the sphere. The origin is
-        // outside, so the smaller non-negative root is the entry point.
-        let a = direction.length_squared();
-        let b = 2.0 * offset.dot(direction);
-        let c = dist_sq - radius_sq;
-        let discriminant = b * b - 4.0 * a * c;
-        if discriminant < 0.0 {
-            return None;
-        }
-        let sqrt_d = discriminant.sqrt();
-        let sign_b = if b >= 0.0 { 1.0 } else { -1.0 };
-        let q = -0.5 * (b + sign_b * sqrt_d);
-        let (t_near, t_far) = if q == 0.0 {
-            (0.0, -b / a)
-        } else {
-            let t_q = q / a;
-            let t_c = c / q;
-            if t_q <= t_c {
-                (t_q, t_c)
-            } else {
-                (t_c, t_q)
-            }
-        };
+        // `|offset + direction * t| = radius`. The origin is outside, so the
+        // smaller non-negative root is the entry. Dots run in f64; an f32
+        // discriminant vanishes when the sphere sits far from the origin.
+        let (t_near, t_far) = super::sphere_quadratic_roots(offset, direction, self.radius)?;
 
         let t = if t_near >= 0.0 {
             t_near
@@ -463,5 +444,17 @@ mod tests {
         assert!((point.t - 2.0).abs() < 1e-5);
         assert_vec3_close(point.point, Vec3::ZERO);
         assert_eq!(point.normal, Vec3::ZERO);
+    }
+
+    #[test]
+    fn ray_hits_the_near_surface_of_a_distant_sphere() {
+        let center = vec3(50_000.0, -20_000.0, 10_000.0);
+        let ball = Sphere::new(center, 1.0);
+        let origin = center - vec3(10_000.0, 0.0, 0.0);
+        let hit = ball.ray_intersect(origin, Vec3::X).unwrap();
+        let point = origin + Vec3::X * hit.t;
+        let gap = (point - (center - Vec3::X)).length();
+        assert!(gap < 0.05, "near surface missed by {gap}");
+        assert!((hit.normal + Vec3::X).length() < 1e-4);
     }
 }

@@ -402,13 +402,10 @@ fn cast_edge(sphere: &Sphere, delta: Vec3, start: Vec3, end: Vec3) -> Option<Swe
     let offset = sphere.center - start;
     let delta_perp = delta - axis * delta.dot(axis);
     let offset_perp = offset - axis * offset.dot(axis);
-    let a = delta_perp.length_squared();
-    if a <= 1e-12 {
+    if delta_perp.length_squared() <= 1e-12 {
         return None;
     }
-    let b = 2.0 * offset_perp.dot(delta_perp);
-    let c = offset_perp.length_squared() - sphere.radius * sphere.radius;
-    let t = quadratic_entry(a, b, c)?;
+    let (t, _) = super::sphere_quadratic_roots(offset_perp, delta_perp, sphere.radius)?;
     if !t.is_finite() || t > 1.0 || t < -TOUCH_SLOP {
         return None;
     }
@@ -429,13 +426,10 @@ fn cast_edge(sphere: &Sphere, delta: Vec3, start: Vec3, end: Vec3) -> Option<Swe
 
 fn cast_corner(sphere: &Sphere, delta: Vec3, corner: Vec3) -> Option<SweepHit> {
     let offset = sphere.center - corner;
-    let a = delta.length_squared();
-    if a <= 1e-12 {
+    if delta.length_squared() <= 1e-12 {
         return None;
     }
-    let b = 2.0 * offset.dot(delta);
-    let c = offset.length_squared() - sphere.radius * sphere.radius;
-    let t = quadratic_entry(a, b, c)?;
+    let (t, _) = super::sphere_quadratic_roots(offset, delta, sphere.radius)?;
     if !t.is_finite() || t > 1.0 || t < -TOUCH_SLOP {
         return None;
     }
@@ -449,21 +443,6 @@ fn cast_corner(sphere: &Sphere, delta: Vec3, corner: Vec3) -> Option<SweepHit> {
         normal,
         point: corner,
     })
-}
-
-/// Smaller root of `a t^2 + b t + c = 0`. `a` must be positive.
-fn quadratic_entry(a: f32, b: f32, c: f32) -> Option<f32> {
-    let disc = b * b - 4.0 * a * c;
-    if !disc.is_finite() || disc < -1e-6 {
-        return None;
-    }
-    let sqrt_disc = disc.max(0.0).sqrt();
-    let t = (-b - sqrt_disc) / (2.0 * a);
-    if t.is_finite() {
-        Some(t)
-    } else {
-        None
-    }
 }
 
 fn axis_overlap(min_a: f32, max_a: f32, min_b: f32, max_b: f32) -> f32 {
@@ -841,5 +820,24 @@ mod tests {
         let ball = Sphere::new(vec3(-1.0, 3.0, 0.5), 0.5);
         assert!(ball.sweep_aabb(vec3(4.0, 0.0, 0.0), &solid).is_none());
         assert!(ball.sweep_aabb(Vec3::ZERO, &solid).is_none());
+    }
+
+    #[test]
+    fn sphere_corner_sweep_stays_on_the_surface_far_from_the_origin() {
+        let shift = vec3(20_000.0, -15_000.0, 8_000.0);
+        let solid = Aabb::from_min_max(shift, shift + Vec3::ONE);
+        let radius = 1.0;
+        let start = shift + vec3(-10_000.0, -10_000.0, -10_000.0);
+        let delta = vec3(20_000.0, 20_000.0, 20_000.0);
+        let hit = Sphere::new(start, radius)
+            .sweep_aabb(delta, &solid)
+            .expect("corner");
+        let center = start + delta * hit.t;
+        let dist = (center - shift).length();
+        assert!(
+            (dist - radius).abs() < 0.05,
+            "center landed {dist} from the corner, t {}",
+            hit.t
+        );
     }
 }

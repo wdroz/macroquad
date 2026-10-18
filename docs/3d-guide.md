@@ -241,9 +241,24 @@ assert!(ball.sweep_aabb(vec3(1.0, 0.0, 0.0), &floor).is_none());
 
 `examples/sweep_hit.rs` moves a box and a sphere into a wall. One static box does not slide on its own: the example keeps the part of the delta that lies on the hit face. `slide_sphere` does that for a sphere against several boxes.
 
+## Sphere slide
+
+`slide_sphere(center, radius, delta, aabbs, obbs)` returns the new center. The sphere moves by `delta`, stops on an `Aabb` or `Obb`, and keeps the motion along that face. A sphere that only touches a floor still strafes, so the caller does not shrink the radius. A center that starts inside a box is pushed out along the nearest face first. There is no gravity here.
+
+```rust
+use macroquad::math::{slide_sphere, Aabb, vec3};
+
+let floor = Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(4.0, 1.0, 4.0));
+let moved = slide_sphere(vec3(0.0, 0.5, 0.0), 0.5, vec3(1.0, -0.25, 0.0), &[floor], &[]);
+assert!((moved.x - 1.0).abs() < 1e-4);
+assert!((moved.y - 0.5).abs() < 1e-4);
+```
+
 ## Character movement
 
-There is no character controller. `on_ground`, slope limits, and step offsets are not in the library. A capsule body is not in the library either. The pattern below moves a kinematic AABB and blocks the whole step when the next position overlaps a static box. Touching counts as an overlap, so a move that stays in contact with the floor is rejected if the floor is in `static_boxes`. A large step can tunnel through a thin wall, and a slope blocks the move the same way a wall does. `Aabb::sweep` is the continuous test for one box; it does not walk a slice or a slope.
+There is no character controller. `on_ground`, slope limits, and step offsets are not in the library. `Capsule` is the body shape that controller will use; nothing here moves one yet. `slide_sphere` already slides a sphere, and `Aabb::sweep` / `Sphere::sweep_aabb` are the continuous tests against one box.
+
+The pattern below is the discrete fallback. It moves a kinematic AABB and blocks the whole step when the next position overlaps a static box. Touching counts as an overlap, so a move that stays in contact with the floor is rejected if the floor is in `static_boxes`. A large step can tunnel through a thin wall, and a slope blocks the move the same way a wall does. `Aabb::sweep` against one box reports that crossing; it does not walk a slice or a slope.
 
 ```rust
 use macroquad::math::{Aabb, Vec3, vec3};

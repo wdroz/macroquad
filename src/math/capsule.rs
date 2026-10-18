@@ -343,32 +343,11 @@ fn cylinder_hit(a: Vec3, b: Vec3, radius: f32, origin: Vec3, direction: Vec3) ->
     let dir_perp = direction - axis_n * dir_along;
     let oc_perp = oc - axis_n * oc_along;
 
-    let qa = dir_perp.length_squared();
     // Parallel to the axis: the wall is not crossed. Caps handle the ends.
-    if qa <= 1e-12 {
+    if dir_perp.length_squared() <= 1e-12 {
         return None;
     }
-    let qb = 2.0 * oc_perp.dot(dir_perp);
-    let qc = oc_perp.length_squared() - radius * radius;
-    let discriminant = qb * qb - 4.0 * qa * qc;
-    if discriminant < 0.0 || !discriminant.is_finite() {
-        return None;
-    }
-
-    let sqrt_d = discriminant.sqrt();
-    let sign_b = if qb >= 0.0 { 1.0 } else { -1.0 };
-    let q = -0.5 * (qb + sign_b * sqrt_d);
-    let (t_near, t_far) = if q == 0.0 {
-        (0.0, -qb / qa)
-    } else {
-        let t_q = q / qa;
-        let t_c = qc / q;
-        if t_q <= t_c {
-            (t_q, t_c)
-        } else {
-            (t_c, t_q)
-        }
-    };
+    let (t_near, t_far) = super::sphere_quadratic_roots(oc_perp, dir_perp, radius)?;
 
     let mut best: Option<RayHit> = None;
     for t in [t_near, t_far] {

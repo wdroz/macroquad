@@ -66,13 +66,15 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
         return center;
     }
     let mut remaining = delta;
-    // A corner needs a second plane, and a floor-plus-wall crease a third.
+    // Three planes meet at a corner. One extra pass applies the tangent.
     for _ in 0..4 {
         if remaining.length_squared() <= TIME_SLOP * TIME_SLOP {
+            remaining = Vec3::ZERO;
             break;
         }
         let Some(hit) = first_hit(position, radius, remaining, aabbs, obbs) else {
             position += remaining;
+            remaining = Vec3::ZERO;
             break;
         };
         let t = hit.t.clamp(0.0, 1.0);
@@ -88,9 +90,32 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
         // Projecting again would drop a tangent that only looks like a hit.
         if t <= TIME_SLOP && (left - remaining).length_squared() <= TIME_SLOP * TIME_SLOP {
             position += left;
+            remaining = Vec3::ZERO;
             break;
         }
         remaining = left;
+    }
+    // The last pass can itself be a hit and still leave a tangent. Apply that
+    // tangent when it clears every shape. When it only presses into a surface
+    // the sphere is already touching, drop that component and keep the rest
+    // if the rest is clear. A tangent that still meets a shape later stays
+    // put, so the sphere does not tunnel through the next solid.
+    if remaining.length_squared() > TIME_SLOP * TIME_SLOP {
+        match first_hit(position, radius, remaining, aabbs, obbs) {
+            None => position += remaining,
+            Some(hit) if hit.t <= TIME_SLOP => {
+                let into = remaining.dot(hit.normal);
+                if into < 0.0 {
+                    remaining -= hit.normal * into;
+                }
+                if remaining.length_squared() > TIME_SLOP * TIME_SLOP
+                    && first_hit(position, radius, remaining, aabbs, obbs).is_none()
+                {
+                    position += remaining;
+                }
+            }
+            Some(_) => {}
+        }
     }
     position
 }
@@ -342,26 +367,20 @@ fn cast_edge(center: Vec3, radius: f32, delta: Vec3, start: Vec3, end: Vec3) -> 
     let offset = center - start;
     let delta_perp = delta - axis * delta.dot(axis);
     let offset_perp = offset - axis * offset.dot(axis);
-    let a = delta_perp.length_squared();
     // Parallel to the edge: distance stays constant, so this is not an entry.
-    if a <= 1e-12 {
+    if delta_perp.length_squared() <= 1e-12 {
         return None;
     }
-    let b = 2.0 * offset_perp.dot(delta_perp);
-    let c = offset_perp.length_squared() - radius * radius;
-    let (t_enter, _) = quadratic_roots(a, b, c)?;
+    let (t_enter, _) = super::sphere_quadratic_roots(offset_perp, delta_perp, radius)?;
     accept_radial(center, delta, start, axis, length, t_enter)
 }
 
 fn cast_corner(center: Vec3, radius: f32, delta: Vec3, corner: Vec3) -> Option<SlideHit> {
     let offset = center - corner;
-    let a = delta.length_squared();
-    if a <= 1e-12 {
+    if delta.length_squared() <= 1e-12 {
         return None;
     }
-    let b = 2.0 * offset.dot(delta);
-    let c = offset.length_squared() - radius * radius;
-    let (t_enter, _) = quadratic_roots(a, b, c)?;
+    let (t_enter, _) = super::sphere_quadratic_roots(offset, delta, radius)?;
     if !t_enter.is_finite() || t_enter > 1.0 || t_enter < -PLANE_SLOP {
         return None;
     }
@@ -397,22 +416,6 @@ fn accept_radial(
         return None;
     }
     Some(SlideHit { t, normal })
-}
-
-fn quadratic_roots(a: f32, b: f32, c: f32) -> Option<(f32, f32)> {
-    let disc = b * b - 4.0 * a * c;
-    if !disc.is_finite() || disc < -1e-6 {
-        return None;
-    }
-    let sqrt_disc = disc.max(0.0).sqrt();
-    let inv = 0.5 / a;
-    let t1 = (-b - sqrt_disc) * inv;
-    let t2 = (-b + sqrt_disc) * inv;
-    if t1 <= t2 {
-        Some((t1, t2))
-    } else {
-        Some((t2, t1))
-    }
 }
 
 fn usable_aabb(aabb: &Aabb) -> bool {
@@ -631,16 +634,33 @@ mod tests {
             slide_sphere(start, f32::NAN, delta, &[solid], &[]),
             start + delta,
         );
-        assert_eq!(
+        assert!(
             slide_sphere(vec3(f32::NAN, 0.0, 0.0), 1.0, delta, &[solid], &[])
                 .x
-                .is_nan(),
-            true
+                .is_nan()
         );
         assert_close(
             slide_sphere(start, 0.5, vec3(f32::INFINITY, 0.0, 0.0), &[solid], &[]),
             start,
         );
+    }
+
+    #[test]
+    fn a_free_tangent_survives_the_last_clip() {
+        // Each post sits on the tangent left by the previous clip, so one
+        // move hits four times. The motion after the fourth clip clears
+        // every post; dropping it would stop on that last post.
+        let posts = [
+            Aabb::from_center_size(vec3(2.0, 0.0, 0.35), vec3(0.2, 2.0, 0.2)),
+            Aabb::from_center_size(vec3(2.76, 0.0, -0.26), vec3(0.2, 2.0, 0.2)),
+            Aabb::from_center_size(vec3(2.92, 0.0, -1.53), vec3(0.2, 2.0, 0.2)),
+            Aabb::from_center_size(vec3(2.48, 0.0, -2.26), vec3(0.2, 2.0, 0.2)),
+        ];
+        let end = slide_sphere(Vec3::ZERO, 0.3, vec3(12.0, 0.0, 0.0), &posts, &[]);
+        assert_close(end, vec3(0.4004557, 0.0, -2.381895));
+        for post in &posts {
+            assert_outside_aabb(end, 0.3, post);
+        }
     }
 
     #[test]

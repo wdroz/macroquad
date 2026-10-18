@@ -48,7 +48,11 @@
 //! of that world-aligned size. Any other rotation is an [`Obb`] from
 //! [`Obb::from_world_matrix`]. A mesh with `mq_shape` = `box` uses the mesh's
 //! local bounds in that pose, not the node scale alone: a default Blender cube
-//! is size 2 (vertices at ±1), so a node scale of 1 is a box of size 2.
+//! is size 2 (vertices at ±1), so a node scale of 1 is a box of size 2. A
+//! parent scaled on one axis combined with a rotated child shears the world
+//! matrix. That mesh box keeps the decomposed rotation and grows until the
+//! transformed bounds sit inside it. An empty box stays the column lengths
+//! and does not grow.
 //!
 //! A `capsule` is a [`Capsule`] along the node's world +Y (the Y column of the
 //! world matrix). The radius is the larger of the world X and Z column lengths.
@@ -889,13 +893,80 @@ fn marker_shape(
 /// of that mesh, posed by `world`, so a Blender cube of size 2 is not half the
 /// drawn mesh.
 fn box_shape(loaded: &GltfScene, index: usize, world: Mat4) -> Option<GltfColliderShape> {
-    let posed = if let Some(mesh) = loaded.nodes[index].mesh {
+    if let Some(mesh) = loaded.nodes[index].mesh {
         let local = mesh_local_aabb(loaded, mesh)?;
-        world * Mat4::from_scale_rotation_translation(local.size(), Quat::IDENTITY, local.center())
+        let posed = world
+            * Mat4::from_scale_rotation_translation(local.size(), Quat::IDENTITY, local.center());
+        let shape = shape_from_box_matrix(posed)?;
+        let corners = aabb_corners(local).map(|corner| world.transform_point3(corner));
+        if shape_covers_points(&shape, &corners) {
+            Some(shape)
+        } else {
+            Some(fit_box_to_points(&shape, &corners))
+        }
     } else {
-        world
+        shape_from_box_matrix(world)
+    }
+}
+
+fn aabb_corners(aabb: Aabb) -> [Vec3; 8] {
+    let min = aabb.min;
+    let max = aabb.max;
+    [
+        Vec3::new(min.x, min.y, min.z),
+        Vec3::new(max.x, min.y, min.z),
+        Vec3::new(min.x, max.y, min.z),
+        Vec3::new(max.x, max.y, min.z),
+        Vec3::new(min.x, min.y, max.z),
+        Vec3::new(max.x, min.y, max.z),
+        Vec3::new(min.x, max.y, max.z),
+        Vec3::new(max.x, max.y, max.z),
+    ]
+}
+
+fn shape_covers_points(shape: &GltfColliderShape, points: &[Vec3]) -> bool {
+    points.iter().all(|point| match shape {
+        GltfColliderShape::Aabb(aabb) => {
+            (*point - aabb.closest_point(*point)).length_squared() <= 1.0e-6
+        }
+        GltfColliderShape::Obb(obb) => {
+            (*point - obb.closest_point(*point)).length_squared() <= 1.0e-6
+        }
+        GltfColliderShape::Sphere(_) | GltfColliderShape::Capsule(_) => true,
+    })
+}
+
+/// Widens `shape` in its own rotation until every point is inside.
+fn fit_box_to_points(shape: &GltfColliderShape, points: &[Vec3]) -> GltfColliderShape {
+    let (center, rotation) = match *shape {
+        GltfColliderShape::Aabb(aabb) => (aabb.center(), Quat::IDENTITY),
+        GltfColliderShape::Obb(obb) => (obb.center, obb.rotation),
+        GltfColliderShape::Sphere(_) | GltfColliderShape::Capsule(_) => return *shape,
     };
-    shape_from_box_matrix(posed)
+    let rotation = if rotation.length_squared() > f32::EPSILON {
+        rotation.normalize()
+    } else {
+        Quat::IDENTITY
+    };
+    let inverse = rotation.inverse();
+    let mut min = Vec3::splat(f32::MAX);
+    let mut max = Vec3::splat(f32::MIN);
+    for point in points {
+        let local = inverse * (*point - center);
+        min = min.min(local);
+        max = max.max(local);
+    }
+    if !min.is_finite() || !max.is_finite() {
+        return *shape;
+    }
+    let mid = (min + max) * 0.5;
+    let half = (max - min) * 0.5;
+    let fitted = Obb::new(center + rotation * mid, half, rotation);
+    if rotation_is_axis_aligned(rotation) {
+        GltfColliderShape::Aabb(aabb_from_aligned_obb(fitted))
+    } else {
+        GltfColliderShape::Obb(fitted)
+    }
 }
 
 /// An axis-aligned rotation, including a quarter turn, is an [`Aabb`] whose
@@ -1802,6 +1873,73 @@ mod tests {
         // Vertices at ±0.5, so the node scale is the full size.
         assert_vec3_close(unit_aabb.center(), vec3(0.0, 1.0, 0.0));
         assert_vec3_close(unit_aabb.size(), vec3(2.0, 4.0, 6.0));
+    }
+
+    #[test]
+    fn a_sheared_mesh_box_contains_the_transformed_corners() {
+        let yaw = Quat::from_rotation_y(45.0_f32.to_radians());
+        let corners = [
+            vec3(-1.0, -1.0, -1.0),
+            vec3(1.0, -1.0, -1.0),
+            vec3(-1.0, 1.0, -1.0),
+            vec3(1.0, 1.0, -1.0),
+            vec3(-1.0, -1.0, 1.0),
+            vec3(1.0, -1.0, 1.0),
+            vec3(-1.0, 1.0, 1.0),
+            vec3(1.0, 1.0, 1.0),
+        ];
+        let node = format!(
+            r#"{{"scale":[2,1,1],"children":[1]}},{{"name":"cube_collider","rotation":[{},{},{},{}],"mesh":0,"extras":{{"mq_shape":"box","mq_role":"collider"}}}}"#,
+            yaw.x, yaw.y, yaw.z, yaw.w
+        );
+        let mut bytes = Vec::new();
+        // A ninth copy keeps the index count a multiple of 3. The bounds stay
+        // the cube.
+        for position in corners.iter().copied().chain(std::iter::once(corners[0])) {
+            for value in [position.x, position.y, position.z] {
+                bytes.extend(value.to_le_bytes());
+            }
+        }
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[{node}],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}}}}]}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":9,"type":"VEC3","min":[-1,-1,-1],"max":[1,1,1]}}],"bufferViews":[{{"buffer":0,"byteLength":{}}}],"buffers":[{{"byteLength":{}}}]}}"#,
+            bytes.len(),
+            bytes.len()
+        );
+        let scene = GltfScene::from_bytes(&glb(&json, &bytes)).unwrap();
+        let world = scene.nodes[1].world;
+        let GltfColliderShape::Obb(obb) = scene.colliders[0].shape else {
+            panic!("sheared yaw stays an Obb");
+        };
+        for corner in corners {
+            let placed = world.transform_point3(corner);
+            assert!(obb.contains(placed), "corner {placed:?} is outside {obb:?}");
+        }
+    }
+
+    #[test]
+    fn negative_scale_root_still_composes_after_up_axis() {
+        let scene = GltfScene::from_bytes(
+            scene_json(
+                r#"{"name":"root","scale":[-2,3,4],"children":[1]},{"name":"child_spawn","translation":[1,0,0]}"#,
+                r#"{"nodes":[0]}"#,
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+        let turned = scene.with_up_axis(Vec3::Z);
+        let root = &turned.nodes[0];
+        let rebuilt =
+            Mat4::from_scale_rotation_translation(root.scale, root.rotation, root.translation);
+        assert_mat4_close(rebuilt, root.world);
+        let child = &turned.nodes[1];
+        let child_local =
+            Mat4::from_scale_rotation_translation(child.scale, child.rotation, child.translation);
+        assert_mat4_close(root.world * child_local, child.world);
+        assert_eq!(turned.spawns.len(), 1);
+        assert_vec3_close(
+            turned.spawns[0].position,
+            child.world.transform_point3(Vec3::ZERO),
+        );
     }
 
     fn mesh_marker_glb(node: &str, positions: &[Vec3]) -> Vec<u8> {

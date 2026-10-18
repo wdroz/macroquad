@@ -189,8 +189,11 @@ impl Capsule {
     ///
     /// The normal points from the box toward the capsule. `point` is on the
     /// box. A capsule whose rounded hull only touches a face has penetration
-    /// `0`. An inverted or non-finite box has no contact. A negative or
-    /// non-finite radius is empty.
+    /// `0`. When the inner segment intersects the box, the normal is a face
+    /// normal and the penetration is large enough to move the capsule onto
+    /// that face. A long segment through a thin pillar is pushed out the
+    /// short side, not along the segment. An inverted or non-finite box has
+    /// no contact. A negative or non-finite radius is empty.
     ///
     /// # Example
     ///
@@ -207,14 +210,8 @@ impl Capsule {
         if !capsule_is_usable(self) || !box_is_usable(aabb) {
             return None;
         }
-        if let Some((t0, t1)) = segment_inside(self.a, self.b, aabb) {
-            let (center, depth) = deepest_inside(self.a, self.b, t0, t1, aabb);
-            let (normal, face_point) = nearest_face(center, aabb);
-            return Some(Contact {
-                normal,
-                penetration: self.radius + depth,
-                point: face_point,
-            });
+        if segment_inside(self.a, self.b, aabb).is_some() {
+            return Some(segment_inside_contact(self, aabb));
         }
         let (on_segment, on_box, dist_sq) = closest_segment_box(self.a, self.b, aabb);
         let dist = dist_sq.sqrt();
@@ -402,55 +399,51 @@ fn point_at(a: Vec3, b: Vec3, t: f32) -> Vec3 {
     a + (b - a) * t
 }
 
-fn face_depth(point: Vec3, aabb: &Aabb) -> f32 {
-    (point.x - aabb.min.x)
-        .min(aabb.max.x - point.x)
-        .min(point.y - aabb.min.y)
-        .min(aabb.max.y - point.y)
-        .min(point.z - aabb.min.z)
-        .min(aabb.max.z - point.z)
-}
-
-/// `(offset, slope)` of the distance to one face along `a + t * (b - a)`.
-fn face_line(a: Vec3, direction: Vec3, face: usize, aabb: &Aabb) -> (f32, f32) {
-    match face {
-        0 => (a.x - aabb.min.x, direction.x),
-        1 => (aabb.max.x - a.x, -direction.x),
-        2 => (a.y - aabb.min.y, direction.y),
-        3 => (aabb.max.y - a.y, -direction.y),
-        4 => (a.z - aabb.min.z, direction.z),
-        _ => (aabb.max.z - a.z, -direction.z),
+/// Face-axis separation for a capsule whose inner segment meets the box.
+///
+/// Pushing the capsule by `penetration` along `normal` lands it on that face.
+/// The shortest of the six face axes wins. Equal lengths keep X, then Y, then
+/// Z, and a center that sits on the axis uses the positive direction.
+fn segment_inside_contact(capsule: &Capsule, aabb: &Aabb) -> Contact {
+    let center = (capsule.a + capsule.b) * 0.5;
+    let half = (capsule.b - capsule.a) * 0.5;
+    let box_center = aabb.center();
+    let box_half = aabb.half_extents();
+    let delta = center - box_center;
+    let mut best_pen = f32::INFINITY;
+    let mut best_axis = 0;
+    let mut best_positive = true;
+    for axis in 0..3 {
+        let along = component(half, axis).abs() + capsule.radius;
+        let extent = component(box_half, axis);
+        let dist = component(delta, axis);
+        let pen = extent + along - dist.abs();
+        if pen < best_pen {
+            best_pen = pen;
+            best_axis = axis;
+            best_positive = dist >= 0.0;
+        }
+    }
+    Contact {
+        normal: axis_normal(best_axis, best_positive),
+        penetration: best_pen.max(0.0),
+        point: point_on_face(center, aabb, best_axis, best_positive),
     }
 }
 
-fn deepest_inside(a: Vec3, b: Vec3, t0: f32, t1: f32, aabb: &Aabb) -> (Vec3, f32) {
-    let mut best_t = t0;
-    let mut best_depth = face_depth(point_at(a, b, t0), aabb);
-    let mut consider = |t: f32| {
-        if !(t0..=t1).contains(&t) {
-            return;
-        }
-        let depth = face_depth(point_at(a, b, t), aabb);
-        if depth > best_depth {
-            best_depth = depth;
-            best_t = t;
-        }
+fn point_on_face(center: Vec3, aabb: &Aabb, axis: usize, positive: bool) -> Vec3 {
+    let mut point = vec3(
+        center.x.clamp(aabb.min.x, aabb.max.x),
+        center.y.clamp(aabb.min.y, aabb.max.y),
+        center.z.clamp(aabb.min.z, aabb.max.z),
+    );
+    let face = if positive {
+        component(aabb.max, axis)
+    } else {
+        component(aabb.min, axis)
     };
-    consider(t1);
-    let direction = b - a;
-    for i in 0..6 {
-        for j in (i + 1)..6 {
-            let (offset_i, slope_i) = face_line(a, direction, i, aabb);
-            let (offset_j, slope_j) = face_line(a, direction, j, aabb);
-            let slope = slope_i - slope_j;
-            if slope.abs() <= f32::EPSILON {
-                continue;
-            }
-            consider((offset_j - offset_i) / slope);
-        }
-    }
-    let depth = if best_depth < 0.0 { 0.0 } else { best_depth };
-    (point_at(a, b, best_t), depth)
+    set_component(&mut point, axis, face);
+    point
 }
 
 fn closest_segment_box(a: Vec3, b: Vec3, aabb: &Aabb) -> (Vec3, Vec3, f32) {
@@ -748,6 +741,28 @@ mod tests {
         assert!(body
             .contact_sphere(&Sphere::new(Vec3::ZERO, f32::NAN))
             .is_none());
+    }
+
+    #[test]
+    fn a_capsule_through_a_thin_pillar_exits_on_the_short_side() {
+        let pillar = Aabb::from_center_size(vec3(0.0, 5.0, 0.0), vec3(0.2, 10.0, 0.2));
+        let body = Capsule::new(vec3(-5.0, 5.0, 0.0), vec3(5.0, 5.0, 0.0), 0.3);
+        let contact = body.contact_aabb(&pillar).unwrap();
+        assert_eq!(contact.normal, Vec3::Z);
+        assert!((contact.penetration - 0.4).abs() < 1e-3);
+        // The point sits on the pillar face the normal pushes away from.
+        assert_vec3_close(contact.point, vec3(0.0, 5.0, 0.1));
+        let moved = Capsule::new(
+            body.a + contact.normal * contact.penetration,
+            body.b + contact.normal * contact.penetration,
+            body.radius,
+        );
+        let resting = moved.contact_aabb(&pillar).unwrap();
+        assert!(
+            resting.penetration < 1e-3,
+            "still inside by {}",
+            resting.penetration
+        );
     }
 
     #[test]

@@ -45,6 +45,49 @@ pub use sphere::Sphere;
 pub use sweep::SweepHit;
 pub use triangle::Triangle;
 
+/// Roots of `|offset + delta * t| = radius`, in increasing order.
+///
+/// The dots run in `f64`. In `f32`, `b² - 4ac` collapses to zero once the
+/// sphere and the feature are far apart, and the hit lands a radius early.
+pub(super) fn sphere_quadratic_roots(offset: Vec3, delta: Vec3, radius: f32) -> Option<(f32, f32)> {
+    let ox = offset.x as f64;
+    let oy = offset.y as f64;
+    let oz = offset.z as f64;
+    let dx = delta.x as f64;
+    let dy = delta.y as f64;
+    let dz = delta.z as f64;
+    let a = dx * dx + dy * dy + dz * dz;
+    if !a.is_finite() || a <= 1e-18 {
+        return None;
+    }
+    let b = 2.0 * (ox * dx + oy * dy + oz * dz);
+    let radius = radius as f64;
+    let c = ox * ox + oy * oy + oz * oz - radius * radius;
+    let disc = b * b - 4.0 * a * c;
+    if !disc.is_finite() || disc < -1e-8 {
+        return None;
+    }
+    let sqrt_disc = disc.max(0.0).sqrt();
+    let sign_b = if b >= 0.0 { 1.0 } else { -1.0 };
+    let q = -0.5 * (b + sign_b * sqrt_disc);
+    let (t_near, t_far) = if q == 0.0 {
+        (0.0, -b / a)
+    } else {
+        let t_q = q / a;
+        let t_c = c / q;
+        if t_q <= t_c {
+            (t_q, t_c)
+        } else {
+            (t_c, t_q)
+        }
+    };
+    if t_near.is_finite() && t_far.is_finite() {
+        Some((t_near as f32, t_far as f32))
+    } else {
+        None
+    }
+}
+
 /// Converts 2d polar coordinates to 2d cartesian coordinates.
 pub fn polar_to_cartesian(rho: f32, theta: f32) -> Vec2 {
     vec2(rho * theta.cos(), rho * theta.sin())

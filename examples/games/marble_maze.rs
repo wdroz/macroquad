@@ -145,7 +145,8 @@ fn blocked(center: Vec3, solids: &[Solid]) -> bool {
 /// Move on one world axis. The step is chopped so a thin floor is not skipped
 /// when the destination is already on the other side. A hit drops the rest of
 /// that component instead of projecting it onto the surface, so a 45° bumper
-/// can snag the marble. There is no sweep query yet.
+/// can snag the marble. `slide_sphere` and `Sphere::sweep_aabb` do this in the
+/// library; the game keeps the probe it shipped with.
 #[cfg(feature = "gltf")]
 fn slide_axis(center: Vec3, delta: f32, axis: usize, solids: &[Solid]) -> (Vec3, bool) {
     if delta == 0.0 || !delta.is_finite() {
