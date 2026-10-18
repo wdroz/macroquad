@@ -54,6 +54,12 @@
 //! [`GltfModelTransform`] supplies the inverse-transpose normal matrix and
 //! reflected-winding flag for a custom retained material. Instance transforms
 //! do not update a separately parsed [`GltfScene`]'s colliders or spawn points.
+//!
+//! Opt into [`GltfMaterialRenderer`] for base-color/emissive preview passes,
+//! alpha masks, globally sorted transparent instances and material sidedness.
+//! It uses exact material factors instead of the baked vertex colors and does
+//! not add lighting, PBR or refraction. [`GltfColorOutput`] makes the destination
+//! color-space policy explicit; the existing draw methods stay unchanged.
 
 use std::{borrow::Cow, collections::HashMap};
 
@@ -71,9 +77,13 @@ mod retained;
 pub use retained::*;
 mod diagnostics;
 mod loading;
+mod material;
+mod material_warnings;
 pub use crate::gltf::GltfImageLimits;
 pub use diagnostics::*;
 pub use loading::*;
+pub use material::*;
+pub use material_warnings::*;
 
 /// CPU-side material values, retained for a custom shader.
 ///
@@ -824,6 +834,15 @@ fn restricted_npot_backend(version: &str) -> bool {
 }
 
 fn prepare_glb(bytes: &[u8]) -> Result<(GltfScene, gltf::Document, Cow<'_, [u8]>), String> {
+    let (document, binary) = parse_glb_document(bytes)?;
+    // Reuse the validated JSON and borrowed BIN chunk. Rebuilding a normalized
+    // GLB and reparsing it used to duplicate the largest allocation three times.
+    let scene = GltfScene::from_document(&document, Some(binary.as_ref()), false)
+        .map_err(|e| e.to_string())?;
+    Ok((scene, document, binary))
+}
+
+fn parse_glb_document(bytes: &[u8]) -> Result<(gltf::Document, Cow<'_, [u8]>), String> {
     let glb = gltf::binary::Glb::from_slice(bytes).map_err(|e| e.to_string())?;
     let binary = glb.bin.ok_or("GLB has no binary chunk")?;
     let mut json: serde_json::Value =
@@ -833,11 +852,7 @@ fn prepare_glb(bytes: &[u8]) -> Result<(GltfScene, gltf::Document, Cow<'_, [u8]>
     // adapter. Unrecognized required extensions are retained and still fail.
     let root = serde_json::from_value(json).map_err(|e| e.to_string())?;
     let document = gltf::Document::from_json(root).map_err(|e| e.to_string())?;
-    // Reuse the validated JSON and borrowed BIN chunk. Rebuilding a normalized
-    // GLB and reparsing it used to duplicate the largest allocation three times.
-    let scene = GltfScene::from_document(&document, Some(binary.as_ref()), false)
-        .map_err(|e| e.to_string())?;
-    Ok((scene, document, binary))
+    Ok((document, binary))
 }
 
 fn normalize_webp(json: &mut serde_json::Value) -> Result<(), String> {

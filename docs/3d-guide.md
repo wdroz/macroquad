@@ -329,8 +329,92 @@ still cannot remove full-resolution decode peaks.
 
 `GltfModelStats` contains
 load counts, not measured memory or per-frame GPU costs. Skinning, animation,
-morph weights, normal/roughness maps, and an automatic material renderer remain
-roadmap work.
+morph weights, normal/roughness maps, and lighting remain roadmap work.
+
+## Opt-in glTF material passes
+
+`GltfMaterialRenderer` provides a base-color/emissive preview using the existing
+loaded data. It leaves `GltfModel::draw`, retained draws and custom shaders
+unchanged. Construct one renderer in a running application, set the camera, then
+collect **every instance for that view into one frame** before drawing:
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn render(model: &RetainedGltfModel, camera: &Camera3D) -> Result<(), String> {
+let mut renderer = GltfMaterialRenderer::new().map_err(|e| e.to_string())?;
+set_camera(camera);
+let mut frame = renderer.begin(camera.position, camera.target - camera.position)?;
+frame.submit_retained(model, Mat4::IDENTITY)?;
+frame.submit_retained(model, Mat4::from_translation(Vec3::X))?;
+let stats = frame.draw();
+assert_eq!(stats.skipped_draws, 0);
+# Ok(()) }
+```
+
+Keep the renderer across frames in a real loop. `submit` accepts a CPU
+`GltfModel`; `submit_retained` shares uploaded geometry. Collection borrows the
+models until `draw` or frame drop. Dropping an undrawn frame cancels its
+collection. Instance transforms must be finite and affine. The current
+low-level model stack at `draw` is included in both positions and sorting;
+the camera/target must stay consistent with the view passed to `begin`.
+
+Opaque and masked chunks draw first with depth testing and depth writes. Opaque
+alpha is ignored. Mask fragments below the exact floating-point cutoff are
+discarded; surviving fragments are opaque and write depth. Blended chunks then
+draw back to front across all submitted models with depth testing, no depth
+writes and straight-alpha blending. Sorting uses transformed chunk centers
+along the camera forward direction, with submission order breaking ties.
+Intersecting triangles, overlapping chunks and transparent surfaces that cross
+each other cannot always be ordered correctly by a single center. Split such
+geometry or supply a custom renderer; this is not order-independent transparency.
+Separate collections cannot sort transparency across each other.
+
+Single-sided materials cull back faces, including reflected instance transforms;
+double-sided materials draw both faces. Colors use the exact `GltfSurface`
+factors, ignoring the factor already baked into vertex colors. Imported vertex
+`COLOR_0` is not available in the existing loader and is reported by the warning
+inspector. Base/emissive texture RGB is decoded with the piecewise sRGB transfer
+function before multiplying linear factors; alpha stays linear. Ordinary
+materials preview base plus emissive without lighting. `KHR_materials_unlit`
+uses base color only, as required by the extension. Missing textures are white.
+
+The default `GltfColorOutput::Srgb` encodes the final RGB for a normal display
+target. Blending then happens in that target's encoded color space, as with
+ordinary macroquad drawing. For linear compositing, call
+`frame.set_output(GltfColorOutput::Linear)`, draw into a linear render target,
+and apply one sRGB conversion in your final full-screen resolve. The renderer
+does not create that target, change its format, perform tone mapping or provide
+HDR storage. Avoid double conversion with an automatically encoding target.
+Existing RGBA8 textures and mipmaps filter their encoded values before the
+shader decodes them; neither output mode changes this texture-filtering limit.
+
+`draw` flushes the collected GPU work before returning, restores the model stack
+and selects the default material. This makes dropping the renderer afterward
+safe; select your own material again before further custom drawing. It does not
+advance a frame, change the camera or clear the target. PBR, normal maps,
+lighting, refraction, environment reflections and shadows are separate work.
+
+Inspect source bytes once to get structured warnings without opening a window
+or decoding images/geometry:
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn inspect(bytes: &[u8]) -> Result<(), String> {
+for warning in gltf_material_warnings(bytes)? {
+    println!("{}: {:?} ({:?})", warning.path, warning.material_name, warning.feature);
+}
+# Ok(()) }
+```
+
+Warnings identify the loaded/source node, node path, primitive and material;
+unsupported map warnings also identify their source image when available.
+They describe the source bytes, so call-site material edits are not reflected.
+Unused materials and nodes outside the selected scene are omitted. Non-unlit
+materials report missing lighting even without special maps. Unsupported
+features remain warnings rather than silently enabling an approximation; loader
+errors (such as unsupported UV mappings) still fail loading normally.
+See `examples/gltf_materials.rs` and the tiny native/browser pixel fixture
+`examples/gltf_material_check.rs`.
 
 ## Ray hits
 
