@@ -2,7 +2,7 @@
 //!
 //! Consists of re-exported `glam` types with some additions, including 2D
 //! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Capsule`],
-//! [`Ray`], [`Plane`], and [`Triangle`]. [`Contact`] is the overlap of two of
+//! [`Ray`], [`Plane`], [`Triangle`], and [`Frustum`]. [`Contact`] is the overlap of two of
 //! those shapes. [`SweepHit`] is the time of impact of a moving [`Aabb`] or
 //! [`Sphere`] against a static [`Aabb`]. [`slide_sphere`] moves a sphere along
 //! [`Aabb`] and [`Obb`] faces. The 3D types are unitless and do not assume an
@@ -23,6 +23,7 @@ mod aabb;
 mod capsule;
 mod circle;
 mod contact;
+mod frustum;
 mod obb;
 mod plane;
 mod ray;
@@ -36,6 +37,7 @@ pub use aabb::{Aabb, RayHit};
 pub use capsule::Capsule;
 pub use circle::Circle;
 pub use contact::Contact;
+pub use frustum::Frustum;
 pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};

@@ -21,7 +21,8 @@
 //! ## 3D collision and glTF
 //!
 //! [`math`] contains [`math::Aabb`], [`math::Sphere`], [`math::Capsule`],
-//! [`math::Ray`], [`math::Plane`], [`math::Triangle`], and [`math::Obb`].
+//! [`math::Ray`], [`math::Plane`], [`math::Triangle`], [`math::Obb`], and
+//! [`math::Frustum`].
 //! [`math::Contact`] describes an overlap, [`math::SweepHit`] is a moving box
 //! or sphere against a static box, and [`math::slide_sphere`] keeps the motion
 //! along a face. They do not assume an up axis. The `gltf` feature parses a

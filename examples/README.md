@@ -1,6 +1,6 @@
 # Examples added on this fork
 
-The other files in this directory are the upstream macroquad samples. This page lists the 3D collision examples, the glTF example, and the games added here.
+The other files in this directory are the upstream macroquad samples. This page lists the 3D collision examples and the glTF example added here.
 
 Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).
 
@@ -14,8 +14,8 @@ cargo run --example obb_overlap
 cargo run --example capsule_overlap
 cargo run --example sweep_hit
 cargo run --example picking_ray
+cargo run --example frustum_cull
 cargo run --features gltf --example gltf_textured
-cargo run --features gltf --example marble_maze
 ```
 
 ## `aabb_overlap`
@@ -54,17 +54,15 @@ Moves a box and a sphere with the arrow keys into one wall. `Aabb::sweep` and `S
 
 Moves the mouse. `Camera3D::screen_to_ray` unprojects the cursor with the same view-projection the example passes to `set_camera`. `Ray::closest_aabb` marks the nearest box. The camera is Y-up. Escape quits.
 
+## `frustum_cull`
+
+Looks at a grid of boxes from the side. The yellow wireframe is a second `Camera3D`. `Camera3D::frustum` builds a `Frustum`, and `intersects_aabb` turns the boxes it meets green. Left and right yaw that camera. Space hides boxes outside it. Escape quits.
+
 ## `gltf_textured`
 
 Requires `--features gltf`. With no argument it draws `assets/textured_quad.glb`, a checkerboard quad. An argument is a `.glb` path passed to `load_file`, then `GltfModel::from_bytes`. The camera orbits the model's bounds with `up: Vec3::Y`. `model.draw()` submits the textured chunks. The on-screen line is `model.stats`.
 
-`gltf_textured` still builds without the feature: that binary prints a message and exits. It does not parse a file unless `gltf` is enabled. `marble_maze` does the same.
-
-## `marble_maze`
-
-Requires `--features gltf`. A rolling-ball maze. The level is `assets/marble_maze.glb` (regenerate with Blender: `blender --background --python assets/gen_marble_maze.py`). The marble starts at `player_spawn`. Arrow keys or WASD accelerate it on the XZ plane. Up and W roll toward -Z. Gravity is applied in the example. R returns to the spawn. The gold ring is the `goal_trigger` sphere. Escape quits.
-
-The chase camera sets `up: Vec3::Y`. `Camera3D`'s default up is +Z, and this file is Y-up, so the example does not call `GltfScene::with_up_axis` or `GltfModel::with_up_axis`. Walls are mesh nodes whose names end in `_collider` and have no `mq_shape`, so a rotated mesh is still the world `Aabb` of its positions. The example builds an `Obb` from that node's world matrix. A node with `mq_shape` = `box` would already be an `Obb` sized to the mesh. The overlap probe is 0.02 smaller than the drawn marble. `slide_sphere` accepts the full radius; this example keeps the probe it shipped with. Falling below the floor returns to the spawn. The goal sphere is drawn by the example; the imported trigger is not a mesh.
+`gltf_textured` still builds without the feature: that binary prints a message and exits. It does not parse a file unless `gltf` is enabled.
 
 ## Assets
 
@@ -72,6 +70,5 @@ The chase camera sets `up: Vec3::Y`. `Camera3D`'s default up is +Z, and this fil
 | --- | --- |
 | `assets/triangle.gltf`, `assets/triangle.glb` | Hierarchy, box collider, spawn, and a 1×1 base-color image used by the loader tests. Regenerate with `assets/gen_triangle_gltf.py`. |
 | `assets/textured_quad.glb` | Checkerboard drawn by `gltf_textured`. Regenerate with `assets/gen_textured_quad.py`. |
-| `assets/marble_maze.glb` | Level for `marble_maze`. Regenerate with Blender and `assets/gen_marble_maze.py`. |
 
 The guides are [`docs/3d-guide.md`](../docs/3d-guide.md) and [`docs/blender-to-macroquad.md`](../docs/blender-to-macroquad.md).

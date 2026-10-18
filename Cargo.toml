@@ -51,10 +51,6 @@ macroquad-platformer = { path = "./physics-platformer" }
 [patch.crates-io]
 macroquad = { path = './' }
 
-[[example]]
-name = "marble_maze"
-path = "examples/games/marble_maze.rs"
-
 #quad-snd = {path = '../quad-snd'}
 #miniquad = { path = '../miniquad' }
 #miniquad = { git = "https://github.com/not-fl3/miniquad", branch = "msaa_render_texture" }

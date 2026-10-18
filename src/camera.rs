@@ -1,11 +1,12 @@
 //! 2D and 3D camera.
 //!
 //! [`Camera3D::screen_to_ray`] unprojects a screen point into a world
-//! [`Ray`](crate::math::Ray).
+//! [`Ray`](crate::math::Ray). [`Camera3D::frustum`] extracts the six inward
+//! planes of that same view-projection.
 
 use crate::{
     get_context,
-    math::{Ray, Rect},
+    math::{Frustum, Ray, Rect},
     prelude::RenderPass,
     texture::RenderTarget,
     window::{screen_height, screen_width},
@@ -375,6 +376,65 @@ impl Camera3D {
         }
     }
 
+    /// Six inward planes of this camera's view frustum.
+    ///
+    /// The matrix is the one [`Camera::matrix`] builds: [`Self::aspect`] wins
+    /// when it is set, otherwise the aspect is the framebuffer width over its
+    /// height. That framebuffer is the render target when [`Self::render_target`]
+    /// is set, and the window otherwise. With neither, a positive viewport
+    /// supplies the size, same as [`Self::screen_to_ray`]. The viewport does
+    /// not change the projection.
+    ///
+    /// Planes point into the volume. See [`Frustum`] for which tests are exact
+    /// and which can count a shape that only reaches a plane past a corner.
+    /// Returns [`None`] when the aspect is missing or unusable, or when the
+    /// view-projection has no finite planes (a zero look direction, an up axis
+    /// parallel to it, or a non-finite field of view or clip distance).
+    ///
+    /// A synthetic camera does not need a window when `aspect` is set.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::camera::Camera3D;
+    /// use macroquad::math::{vec3, Vec3};
+    ///
+    /// let camera = Camera3D {
+    ///     position: vec3(0.0, 0.0, 5.0),
+    ///     target: Vec3::ZERO,
+    ///     up: Vec3::Y,
+    ///     aspect: Some(1.0),
+    ///     z_near: 0.1,
+    ///     z_far: 20.0,
+    ///     ..Default::default()
+    /// };
+    /// let frustum = camera.frustum().unwrap();
+    /// assert!(frustum.contains_point(Vec3::ZERO));
+    /// assert!(!frustum.contains_point(camera.position));
+    /// ```
+    pub fn frustum(&self) -> Option<Frustum> {
+        let aspect = if let Some(aspect) = self.aspect {
+            aspect
+        } else {
+            let (width, height) = self.framebuffer_size()?;
+            width / height
+        };
+        if !aspect.is_finite() || aspect.abs() <= 1e-8 {
+            return None;
+        }
+        if !self.position.is_finite()
+            || !self.target.is_finite()
+            || !self.up.is_finite()
+            || !self.fovy.is_finite()
+            || !self.z_near.is_finite()
+            || !self.z_far.is_finite()
+        {
+            return None;
+        }
+        let matrix = self.projection_view(aspect);
+        Frustum::from_view_projection(matrix)
+    }
+
     /// Pixel size of the surface this camera draws into.
     ///
     /// A render target uses its texture. Otherwise a live window uses the
@@ -705,5 +765,114 @@ mod tests {
         camera.viewport = None;
         let no_surface = camera.screen_to_ray(vec2(100.0, 100.0));
         assert_eq!(no_surface.direction, Vec3::ZERO);
+    }
+
+    #[test]
+    fn perspective_frustum_matches_fov_and_clip_planes_without_a_window() {
+        let camera = perspective_down_z();
+        let frustum = camera.frustum().expect("aspect is set");
+        for plane in [frustum.left, frustum.right, frustum.bottom, frustum.top] {
+            assert!(
+                plane.signed_distance(camera.position).abs() < 1e-4,
+                "side plane should pass through the camera, got {}",
+                plane.signed_distance(camera.position)
+            );
+        }
+        let near_point = vec3(0.0, 0.0, 5.0 - camera.z_near);
+        let far_point = vec3(0.0, 0.0, 5.0 - camera.z_far);
+        assert!(frustum.near.signed_distance(near_point).abs() < 1e-3);
+        assert!(frustum.far.signed_distance(far_point).abs() < 1e-2);
+        assert!(frustum.contains_point(near_point));
+        assert!(frustum.contains_point(Vec3::ZERO));
+        assert!(!frustum.contains_point(camera.position));
+
+        let edge = vec3(camera.z_near, 0.0, 5.0 - camera.z_near);
+        assert!(frustum.right.signed_distance(edge).abs() < 1e-3);
+        assert!(frustum.contains_point(edge));
+        assert!(!frustum.contains_point(edge + Vec3::X * 0.05));
+
+        let inside = Aabb::from_center_size(vec3(0.0, 0.0, 1.0), vec3(0.4, 0.4, 0.4));
+        assert!(frustum.contains_aabb(&inside));
+        let behind = Aabb::from_center_size(vec3(0.0, 0.0, 6.0), vec3(0.2, 0.2, 0.2));
+        assert!(!frustum.intersects_aabb(&behind));
+    }
+
+    #[test]
+    fn orthographic_frustum_is_a_box_in_front_of_the_camera() {
+        let camera = Camera3D {
+            position: vec3(0.0, 0.0, 5.0),
+            target: Vec3::ZERO,
+            up: Vec3::Y,
+            fovy: 4.0,
+            aspect: Some(2.0),
+            projection: Projection::Orthographics,
+            z_near: 1.0,
+            z_far: 20.0,
+            ..Default::default()
+        };
+        let frustum = camera.frustum().unwrap();
+        assert!(frustum.contains_point(vec3(0.0, 0.0, 0.0)));
+        assert!(frustum.near.signed_distance(vec3(0.0, 0.0, 4.0)).abs() < 1e-3);
+        assert!(frustum.right.signed_distance(vec3(4.0, 0.0, 0.0)).abs() < 1e-3);
+        assert!(frustum.top.signed_distance(vec3(0.0, 2.0, 0.0)).abs() < 1e-3);
+        assert!(!frustum.contains_point(vec3(4.2, 0.0, 0.0)));
+        assert!(!frustum.contains_point(vec3(0.0, 0.0, 4.2)));
+        let touching = crate::math::Sphere::new(vec3(4.2, 0.0, 0.0), 0.2);
+        assert!(frustum.intersects_sphere(&touching));
+        assert!(!frustum.contains_sphere(&touching));
+    }
+
+    #[test]
+    fn z_up_frustum_looks_along_that_camera() {
+        let camera = Camera3D {
+            position: vec3(0.0, -5.0, 1.0),
+            target: vec3(0.0, 0.0, 1.0),
+            up: Vec3::Z,
+            fovy: 90.0_f32.to_radians(),
+            aspect: Some(1.0),
+            z_near: 1.0,
+            z_far: 8.0,
+            ..Default::default()
+        };
+        let frustum = camera.frustum().unwrap();
+        assert!(frustum.contains_point(vec3(0.0, -2.0, 1.0)));
+        assert!(!frustum.contains_point(vec3(0.0, -4.5, 1.0)));
+        assert!(frustum.near.signed_distance(vec3(0.0, -4.0, 1.0)).abs() < 1e-3);
+        assert!(frustum.far.signed_distance(vec3(0.0, 3.0, 1.0)).abs() < 1e-2);
+        let side = vec3(2.0, -3.0, 1.0);
+        assert!(frustum.contains_point(side));
+        assert!(!frustum.contains_point(side + Vec3::X));
+        let above = vec3(0.0, -3.0, 3.0);
+        assert!(frustum.contains_point(above));
+        assert!(!frustum.contains_point(above + Vec3::Z));
+    }
+
+    #[test]
+    fn a_missing_aspect_uses_the_viewport_and_a_bad_camera_is_none() {
+        let mut camera = perspective_down_z();
+        camera.aspect = None;
+        camera.viewport = Some((0, 0, 200, 100));
+        let wide = camera.frustum().unwrap();
+        // 90° vertical fov, aspect 2: at the near plane the half width is 0.5.
+        let right = vec3(0.5, 0.0, 5.0 - camera.z_near);
+        assert!(wide.right.signed_distance(right).abs() < 1e-3);
+
+        camera.viewport = None;
+        assert!(camera.frustum().is_none());
+
+        camera = perspective_down_z();
+        camera.target = camera.position;
+        assert!(camera.frustum().is_none());
+
+        camera = perspective_down_z();
+        camera.up = -Vec3::Z;
+        assert!(camera.frustum().is_none());
+
+        camera = perspective_down_z();
+        camera.aspect = Some(0.0);
+        assert!(camera.frustum().is_none());
+
+        camera.aspect = Some(f32::NAN);
+        assert!(camera.frustum().is_none());
     }
 }
