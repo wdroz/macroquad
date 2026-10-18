@@ -175,6 +175,22 @@ assert!(body.overlaps_sphere(&Sphere::new(vec3(1.0, 0.5, 0.0), 0.5)));
 
 `Ray::closest_capsule` matches the other slice queries. `examples/capsule_overlap.rs` moves one with the arrow keys. The wireframe in that example is local; `draw_capsule_wires` is a later item.
 
+## Contact
+
+`Contact` is one overlapping pair: `normal`, `penetration`, and `point`. It does not move either shape. The normal points from the second shape toward the first. A pair that only touches still returns a contact with penetration `0`, so a sphere sitting on a floor is a contact. Separated shapes return `None`.
+
+`Aabb::contact`, `Sphere::contact`, `Sphere::contact_aabb`, `Capsule::contact_sphere`, and `Capsule::contact_aabb` are the queries. Mass and impulses are not here.
+
+```rust
+use macroquad::math::{Aabb, Sphere, Vec3, vec3};
+
+let ball = Sphere::new(vec3(0.0, 0.5, 0.0), 0.5);
+let floor = Aabb::from_min_max(vec3(-1.0, -1.0, -1.0), vec3(1.0, 0.0, 1.0));
+let contact = ball.contact_aabb(&floor).unwrap();
+assert_eq!(contact.penetration, 0.0);
+assert_eq!(contact.normal, Vec3::Y);
+```
+
 ## Physics
 
 The library does not integrate velocity, apply gravity, or solve contacts. There is no `RigidBody` type. A game that needs a falling body keeps the velocity itself and uses the queries above to accept or reject a step.
@@ -201,7 +217,7 @@ fn step_body(body: &mut Body, floor: &Aabb, dt: f32) {
 }
 ```
 
-Contact generation, mass, and impulses are later roadmap items. Until they exist, do not look for them in `macroquad::prelude`.
+`Contact` reports an overlap. It does not assign mass or apply an impulse, and there is no solver. Those stay later roadmap items.
 
 ## Character movement
 

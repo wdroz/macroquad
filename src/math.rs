@@ -2,9 +2,10 @@
 //!
 //! Consists of re-exported `glam` types with some additions, including 2D
 //! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Capsule`],
-//! [`Ray`], [`Plane`], and [`Triangle`]. [`slide_sphere`] moves a sphere along
-//! [`Aabb`] and [`Obb`] faces. The 3D types are unitless and do not assume an
-//! up axis. `docs/3d-guide.md` walks through them.
+//! [`Ray`], [`Plane`], and [`Triangle`]. [`Contact`] is the overlap of two of
+//! those shapes. [`slide_sphere`] moves a sphere along [`Aabb`] and [`Obb`]
+//! faces. The 3D types are unitless and do not assume an up axis.
+//! `docs/3d-guide.md` walks through them.
 //!
 //! ```
 //! use macroquad::math::{Aabb, Ray, vec3, Vec3};
@@ -19,6 +20,7 @@ pub use glam::*;
 mod aabb;
 mod capsule;
 mod circle;
+mod contact;
 mod obb;
 mod plane;
 mod ray;
@@ -30,6 +32,7 @@ mod triangle;
 pub use aabb::{Aabb, RayHit};
 pub use capsule::Capsule;
 pub use circle::Circle;
+pub use contact::Contact;
 pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};
