@@ -183,6 +183,80 @@ operation releases renderer-owned allocations; it does not promise a reduction
 in total process memory or immediate reclamation by the graphics driver. Take
 resource-diagnostic snapshots at this same boundary to compare load/drop cycles.
 
+## Pollable glTF construction
+
+With `gltf`, `GltfModelLoader::new(bytes, settings)` creates an optional loading
+handle. Its `poll()` method advances one unit, and `progress()` reports
+`GltfLoadProgress { stage, completed, total }`. The counts belong to the current
+stage, so do not treat them as an overall percentage. Parsing, source-image
+preflight, texture loading and mesh conversion are separate stages. Each
+texture upload and each node/primitive conversion gets its own poll; stage
+boundaries also return to the caller. Read file bytes with `load_file` first;
+the handle borrows those bytes until dropped and performs no file I/O.
+
+After `take_model()` returns the completed `GltfModel`, pass it to
+`RetainedGltfModelLoader::new(model, false)` for incremental retained conversion.
+It validates every chunk before uploading any buffers, then uploads at most
+one chunk per poll. The existing parsed and baked geometry and GPU textures are
+reused. `false` releases CPU geometry after conversion; `true` keeps it through
+the result's `cpu_model()`. This does not provide a shared parse with the
+separate `GltfScene` constructor.
+
+```rust,no_run
+use macroquad::prelude::*;
+# async fn load_scene(bytes: &[u8]) -> Result<RetainedGltfModel, String> {
+let settings = GltfLoadOptions::default().with_image_limits(GltfImageLimits {
+    max_source_pixels: Some(2048 * 2048),
+    max_decoded_bytes: Some(16 * 1024 * 1024),
+});
+let mut source = GltfModelLoader::new(bytes, settings)?;
+let cpu = loop {
+    if is_key_pressed(KeyCode::Escape) {
+        source.cancel();
+        return Err("Loading cancelled".into());
+    }
+    let progress = source.poll()?;
+    clear_background(BLACK);
+    draw_text(format!("{:?}: {} / {}", progress.stage, progress.completed, progress.total), 20., 30., 22., WHITE);
+    if let Some(model) = source.take_model() { break model; }
+    next_frame().await;
+};
+drop(source); // Releases the source-byte borrow and remaining parse metadata.
+let mut upload = RetainedGltfModelLoader::new(cpu, false);
+loop {
+    if is_key_pressed(KeyCode::Escape) {
+        upload.cancel();
+        return Err("Loading cancelled".into());
+    }
+    let progress = upload.poll()?;
+    clear_background(BLACK);
+    draw_text(format!("{:?}: {} / {}", progress.stage, progress.completed, progress.total), 20., 30., 22., WHITE);
+    if let Some(model) = upload.take_model() { return Ok(model); }
+    next_frame().await;
+}
+# }
+```
+
+Poll both handles on the application's render thread. This is cooperative
+loading: the application must call `next_frame().await` to advance its loading
+screen. Parsing, one primitive conversion, or one synchronous image decode
+can still stall a frame; there is no strict time budget and no worker decoding.
+Image limits reject oversized source dimensions before decoding but do not
+bound decoder scratch memory. A large primitive can produce several chunks
+during its single conversion unit.
+
+`cancel()` drops partial work and an untaken completed result. Dropping a handle
+has the same ownership cleanup; errors release partial work while leaving the
+handle in `Failed`. Managed textures and buffers are collected by the usual
+frame/renderer boundary, or by `retire_unused_render_resources()` at a suitable
+transition. Already taken results remain owned by the caller. Completion is
+stable across further polls, `take_model()` succeeds only once, and a cancelled
+or failed handle cannot resume. Create a new handle to retry.
+
+The synchronous `GltfModel::from_bytes*` and `RetainedGltfModel::from_model`
+constructors remain available. See `examples/gltf_pollable.rs` for loading,
+single-unit stepping, pause, cancellation and restart with a moving screen.
+
 ## Loading and materials
 
 The optional `gltf` feature provides two loading paths. `GltfScene::from_bytes`

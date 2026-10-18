@@ -180,7 +180,7 @@ pub struct RetainedGltfModel {
     pub bounds_max: Vec3,
     /// Names of the original root nodes.
     pub root_names: Vec<String>,
-    cpu_model: Option<Arc<GltfModel>>,
+    pub(super) cpu_model: Option<Arc<GltfModel>>,
 }
 
 impl RetainedGltfModel {

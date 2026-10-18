@@ -70,8 +70,10 @@ use crate::{
 mod retained;
 pub use retained::*;
 mod diagnostics;
+mod loading;
 pub use crate::gltf::GltfImageLimits;
 pub use diagnostics::*;
+pub use loading::*;
 
 /// CPU-side material values, retained for a custom shader.
 ///
@@ -506,191 +508,9 @@ impl GltfModel {
         bytes: &[u8],
         settings: GltfLoadSettings,
     ) -> Result<Self, String> {
-        let options = settings.options;
-        let limits = options.mesh_limits;
-        validate_limits(limits)?;
-        if options.max_texture_size == Some(0) {
-            return Err("max_texture_size must be greater than zero".into());
-        }
-        let (mut scene, document, binary) = prepare_glb(bytes)?;
-        // The CPU loader visits nodes in preorder and meshes in first-use order.
-        // Recreate that same source-mesh mapping, rather than assuming indices
-        // happen to match the file (unused meshes and instances are legal).
-        let source_meshes = crate::gltf::used_meshes(&document);
-        preflight_images(&source_meshes, binary.as_ref(), settings.image_limits)?;
-        let mut textures: HashMap<usize, Texture2D> = HashMap::new();
-        let mut parts = Vec::new();
-        let mut bounds_min = Vec3::splat(f32::INFINITY);
-        let mut bounds_max = Vec3::splat(f32::NEG_INFINITY);
-        let mut root_names = Vec::new();
-        let mut paths: Vec<String> = Vec::with_capacity(scene.nodes.len());
-        let mut mesh_uses = vec![0usize; scene.meshes.len()];
-        for node in &scene.nodes {
-            if let Some(mesh) = node.mesh {
-                mesh_uses[mesh] += 1;
-            }
-        }
-        for (node_index, node) in scene.nodes.iter().enumerate() {
-            let mesh_name = node
-                .mesh
-                .and_then(|index| scene.meshes[index].name.as_deref());
-            let name = node
-                .name
-                .as_deref()
-                .or(mesh_name)
-                .unwrap_or("unnamed")
-                .to_string();
-            let path = if let Some(parent) = node.parent {
-                format!("{}/{}", paths[parent], name)
-            } else {
-                name.clone()
-            };
-            paths.push(path.clone());
-            if node.parent.is_none() {
-                root_names.push(name.clone());
-            }
-            let Some(mesh_index) = node.mesh else {
-                continue;
-            };
-            let source_mesh = &source_meshes[mesh_index];
-            for (primitive, source) in scene.meshes[mesh_index]
-                .primitives
-                .iter()
-                .zip(source_mesh.primitives())
-            {
-                let material = source.material();
-                let pbr = material.pbr_metallic_roughness();
-                let texture = pbr
-                    .base_color_texture()
-                    .map(|info| {
-                        load_texture(
-                            info.texture(),
-                            binary.as_ref(),
-                            &mut textures,
-                            options.max_texture_size,
-                        )
-                        .map_err(|error| {
-                            format!(
-                                "{}: {error}",
-                                crate::gltf::image_context(
-                                    &info.texture().source(),
-                                    &material,
-                                    "base-color"
-                                )
-                            )
-                        })
-                    })
-                    .transpose()?;
-                let emissive_texture = material
-                    .emissive_texture()
-                    .map(|info| {
-                        load_texture(
-                            info.texture(),
-                            binary.as_ref(),
-                            &mut textures,
-                            options.max_texture_size,
-                        )
-                        .map_err(|error| {
-                            format!(
-                                "{}: {error}",
-                                crate::gltf::image_context(
-                                    &info.texture().source(),
-                                    &material,
-                                    "emissive"
-                                )
-                            )
-                        })
-                    })
-                    .transpose()?;
-                let strength = material
-                    .extension_value("KHR_materials_emissive_strength")
-                    .and_then(|v| v.get("emissiveStrength"))
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(1.0) as f32;
-                let mut emissive = material.emissive_factor();
-                for channel in &mut emissive {
-                    *channel *= strength;
-                }
-                let surface = GltfSurface {
-                    name: material.name().map(str::to_string),
-                    base_color: pbr.base_color_factor(),
-                    emissive,
-                    metallic: pbr.metallic_factor(),
-                    roughness: pbr.roughness_factor(),
-                    transmission: material
-                        .extension_value("KHR_materials_transmission")
-                        .and_then(|v| v.get("transmissionFactor"))
-                        .and_then(|v| v.as_f64())
-                        .unwrap_or(0.0) as f32,
-                    alpha_mode: match material.alpha_mode() {
-                        gltf::material::AlphaMode::Opaque => GltfAlphaMode::Opaque,
-                        gltf::material::AlphaMode::Mask => GltfAlphaMode::Mask,
-                        gltf::material::AlphaMode::Blend => GltfAlphaMode::Blend,
-                    },
-                    alpha_cutoff: material.alpha_cutoff().unwrap_or(0.5),
-                    double_sided: material.double_sided(),
-                    unlit: material.extension_value("KHR_materials_unlit").is_some(),
-                };
-                let mut vertices = world_vertices(primitive, node.world);
-                if let Some(info) = pbr.base_color_texture() {
-                    apply_material_uvs(&mut vertices, &source, binary.as_ref(), &info)?;
-                }
-                if let Some(info) = material.emissive_texture() {
-                    let mut emissive_vertices = vertices.clone();
-                    apply_material_uvs(&mut emissive_vertices, &source, binary.as_ref(), &info)?;
-                    if pbr.base_color_texture().is_some() {
-                        validate_shared_uvs(&vertices, &emissive_vertices)?;
-                    } else {
-                        vertices = emissive_vertices;
-                    }
-                }
-                let indices = winding_indices(&primitive.indices, node.world);
-                for (vertices, indices) in split_triangles(&vertices, &indices, limits)? {
-                    let mut min = Vec3::splat(f32::INFINITY);
-                    let mut max = Vec3::splat(f32::NEG_INFINITY);
-                    for vertex in &vertices {
-                        min = min.min(vertex.position);
-                        max = max.max(vertex.position);
-                    }
-                    bounds_min = bounds_min.min(min);
-                    bounds_max = bounds_max.max(max);
-                    parts.push(GltfDrawMesh {
-                        mesh: Mesh {
-                            vertices,
-                            indices,
-                            texture: texture.clone(),
-                        },
-                        emissive_texture: emissive_texture.clone(),
-                        surface: surface.clone(),
-                        node: node_index,
-                        name: name.clone(),
-                        path: path.clone(),
-                        center: (min + max) * 0.5,
-                        bounds_min: min,
-                        bounds_max: max,
-                    });
-                }
-            }
-            release_mesh_after_instance(&mut scene.meshes[mesh_index], &mut mesh_uses[mesh_index]);
-        }
-        if parts.is_empty() {
-            bounds_min = Vec3::ZERO;
-            bounds_max = Vec3::ZERO;
-        }
-        let stats = GltfModelStats {
-            nodes: scene.nodes.len(),
-            meshes: scene.meshes.len(),
-            draw_calls: parts.len(),
-            triangles: parts.iter().map(|p| p.mesh.indices.len() / 3).sum(),
-            textures: textures.len(),
-        };
-        Ok(Self {
-            parts,
-            stats,
-            bounds_min,
-            bounds_max,
-            root_names,
-        })
+        let mut loader = GltfModelLoader::new(bytes, settings)?;
+        while loader.poll()?.stage != GltfLoadStage::Complete {}
+        Ok(loader.take_model().unwrap())
     }
 
     /// Rotates baked vertices so glTF +Y points along `up`.
@@ -856,38 +676,6 @@ fn rotated_bounds(rotation: Quat, min: Vec3, max: Vec3) -> (Vec3, Vec3) {
         }
     }
     (new_min, new_max)
-}
-
-fn preflight_images(
-    meshes: &[gltf::Mesh<'_>],
-    binary: &[u8],
-    limits: GltfImageLimits,
-) -> Result<(), String> {
-    // Preserve the legacy decoding path when no source limit was requested.
-    if limits == GltfImageLimits::default() {
-        return Ok(());
-    }
-    let mut checked = std::collections::HashSet::new();
-    for mesh in meshes {
-        for primitive in mesh.primitives() {
-            let material = primitive.material();
-            let base_color = material.pbr_metallic_roughness().base_color_texture();
-            let emissive = material.emissive_texture();
-            for (slot, info) in [("base-color", base_color), ("emissive", emissive)] {
-                if let Some(info) = info {
-                    let image = info.texture().source();
-                    if checked.insert(image.index()) {
-                        let context = crate::gltf::image_context(&image, &material, slot);
-                        let data = embedded_image_bytes(&image, binary)
-                            .map_err(|error| format!("{context}: {error}"))?;
-                        crate::gltf::image_limits::check_image(data, limits)
-                            .map_err(|error| format!("{context}: {error}"))?;
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
 }
 
 fn embedded_image_bytes<'a>(image: &gltf::Image<'_>, binary: &'a [u8]) -> Result<&'a [u8], String> {
@@ -1214,8 +1002,8 @@ fn validate_limits(limits: GltfMeshLimits) -> Result<(), String> {
 }
 
 // The model owns its converted chunks. Release source arrays as soon as the
-// last node instance has copied them, allowing later image decodes to reuse
-// that memory instead of retaining both full representations until return.
+// last node instance has copied them, allowing later primitive conversions to
+// reuse that memory instead of retaining both full representations until return.
 fn release_mesh_after_instance(mesh: &mut GltfMesh, remaining: &mut usize) {
     *remaining -= 1;
     if *remaining == 0 {

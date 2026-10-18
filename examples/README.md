@@ -10,7 +10,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Continuous box/sphere hits, oriented cover, slide against all four solid shapes |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
-| Imported levels | `gltf_textured`, `gltf_retained` | Immediate GLB draw, shared retained geometry and transformed culling |
+| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable` | Immediate GLB draw, shared retained geometry, transformed culling and staged loading |
 | Renderer behavior | `retained_mesh`, `material_depth_check` | Immutable buffers and draw order, independent depth writes/testing, queued samplers |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 
@@ -34,6 +34,7 @@ cargo run --features gltf --example gltf_textured
 cargo run --example material_depth_check
 cargo run --example retained_mesh
 cargo run --features gltf --example gltf_retained
+cargo run --features gltf --example gltf_pollable
 cargo run --features video --example video_texture -- path/to/clip.mp4
 ```
 
@@ -136,6 +137,25 @@ cull, so it also draws the reflected instance. See the retained geometry section
 This example also builds without `gltf`, in which case it prints a feature
 reminder and exits. Escape quits the feature-enabled sample.
 
+## `gltf_pollable`
+
+Requires `--features gltf`. With no argument it loads the small checkerboard;
+an optional GLB path is read with `load_file` first. It starts paused so the
+individual stages are easy to inspect. Space toggles continuous construction,
+N advances one unit, C cancels, R restarts, and Escape exits. A moving indicator
+continues while loading is paused. The example calls `GltfModelLoader::poll`
+once per frame, then gives the completed model to `RetainedGltfModelLoader` for
+one retained chunk upload per poll. The parsed geometry and textures are reused.
+
+The display shows counts for the current stage, not an overall percentage.
+Parsing, converting one primitive, and decoding one image remain synchronous;
+an individual unit can stall a frame. Source-image limits apply before decode,
+and an independent upload cap reduces accepted images. Cancellation, errors
+and dropped handles release partial ownership; ordinary frames collect unused
+resources, and restart also uses the explicit retirement boundary. This is
+render-thread loading, with no worker decoding or strict frame-time guarantee.
+The example builds without `gltf` and prints a feature reminder.
+
 ## `material_depth_check`
 
 An OpenGL/WebGL shader regression that exits after checking rendered pixels.
@@ -166,7 +186,7 @@ hosting the sample.
 | Path | Role |
 | --- | --- |
 | `assets/triangle.gltf`, `assets/triangle.glb` | Hierarchy, box collider, spawn, and a 1×1 base-color image used by the loader tests. Regenerate with `assets/gen_triangle_gltf.py`. |
-| `assets/textured_quad.glb` | Checkerboard drawn by `gltf_textured` and `gltf_retained`. Regenerate with `assets/gen_textured_quad.py`. |
+| `assets/textured_quad.glb` | Checkerboard drawn by `gltf_textured`, `gltf_retained` and `gltf_pollable`. Regenerate with `assets/gen_textured_quad.py`. |
 
 Both generators use Python and do not require Blender. Historical game-round
 prototypes, including Marble Maze and Cinder Court, and their level assets are
