@@ -3,11 +3,13 @@
 //! [`Aabb`] and [`Sphere`] overlap tests are inclusive, so a shape sitting on
 //! a floor already counts as touching. A sweep along a delta that does not
 //! move further into that floor is not an impact. Callers keep the real size
-//! and radius; this query does not ask for a smaller one.
+//! and radius; this query does not ask for a smaller one. A sphere can also
+//! sweep an [`Obb`]: the center and the delta are rotated into that box and
+//! tested with the axis-aligned query.
 
 use glam::{vec3, Vec3};
 
-use super::{Aabb, Contact, Sphere};
+use super::{Aabb, Contact, Obb, Sphere};
 
 /// Overlap deeper than this is "clearly inside". A shallower overlap, including
 /// a pure touch, still lets a sideways delta pass.
@@ -20,7 +22,8 @@ const INTO_SLOP: f32 = 1e-5;
 /// `t` is the fraction of `delta` at which the shapes meet, in `0..=1`.
 /// `normal` is a unit vector pointing out of the static box, toward the moving
 /// shape. `point` lies on the static box: the center of the touching region for
-/// two boxes, and the closest point on the box for a sphere.
+/// two boxes, and the closest point on the box for a sphere. The static box is
+/// an [`Aabb`], or an [`Obb`] for [`Sphere::sweep_obb`].
 ///
 /// A pair that is already overlapping by more than `1e-4` reports `t == 0`.
 /// A pair that only touches, or overlaps by less than that, reports `t == 0`
@@ -132,6 +135,51 @@ impl Sphere {
             return None;
         }
         sweep_separated_sphere(self, delta, aabb)
+    }
+
+    /// Sweeps this sphere along `delta` against the static `obb`.
+    ///
+    /// `t` is in `0..=1`. The normal points out of `obb`. A path that misses
+    /// returns [`None`], including a sphere that only touches the box and moves
+    /// along or away from it. A sphere that starts clearly inside the box
+    /// returns `t == 0`. The sphere is rotated into the box and tested with
+    /// [`Sphere::sweep_aabb`], so faces, edges, and corners follow that query.
+    ///
+    /// An empty box (a negative half extent) misses. A zero or non-finite
+    /// rotation misses. A negative or non-finite radius is empty, and so is a
+    /// non-finite center or `delta`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Sphere, Vec3, vec3};
+    ///
+    /// let cover = Obb::new(Vec3::ZERO, vec3(1.0, 1.0, 0.5), Quat::IDENTITY);
+    /// let shot = Sphere::new(vec3(0.0, 0.0, -2.0), 0.5);
+    /// let hit = shot.sweep_obb(vec3(0.0, 0.0, 4.0), &cover).unwrap();
+    /// assert_eq!(hit.t, 0.25);
+    /// assert_eq!(hit.normal, -Vec3::Z);
+    /// ```
+    pub fn sweep_obb(&self, delta: Vec3, obb: &Obb) -> Option<SweepHit> {
+        if !delta.is_finite() {
+            return None;
+        }
+        let (local, aabb, rotation) = obb.in_local_space(self)?;
+        let local_delta = rotation.inverse() * delta;
+        if !local_delta.is_finite() {
+            return None;
+        }
+        let hit = local.sweep_aabb(local_delta, &aabb)?;
+        let normal = rotation * hit.normal;
+        let point = rotation * hit.point + obb.center;
+        if !normal.is_finite() || !point.is_finite() {
+            return None;
+        }
+        Some(SweepHit {
+            t: hit.t,
+            normal,
+            point,
+        })
     }
 }
 
@@ -540,6 +588,7 @@ fn box_edges(aabb: &Aabb) -> [[Vec3; 2]; 12] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Quat;
 
     fn assert_vec3_close(left: Vec3, right: Vec3) {
         let delta = left - right;
@@ -839,5 +888,161 @@ mod tests {
             "center landed {dist} from the corner, t {}",
             hit.t
         );
+    }
+
+    fn yawed_cover(center: Vec3) -> (Obb, Quat) {
+        let yaw = Quat::from_rotation_y(0.4);
+        (Obb::new(center, vec3(1.0, 0.5, 0.225), yaw), yaw)
+    }
+
+    /// Radius 0.12 through a cover whose thin half-extent is 0.225.
+    fn center_shot(center: Vec3) -> SweepHit {
+        let (cover, yaw) = yawed_cover(center);
+        let radius = 0.12;
+        let start = yaw * vec3(0.0, 0.0, -1.0) + center;
+        let delta = yaw * vec3(0.0, 0.0, 2.0);
+        let ball = Sphere::new(start, radius);
+        assert!(!cover.overlaps_sphere(&ball));
+        assert!(!cover.overlaps_sphere(&ball.offset(delta)));
+        assert!(cover.ray_intersect(start, delta).is_some());
+        let hit = ball.sweep_obb(delta, &cover).expect("center shot");
+        let at = ball.offset(delta * hit.t);
+        let gap = (at.center - cover.closest_point(at.center)).length() - radius;
+        assert!(gap.abs() < 1e-3, "gap {gap}");
+        assert!((hit.normal - yaw * -Vec3::Z).length() < 1e-3);
+        hit
+    }
+
+    #[test]
+    fn sweep_obb_matches_an_axis_aligned_box() {
+        let wall = Aabb::from_min_max(vec3(0.0, -1.0, -1.0), vec3(1.0, 1.0, 1.0));
+        let obb = Obb::new(wall.center(), wall.half_extents(), Quat::IDENTITY);
+        let ball = Sphere::new(vec3(-2.0, 0.0, 0.0), 0.5);
+        let delta = vec3(4.0, 0.0, 0.0);
+        assert_eq!(ball.sweep_aabb(delta, &wall), ball.sweep_obb(delta, &obb));
+
+        let corner = Sphere::new(vec3(-1.0, -1.0, -1.0), 0.5);
+        let solid = Aabb::from_min_max(Vec3::ZERO, Vec3::ONE);
+        let cube = Obb::new(solid.center(), solid.half_extents(), Quat::IDENTITY);
+        let diagonal = vec3(2.0, 2.0, 2.0);
+        assert_eq!(
+            corner.sweep_aabb(diagonal, &solid),
+            corner.sweep_obb(diagonal, &cube)
+        );
+    }
+
+    #[test]
+    fn a_center_shot_through_a_thin_yawed_cover_hits() {
+        let near = center_shot(Vec3::ZERO);
+        assert!((near.t - 0.3275).abs() < 1e-3, "t {}", near.t);
+        // Adding the shot to a translation of this size drops low bits of f32.
+        // The local-frame query still lands within a millimeter of the near hit.
+        let far = center_shot(vec3(20_000.0, -15_000.0, 8_000.0));
+        assert!(
+            (far.t - near.t).abs() < 1e-3,
+            "near {} far {}",
+            near.t,
+            far.t
+        );
+        assert!((far.normal - near.normal).length() < 1e-3);
+    }
+
+    #[test]
+    fn a_graze_past_the_thin_face_still_sweeps() {
+        let (cover, yaw) = yawed_cover(vec3(3.0, 1.0, -2.0));
+        let radius = 0.12;
+        let half_tangent = cover.half_extents.x;
+        // The ray of the center misses. The sphere still meets the edge.
+        let shift = half_tangent + 0.45 * radius;
+        let start = yaw * vec3(shift, 0.0, -1.0) + cover.center;
+        let delta = yaw * vec3(0.0, 0.0, 2.0);
+        let ball = Sphere::new(start, radius);
+        assert!(cover.ray_intersect(start, delta).is_none());
+        assert!(!cover.overlaps_sphere(&ball));
+        assert!(!cover.overlaps_sphere(&ball.offset(delta)));
+        assert!(cover.overlaps_sphere(&ball.offset(delta * 0.5)));
+
+        let hit = ball.sweep_obb(delta, &cover).expect("graze");
+        assert!(hit.t > 0.0 && hit.t < 1.0, "t {}", hit.t);
+        assert!(delta.dot(hit.normal) < -INTO_SLOP);
+        let at = ball.offset(delta * hit.t);
+        let gap = (at.center - cover.closest_point(at.center)).length() - radius;
+        assert!(gap.abs() < 1e-3, "gap {gap}");
+        let before = ball.offset(delta * (hit.t - 1e-3));
+        assert!(!cover.overlaps_sphere(&before));
+
+        let miss = half_tangent + radius + 0.05;
+        let beside = Sphere::new(yaw * vec3(miss, 0.0, -1.0) + cover.center, radius);
+        assert!(beside.sweep_obb(delta, &cover).is_none());
+    }
+
+    #[test]
+    fn a_resting_touch_on_a_yawed_box_slides_sideways() {
+        let (cover, yaw) = yawed_cover(vec3(-2.0, 0.5, 1.5));
+        let radius = 0.4;
+        let sunk = Sphere::new(
+            yaw * vec3(0.1, 0.5 + radius - 0.05, 0.0) + cover.center,
+            radius,
+        );
+        let contact = sunk.contact_obb(&cover).unwrap();
+        // Stay a hair inside the touch slop. Pushing out by the full penetration
+        // can land one ulp outside the inclusive surface once the normal is rotated.
+        let resting = Sphere::new(
+            sunk.center + contact.normal * (contact.penetration - 1e-5),
+            radius,
+        );
+        let touch = resting.contact_obb(&cover).unwrap();
+        assert!(
+            touch.penetration < 1e-3,
+            "penetration {}",
+            touch.penetration
+        );
+
+        let mut tangent = contact.normal.cross(yaw * Vec3::Z);
+        if tangent.length_squared() < 1e-6 {
+            tangent = contact.normal.cross(Vec3::X);
+        }
+        assert!(resting.sweep_obb(tangent.normalize(), &cover).is_none());
+        assert!(resting.sweep_obb(Vec3::ZERO, &cover).is_none());
+
+        let into = resting
+            .sweep_obb(contact.normal * -0.5, &cover)
+            .expect("into the face");
+        assert_eq!(into.t, 0.0);
+        assert!((into.normal - contact.normal).length() < 1e-3);
+    }
+
+    #[test]
+    fn a_sphere_that_starts_inside_an_obb_reports_t_zero() {
+        let (cover, yaw) = yawed_cover(vec3(1.0, -2.0, 0.5));
+        let inside = Sphere::new(cover.center + yaw * vec3(0.05, 0.0, 0.0), 0.12);
+        let delta = yaw * vec3(1.0, 0.2, -0.4);
+        let hit = inside.sweep_obb(delta, &cover).unwrap();
+        assert_eq!(hit.t, 0.0);
+        let contact = inside.contact_obb(&cover).unwrap();
+        assert!((hit.normal - contact.normal).length() < 1e-4);
+        assert_vec3_close(hit.point, contact.point);
+
+        let buried = Sphere::new(cover.center, 0.2);
+        assert_eq!(buried.sweep_obb(yaw * Vec3::X, &cover).unwrap().t, 0.0);
+    }
+
+    #[test]
+    fn sweep_obb_rejects_an_empty_box_and_a_bad_sphere() {
+        let (cover, _) = yawed_cover(Vec3::ZERO);
+        let empty = Obb::new(Vec3::ZERO, vec3(1.0, -0.2, 0.2), Quat::IDENTITY);
+        assert!(Sphere::new(Vec3::ZERO, 0.2)
+            .sweep_obb(Vec3::X, &empty)
+            .is_none());
+        let zero_quat = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::from_xyzw(0.0, 0.0, 0.0, 0.0));
+        assert!(Sphere::new(Vec3::ZERO, 0.2)
+            .sweep_obb(Vec3::X, &zero_quat)
+            .is_none());
+        assert!(Sphere::new(Vec3::ZERO, -0.2)
+            .sweep_obb(Vec3::X, &cover)
+            .is_none());
+        assert!(Sphere::new(Vec3::ZERO, 0.2)
+            .sweep_obb(vec3(f32::NAN, 0.0, 0.0), &cover)
+            .is_none());
     }
 }

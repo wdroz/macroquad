@@ -302,6 +302,27 @@ impl Obb {
         }
         Some(rotation.inverse() * (point - self.center))
     }
+
+    /// `sphere` in this box's local frame, the local box, and the unit rotation
+    /// back to world space.
+    ///
+    /// [`None`] when the box is empty or the rotation or the sphere center
+    /// cannot be used. The radius is copied unchanged.
+    pub(crate) fn in_local_space(&self, sphere: &Sphere) -> Option<(Sphere, Aabb, Quat)> {
+        let rotation = self.pose()?;
+        if !sphere.center.is_finite() {
+            return None;
+        }
+        let local_center = rotation.inverse() * (sphere.center - self.center);
+        if !local_center.is_finite() {
+            return None;
+        }
+        Some((
+            Sphere::new(local_center, sphere.radius),
+            Aabb::from_min_max(-self.half_extents, self.half_extents),
+            rotation,
+        ))
+    }
 }
 
 fn world_axes(rotation: Quat) -> [Vec3; 3] {

@@ -23,8 +23,9 @@
 //! [`math`] contains [`math::Aabb`], [`math::Sphere`], [`math::Capsule`],
 //! [`math::Ray`], [`math::Plane`], [`math::Triangle`], [`math::Obb`], and
 //! [`math::Frustum`].
-//! [`math::Contact`] describes an overlap, [`math::SweepHit`] is a moving box
-//! or sphere against a static box, and [`math::slide_sphere`] keeps the motion
+//! [`math::Contact`] describes an overlap. [`math::SweepHit`] is a moving box
+//! against a static box, or a moving sphere against a static box or an
+//! oriented box. [`math::slide_sphere`] keeps the motion
 //! along a face. Wireframes are [`models::draw_aabb`], [`models::draw_obb`],
 //! [`models::draw_capsule_wires`], [`models::draw_triangle_wires`],
 //! [`models::draw_ray`], and [`models::draw_plane_wires`]. The queries and

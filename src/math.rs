@@ -3,8 +3,9 @@
 //! Consists of re-exported `glam` types with some additions, including 2D
 //! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Capsule`],
 //! [`Ray`], [`Plane`], [`Triangle`], and [`Frustum`]. [`Contact`] is the overlap of two of
-//! those shapes. [`SweepHit`] is the time of impact of a moving [`Aabb`] or
-//! [`Sphere`] against a static [`Aabb`]. [`slide_sphere`] moves a sphere along
+//! those shapes. [`SweepHit`] is the time of impact of a moving [`Aabb`]
+//! against a static [`Aabb`], or a moving [`Sphere`] against a static [`Aabb`]
+//! or [`Obb`]. [`slide_sphere`] moves a sphere along
 //! [`Aabb`] and [`Obb`] faces. The 3D types are unitless and do not assume an
 //! up axis.
 //! `docs/3d-guide.md` walks through them.

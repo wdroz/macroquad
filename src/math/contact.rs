@@ -7,7 +7,7 @@
 
 use glam::{vec3, Vec3};
 
-use super::{Aabb, Capsule, Sphere};
+use super::{Aabb, Capsule, Obb, Sphere};
 
 /// One overlapping pair of 3D shapes.
 ///
@@ -155,6 +155,43 @@ impl Sphere {
     /// ```
     pub fn contact_aabb(&self, aabb: &Aabb) -> Option<Contact> {
         sphere_aabb_contact(self, aabb)
+    }
+
+    /// Contact between this sphere and `obb`, or [`None`] when they are separated.
+    ///
+    /// The normal points from the box toward the sphere. `point` is on the
+    /// box, where [`Sphere::contact_aabb`] would put it after the sphere is
+    /// rotated into the box's local frame. A sphere sitting on a face has
+    /// penetration `0`.
+    ///
+    /// An empty box (a negative half extent) has no contact. A zero or
+    /// non-finite rotation has no contact. A negative or non-finite radius is
+    /// empty.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Obb, Quat, Sphere, Vec3, vec3};
+    ///
+    /// let cover = Obb::new(Vec3::ZERO, vec3(1.0, 0.5, 0.25), Quat::IDENTITY);
+    /// let shot = Sphere::new(vec3(0.0, 0.0, 0.5), 0.25);
+    /// let contact = shot.contact_obb(&cover).unwrap();
+    /// assert_eq!(contact.penetration, 0.0);
+    /// assert_eq!(contact.normal, Vec3::Z);
+    /// ```
+    pub fn contact_obb(&self, obb: &Obb) -> Option<Contact> {
+        let (local, aabb, rotation) = obb.in_local_space(self)?;
+        let contact = local.contact_aabb(&aabb)?;
+        let normal = rotation * contact.normal;
+        let point = rotation * contact.point + obb.center;
+        if !normal.is_finite() || !point.is_finite() {
+            return None;
+        }
+        Some(Contact {
+            normal,
+            penetration: contact.penetration,
+            point,
+        })
     }
 }
 
@@ -623,6 +660,7 @@ fn set_component(point: &mut Vec3, axis: usize, value: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::Quat;
 
     fn assert_vec3_close(left: Vec3, right: Vec3) {
         let delta = left - right;
@@ -798,5 +836,56 @@ mod tests {
 
         let centered = Sphere::new(Vec3::ZERO, 0.25).contact_aabb(&shell).unwrap();
         assert_eq!(centered.normal, Vec3::X);
+    }
+
+    #[test]
+    fn contact_obb_matches_an_axis_aligned_box() {
+        let aabb = Aabb::from_min_max(vec3(-1.0, -0.4, -0.25), vec3(1.0, 0.4, 0.25));
+        let obb = Obb::new(aabb.center(), aabb.half_extents(), Quat::IDENTITY);
+        let sitting = Sphere::new(vec3(0.0, 0.9, 0.0), 0.5);
+        assert_eq!(sitting.contact_aabb(&aabb), sitting.contact_obb(&obb));
+        let sunk = Sphere::new(vec3(0.2, 0.0, 0.0), 0.5);
+        assert_eq!(sunk.contact_aabb(&aabb), sunk.contact_obb(&obb));
+        let clear = Sphere::new(vec3(0.0, 1.2, 0.0), 0.3);
+        assert!(clear.contact_obb(&obb).is_none());
+        assert_eq!(clear.contact_aabb(&aabb), clear.contact_obb(&obb));
+    }
+
+    #[test]
+    fn a_yawed_face_points_its_normal_out_of_the_box() {
+        let yaw = Quat::from_rotation_y(0.6);
+        let cover = Obb::new(vec3(2.0, -1.0, 4.0), vec3(1.0, 0.4, 0.225), yaw);
+        let radius = 0.3;
+        // 0.1 past the local +Y face. Penetration is radius minus that gap.
+        let ball = Sphere::new(yaw * vec3(0.0, 0.5, 0.0) + cover.center, radius);
+        let contact = ball.contact_obb(&cover).unwrap();
+        assert!((contact.penetration - 0.2).abs() < 1e-3);
+        assert!((contact.normal - yaw * Vec3::Y).length() < 1e-3);
+        let lifted = Sphere::new(ball.center + contact.normal * contact.penetration, radius);
+        let gap = (lifted.center - cover.closest_point(lifted.center)).length() - radius;
+        assert!(gap.abs() < 1e-3, "gap {gap}");
+        if let Some(resting) = lifted.contact_obb(&cover) {
+            assert!(resting.penetration < 1e-3);
+        }
+
+        let scaled = Obb::new(cover.center, cover.half_extents, yaw * 3.0);
+        let again = ball.contact_obb(&scaled).unwrap();
+        assert!((again.penetration - contact.penetration).abs() < 1e-4);
+        assert!((again.normal - contact.normal).length() < 1e-4);
+    }
+
+    #[test]
+    fn contact_obb_rejects_an_empty_box_and_a_bad_sphere() {
+        let cover = Obb::new(Vec3::ZERO, vec3(1.0, 0.4, 0.225), Quat::IDENTITY);
+        let empty = Obb::new(Vec3::ZERO, vec3(-1.0, 1.0, 1.0), Quat::IDENTITY);
+        assert!(Sphere::new(Vec3::ZERO, 1.0).contact_obb(&empty).is_none());
+        let zero_quat = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::from_xyzw(0.0, 0.0, 0.0, 0.0));
+        assert!(Sphere::new(Vec3::ZERO, 1.0)
+            .contact_obb(&zero_quat)
+            .is_none());
+        assert!(Sphere::new(Vec3::ZERO, -1.0).contact_obb(&cover).is_none());
+        assert!(Sphere::new(vec3(f32::NAN, 0.0, 0.0), 0.2)
+            .contact_obb(&cover)
+            .is_none());
     }
 }
