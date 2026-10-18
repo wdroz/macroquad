@@ -1,4 +1,4 @@
-//! Gleaned from https://github.com/ratel-rust/toolshed/blob/master/src/arena.rs
+//! Gleaned from <https://github.com/ratel-rust/toolshed/blob/master/src/arena.rs>
 //! and than modified a lot.
 //!
 //! Module containing the `Arena` and `Uninitialized` structs. For convenience the

@@ -8,6 +8,48 @@
 //! `EXT_texture_webp` is resolved in memory; the input file is never changed.
 //! [`GltfModel::with_up_axis`] rotates the baked mesh with the same rule as
 //! [`crate::gltf::GltfScene::with_up_axis`].
+//!
+//! Load with [`GltfLoadOptions`] to cap uploaded texture dimensions. The cap
+//! applies after decoding, so it does not bound the temporary source image.
+//! Convert the finished model with [`RetainedGltfModel::from_model`] to upload
+//! geometry once. Retained clones share buffers and textures, and each draw
+//! accepts an additional scene transform without rewriting CPU vertices.
+//! This is repeated drawing with shared buffers, not hardware instancing.
+//!
+//! ```no_run
+//! use macroquad::prelude::*;
+//!
+//! #[macroquad::main("Retained glTF")]
+//! async fn main() {
+//!     let bytes = load_file("scene.glb").await.expect("scene bytes");
+//!     let cpu = GltfModel::from_bytes_with_options(&bytes, GltfLoadOptions {
+//!         max_texture_size: Some(512),
+//!         ..Default::default()
+//!     }).expect("embedded GLB");
+//!     drop(bytes);
+//!     let model = RetainedGltfModel::from_model(cpu, false).expect("upload");
+//!     let camera = Camera3D {
+//!         position: vec3(4.0, 3.0, 6.0),
+//!         target: Vec3::ZERO,
+//!         up: Vec3::Y,
+//!         ..Default::default()
+//!     };
+//!     loop {
+//!         clear_background(BLACK);
+//!         set_camera(&camera);
+//!         model.draw(Mat4::IDENTITY);
+//!         model.draw(Mat4::from_translation(vec3(3.0, 0.0, 0.0)));
+//!         next_frame().await;
+//!     }
+//! }
+//! ```
+//!
+//! Both drawing paths use the current material. Inspect each part's
+//! [`GltfSurface`] and [`GltfDrawMesh::emissive_texture`] when implementing
+//! lighting or transparent passes; neither path supplies those passes.
+//! [`GltfModelTransform`] supplies the inverse-transpose normal matrix and
+//! reflected-winding flag for a custom retained material. Instance transforms
+//! do not update a separately parsed [`GltfScene`]'s colliders or spawn points.
 
 use std::{borrow::Cow, collections::HashMap};
 
@@ -237,6 +279,10 @@ pub struct GltfLoadOptions {
 
 /// Counts from a [`GltfModel`] load.
 ///
+/// These describe the loaded model, not bytes or measured rendering work.
+/// In particular, `draw_calls` is the number of chunks before application
+/// culling, batching, or repeated instances.
+///
 /// # Example
 ///
 /// ```
@@ -273,6 +319,12 @@ pub struct GltfModelStats {
 /// for alpha and lighting values that draw ignores.
 /// [`GltfModel::with_up_axis`] rotates the baked vertices so they share an up
 /// axis with [`GltfScene::with_up_axis`](crate::gltf::GltfScene::with_up_axis).
+///
+/// Cloning this type copies its CPU vertex and index vectors; texture handles
+/// are shared. For repeated instances, apply any [`Self::with_up_axis`]
+/// conversion first, then consume the result with
+/// [`RetainedGltfModel::from_model`]. Retained clones share uploaded geometry,
+/// and their draw transform moves the baked scene without copying vertices.
 ///
 /// # Example
 ///
@@ -370,6 +422,8 @@ impl GltfModel {
     /// temporarily uses the original image resolution. Source files are never
     /// rewritten. [`Self::from_bytes`] and [`Self::from_bytes_with_limits`]
     /// retain their original full-resolution behavior.
+    /// Call this inside a running macroquad application, before uploading the
+    /// result with [`RetainedGltfModel::from_model`] when using retained drawing.
     ///
     /// ```no_run
     /// use macroquad::gltf_draw::{GltfLoadOptions, GltfModel};

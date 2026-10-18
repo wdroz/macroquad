@@ -21,8 +21,9 @@ const INTO_SLOP: f32 = 1e-5;
 ///
 /// `t` is the fraction of `delta` at which the shapes meet, in `0..=1`.
 /// `normal` is a unit vector pointing out of the static box, toward the moving
-/// shape. `point` lies on the static box: the center of the touching region for
-/// two boxes, and the closest point on the box for a sphere. The static box is
+/// shape. `point` is the center of the shared region for two boxes, and a
+/// surface point on the box for a sphere. An initial overlap uses the
+/// corresponding [`Contact::point`]. The static box is
 /// an [`Aabb`], or an [`Obb`] for [`Sphere::sweep_obb`].
 ///
 /// A pair that is already overlapping by more than `1e-4` reports `t == 0`.
@@ -48,7 +49,7 @@ pub struct SweepHit {
     pub t: f32,
     /// Unit normal pointing out of the static box.
     pub normal: Vec3,
-    /// A point on the static box at the impact.
+    /// Representative contact position at impact; see [`SweepHit`].
     pub point: Vec3,
 }
 
@@ -154,11 +155,15 @@ impl Sphere {
     /// ```
     /// use macroquad::math::{Obb, Quat, Sphere, Vec3, vec3};
     ///
-    /// let cover = Obb::new(Vec3::ZERO, vec3(1.0, 1.0, 0.5), Quat::IDENTITY);
-    /// let shot = Sphere::new(vec3(0.0, 0.0, -2.0), 0.5);
-    /// let hit = shot.sweep_obb(vec3(0.0, 0.0, 4.0), &cover).unwrap();
-    /// assert_eq!(hit.t, 0.25);
-    /// assert_eq!(hit.normal, -Vec3::Z);
+    /// let rotation = Quat::from_rotation_y(0.4);
+    /// let cover = Obb::new(Vec3::ZERO, vec3(1.0, 1.0, 0.5), rotation);
+    /// let shot = Sphere::new(rotation * vec3(0.0, 0.0, -2.0), 0.5);
+    /// let delta = rotation * vec3(0.0, 0.0, 4.0);
+    /// let hit = shot.sweep_obb(delta, &cover).unwrap();
+    /// assert!((hit.t - 0.25).abs() < 1e-4);
+    /// assert!((hit.normal - rotation * -Vec3::Z).length() < 1e-4);
+    /// let impact_center = shot.center + delta * hit.t;
+    /// assert!((impact_center - rotation * -Vec3::Z).length() < 1e-4);
     /// ```
     pub fn sweep_obb(&self, delta: Vec3, obb: &Obb) -> Option<SweepHit> {
         if !delta.is_finite() {

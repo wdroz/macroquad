@@ -43,6 +43,14 @@
 //! filter are not stored. [`crate::gltf_draw::GltfModel`] still uploads its
 //! own GPU textures.
 //!
+//! CPU images are decoded at their source resolution. The draw loader's
+//! [`crate::gltf_draw::GltfLoadOptions::max_texture_size`] does not limit this
+//! separate scene parse. If only drawing is needed, load a
+//! [`crate::gltf_draw::GltfModel`] directly; parse a [`GltfScene`] as well when
+//! the application needs its CPU geometry, images, node hierarchy, or markers.
+//! A [`crate::gltf_draw::RetainedGltfModel`] can share the uploaded geometry
+//! across draws, but its instance transform does not move this scene's markers.
+//!
 //! Colliders, triggers, and spawn points come from the nodes that were loaded.
 //! Node `extras` are preferred: `mq_shape` is `box`, `sphere`, or `capsule`,
 //! and `mq_role` is `collider`, `trigger`, or `spawn`. When `mq_role` is
@@ -269,6 +277,8 @@ pub struct GltfPrimitive {
 /// base-color image is sRGB, and this type does not convert them to linear.
 /// JPEG has no alpha, so those pixels use alpha 255. There is no
 /// [`crate::texture::Texture2D`] here.
+/// Images retain their source dimensions; the optional texture cap on
+/// [`crate::gltf_draw::GltfLoadOptions`] applies only to the separate draw loader.
 ///
 /// # Example
 ///

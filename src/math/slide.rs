@@ -107,6 +107,12 @@ pub fn slide_sphere(center: Vec3, radius: f32, delta: Vec3, aabbs: &[Aabb], obbs
 /// capsule with a negative or non-finite radius are ignored. There is no
 /// gravity and no rigid body here.
 ///
+/// Pass only solid colliders in these slices. Test triggers separately with
+/// overlap queries; including one here makes it block movement. This function
+/// returns no velocity or grounded flag, and does not implement stepping or
+/// slope limits. Resolution uses a bounded number of passes, so a crowded or
+/// mutually penetrating set of solids may leave an initial overlap unresolved.
+///
 /// # Example
 ///
 /// ```

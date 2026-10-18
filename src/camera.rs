@@ -1,7 +1,7 @@
 //! 2D and 3D camera.
 //!
 //! [`Camera3D::screen_to_ray`] unprojects a screen point into a world
-//! [`Ray`](crate::math::Ray). [`Camera3D::frustum`] extracts the six inward
+//! [`Ray`]. [`Camera3D::frustum`] extracts the six inward
 //! planes of that same view-projection.
 
 use crate::{
@@ -309,6 +309,10 @@ impl Camera3D {
     /// distance from `origin`. [`Projection::Orthographics`] uses `fovy` as the
     /// full vertical size, the same value `matrix` uses.
     ///
+    /// The result is an unbounded ray, not a near-to-far segment. Shape queries
+    /// can report hits beyond the far plane (and, for perspective, before the
+    /// near plane). Use [`Self::frustum`] separately when visibility matters.
+    ///
     /// A synthetic camera does not need a window: set `aspect` and a viewport.
     /// With no window, the framebuffer is the viewport's far corner
     /// (`x + width`, `y + height`), so the viewport touches the top of that
@@ -319,7 +323,7 @@ impl Camera3D {
     ///
     /// ```
     /// use macroquad::camera::{Camera3D, Projection};
-    /// use macroquad::math::{vec2, vec3, Vec3};
+    /// use macroquad::math::{vec2, vec3, Sphere, Vec3};
     ///
     /// let camera = Camera3D {
     ///     position: vec3(0.0, 0.0, 5.0),
@@ -334,6 +338,9 @@ impl Camera3D {
     /// let ray = camera.screen_to_ray(vec2(100.0, 100.0));
     /// assert_eq!(ray.origin, camera.position);
     /// assert!(ray.direction.dot(-Vec3::Z) > 0.999);
+    /// let target = Sphere::new(Vec3::ZERO, 1.0);
+    /// let hit = target.ray_intersect(ray.origin, ray.direction).unwrap();
+    /// assert!((hit.t - 4.0).abs() < 1e-3);
     /// ```
     pub fn screen_to_ray(&self, point: Vec2) -> Ray {
         let miss = Ray::new(self.position, Vec3::ZERO);
@@ -395,6 +402,8 @@ impl Camera3D {
     /// parallel to it, or a non-finite field of view or clip distance).
     ///
     /// A synthetic camera does not need a window when `aspect` is set.
+    /// Extract the frustum again after changing the camera. Creating it does
+    /// not enable automatic culling for draw calls.
     ///
     /// # Example
     ///

@@ -17,7 +17,7 @@ use super::{Aabb, Plane, Sphere};
 /// [`Frustum::from_view_projection`] reads an OpenGL clip matrix, `clip = M * world`,
 /// with x, y, and z in `-1..=1` after the perspective divide. That is the matrix
 /// from [`Mat4::perspective_rh_gl`] or [`Mat4::orthographic_rh_gl`] times
-/// [`Mat4::look_at_rh`], and the one [`Camera3D::matrix`](crate::camera::Camera3D::matrix)
+/// [`Mat4::look_at_rh`], and the one [`Camera::matrix`](crate::camera::Camera::matrix)
 /// builds. [`Camera3D::frustum`](crate::camera::Camera3D::frustum) calls this.
 ///
 /// Containment (`contains_point`, `contains_sphere`, `contains_aabb`) is the
@@ -159,7 +159,7 @@ impl Frustum {
             .all(|plane| plane.signed_distance(sphere.center) >= sphere.radius)
     }
 
-    /// Returns true when `sphere` overlaps the volume, including a touch.
+    /// Returns true when `sphere` may overlap the volume, including a touch.
     ///
     /// A center more than `radius` outside any plane is rejected. A sphere that
     /// only reaches a plane past a corner can still return true. A negative or

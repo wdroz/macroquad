@@ -11,6 +11,16 @@
 //! and do not assume an up axis.
 //! `docs/3d-guide.md` walks through them.
 //!
+//! Choose a query by what the caller needs:
+//!
+//! - Overlap and [`Contact`] queries describe the current pose, including a touch.
+//! - [`Sphere::sweep_aabb`] and [`Sphere::sweep_obb`] find the first impact along
+//!   a full movement delta; [`SweepHit::t`] is a fraction of that delta.
+//! - [`slide_sphere_solids`] returns a resolved center against static solids.
+//!   The caller owns velocity, gravity, ground state, and trigger detection.
+//! - [`Frustum`] tests visibility bounds; its intersection tests are conservative
+//!   culling queries and do not replace collision tests.
+//!
 //! ```
 //! use macroquad::math::{Aabb, Ray, vec3, Vec3};
 //!

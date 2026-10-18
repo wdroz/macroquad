@@ -1,4 +1,4 @@
-# 3D collision guide
+# 3D guide
 
 This fork adds 3D queries to `macroquad::math`. They are also in the prelude (`use macroquad::prelude::*`). The same types are in `macroquad::math` for a test or a tool that must not open a window.
 
@@ -6,7 +6,7 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 
 `draw_cube` / `draw_cube_wires` take a center and a **full** size. `Aabb::from_center_size` uses that same pair. `Obb::half_extents` is half of that full size. `Capsule` `a` and `b` are the inner segment, so the hull extends `radius` past each end.
 
-There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, and `slide_sphere` are queries a game uses to write those itself. The physics and character sections below are that application code. The narrative for loading a Blender level is [blender-to-macroquad.md](blender-to-macroquad.md).
+There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, `slide_sphere`, and `slide_sphere_solids` are queries a game uses to write those itself. The physics and character sections below are application code. The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting, loading, drawing, and moving through a marked level. The [example index](../examples/README.md) lists runnable samples.
 
 ## Retained geometry
 
@@ -54,9 +54,10 @@ use macroquad::prelude::*;
 let retained = RetainedGltfModel::from_model(model, false)?;
 let instance = Mat4::from_translation(vec3(2.0, 0.0, 0.0));
 retained.draw(instance);
-if let Some(frustum) = camera.frustum() {
-    retained.draw_culled(instance, &frustum);
-}
+// For culling, replace the draw above with:
+// if let Some(frustum) = camera.frustum() {
+//     retained.draw_culled(instance, &frustum);
+// }
 # Ok(()) }
 ```
 
@@ -64,7 +65,19 @@ The adapter keeps the current camera and material. Its `parts` retain material,
 node and bounds metadata for application lighting, filtering and alpha sorting.
 `part.draw(transform)` submits one chunk; `part.world_bounds(transform)` encloses
 all transformed corners, including nonuniform scale, reflection and shear.
-`draw_culled` also includes the current low-level model stack.
+`draw_culled` also includes the current low-level model stack and returns the
+number of submitted chunks. `world_bounds` uses only the supplied transform;
+include a parent model matrix yourself when using those bounds for sorting or
+queries. Culling skips parts with invalid bounds or transforms. Non-finite or
+projective transforms are not supported. An empty model has no world bounds.
+
+These transforms are relative to the already baked scene geometry. Rotating
+one chunk around its imported bounds center uses a pivot transform such as
+`Mat4::from_translation(new_center) * Mat4::from_quat(rotation) *
+Mat4::from_translation(-part.center)`. For an object split across chunks, use
+one shared pivot for all its parts. A retained part can be drawn this way,
+but it has no editable node pose or automatic collider update. Keep gameplay
+colliders and transparency sorting consistent with the transform you submit.
 
 Custom vertex shaders apply `Model` to positions. For lighting, obtain the
 inverse-transpose `normal_matrix` from `GltfModelTransform::new(transform)` and
@@ -76,6 +89,48 @@ pipeline or uniforms. Include any parent model stack in the helper's transform.
 The default shader is unlit and does not cull. These are shared geometry draws,
 not hardware instancing; no frame-time improvement is implied by buffer reuse.
 See `examples/gltf_retained.rs`.
+
+## Loading and materials
+
+The optional `gltf` feature provides two loading paths. `GltfScene::from_bytes`
+parses hierarchy, mesh data, colliders, triggers, spawns, and sampled base-color
+images without opening a window. `GltfModel::from_bytes` requires a running
+macroquad application and uploads textures while producing drawable chunks.
+The two calls parse independently. Their `with_up_axis` helpers must use the
+same axis before converting the draw model to retained geometry.
+
+`GltfScene::images` contains top-row-first, 8-bit RGBA `GltfImage` values.
+`GltfPrimitive::base_color_texture` indexes this decoded-image list, not the
+file's texture array. Primitives sharing a source image share its entry. Only
+base-color images sampled by loaded primitives are included; emissive, normal,
+metallic-roughness, and occlusion maps are absent from this CPU list. Base-color
+RGB remains in its stored sRGB encoding. No `Texture2D` is created on this path.
+
+The draw loader also retains embedded emissive textures. Its `GltfSurface`
+metadata includes the exact linear base-color and emissive factors, alpha mode
+and cutoff, double-sided and unlit flags, metallic/roughness, and transmission.
+Base-color factors are already baked into vertex colors at byte precision.
+`GltfModel::draw`, `RetainedGltfModel::draw`, and individual retained part draws
+submit using the **current material**. With the default material they are unlit;
+none automatically implements glTF alpha masks, lighting, transparency sorting,
+double-sided selection, or refraction.
+
+For a custom renderer, decode base-color and emissive RGB to linear space and
+avoid multiplying the base-color factor twice. Bind each part's optional
+emissive image (white when absent) and multiply it by `surface.emissive`.
+Implement `Mask` with the alpha cutoff; draw opaque/masked parts before blended
+parts, then sort blended parts back to front using their transformed bounds.
+Blended parts generally need depth testing with depth writes disabled. Uniforms
+and sampler bindings are captured for each queued draw, so a shared material
+can be updated between parts. Normal transforms and reflected front-face
+selection follow the retained shader contract above.
+
+`GltfLoadOptions::max_texture_size` caps uploaded base-color and emissive image
+dimensions while preserving aspect ratio. Full-resolution decoding still
+happens first; it is not a bound on peak CPU memory. `GltfModelStats` contains
+load counts, not measured memory or per-frame GPU costs. Skinning, animation,
+morph weights, normal/roughness maps, and an automatic material renderer remain
+roadmap work.
 
 ## Ray hits
 
@@ -165,6 +220,13 @@ assert!(first.t > 0.0);
 
 `Camera3D::screen_to_ray` unprojects a screen point into a `Ray`. The point is in pixels of the surface the camera draws to, origin at the top left, y down, which is `mouse_position` when the camera draws to the window. A viewport is that camera's GL viewport, converted the same way as `Camera2D::world_to_screen`. A render target uses the texture's size instead of the window. The direction is a unit vector. A perspective ray starts at `position`, so `t` is the distance from the camera. An orthographic ray starts on the near plane and stays parallel to the look direction. `examples/picking_ray.rs` highlights the box under the mouse. `examples/ray_cast.rs` still builds its ray by hand.
 
+The viewport changes the pixel rectangle, not the projection aspect. Set
+`aspect` explicitly when a subviewport should use its own width/height ratio;
+otherwise the camera uses the whole framebuffer ratio. For an orthographic
+camera, `fovy` is the full vertical span. An invalid point or camera returns a
+ray at `position` with a zero direction. The example below needs no window
+because it supplies both `aspect` and a viewport.
+
 ```rust
 use macroquad::camera::{Camera3D, Projection};
 use macroquad::math::{vec2, vec3, Vec3};
@@ -183,6 +245,41 @@ let ray = camera.screen_to_ray(vec2(100.0, 100.0));
 assert_eq!(ray.origin, camera.position);
 assert!(ray.direction.dot(-Vec3::Z) > 0.999);
 ```
+
+## Frustum culling
+
+`Camera3D::frustum` returns the six inward planes of the same view-projection
+used for drawing, or `None` for an unusable camera. An explicit `aspect` permits
+CPU-only queries. `Frustum::from_view_projection` accepts a GL clip-space matrix
+(`clip = matrix * world`, NDC z in `-1..=1`). The plane order is left, right,
+bottom, top, near, far. Points on the boundary are inside.
+
+`contains_point`, `contains_sphere`, and `contains_aabb` require the entire
+shape to be inside. Use `intersects_sphere` or `intersects_aabb` for rendering:
+these conservative plane tests can keep a shape outside a frustum corner, but
+do not reject one meeting the volume. They do not draw or change the camera.
+
+```rust
+use macroquad::prelude::*;
+
+let camera = Camera3D {
+    position: vec3(0.0, 0.0, 5.0),
+    target: Vec3::ZERO,
+    up: Vec3::Y,
+    aspect: Some(1.0),
+    z_near: 0.1,
+    z_far: 20.0,
+    ..Default::default()
+};
+let frustum = camera.frustum().expect("valid camera");
+let bounds = Aabb::from_center_size(Vec3::ZERO, Vec3::ONE);
+assert!(frustum.intersects_aabb(&bounds));
+```
+
+`RetainedGltfModel::draw_culled` applies this test to each transformed chunk.
+It neither sorts transparency nor performs occlusion culling. The
+`frustum_cull` example shows the tested volume separately from the viewing
+camera.
 
 ## Planes
 
@@ -275,7 +372,7 @@ assert!(body.overlaps_sphere(&Sphere::new(vec3(1.0, 0.5, 0.0), 0.5)));
 
 `Contact` is one overlapping pair: `normal`, `penetration`, and `point`. It does not move either shape. The normal points from the second shape toward the first. A pair that only touches still returns a contact with penetration `0`, so a sphere sitting on a floor is a contact. Separated shapes return `None`.
 
-`Aabb::contact`, `Sphere::contact`, `Sphere::contact_aabb`, `Capsule::contact_sphere`, and `Capsule::contact_aabb` are the queries. Mass and impulses are not here. A capsule whose inner segment runs through a thin box is separated on the short face, not along the segment.
+`Aabb::contact`, `Sphere::contact`, `Sphere::contact_aabb`, `Sphere::contact_obb`, `Capsule::contact_sphere`, and `Capsule::contact_aabb` are the queries. `Sphere::contact_obb` rotates into the box, uses the sphere/AABB query, and rotates the point and normal back to world space. Mass and impulses are not here. A capsule whose inner segment runs through a thin box is separated on the short face, not along the segment.
 
 ```rust
 use macroquad::math::{Aabb, Sphere, Vec3, vec3};
@@ -289,7 +386,7 @@ assert_eq!(contact.normal, Vec3::Y);
 
 ## Sweep
 
-`SweepHit` is the first time a moving box or sphere meets one static box along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static box. `point` lies on the static box.
+`SweepHit` is the first time a moving box or sphere meets one static box along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static box. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point`, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Sphere::sweep_obb` takes an oriented box and returns the point and normal in world space.
 
 `Aabb::sweep` moves a box. `Sphere::sweep_aabb` moves a sphere, including hits on an edge or a corner. A start that only touches, and a delta that does not move further in, returns `None`, so a shape resting on a floor can still sweep sideways. An overlap deeper than about `1e-4` is already inside and returns `t == 0`. A discrete `overlaps` test can jump a thin wall; the sweep still reports the crossing.
 
@@ -307,7 +404,7 @@ let floor = Aabb::from_min_max(vec3(-1.0, -1.0, -1.0), vec3(1.0, 0.0, 1.0));
 assert!(ball.sweep_aabb(vec3(1.0, 0.0, 0.0), &floor).is_none());
 ```
 
-`examples/sweep_hit.rs` moves a box and a sphere into a wall. One static box does not slide on its own: the example keeps the part of the delta that lies on the hit face. `slide_sphere` does that for a sphere against several boxes.
+`examples/sweep_hit.rs` moves a box and a sphere into a wall; `examples/sweep_obb.rs` uses a yawed cover. A ray through the sphere's center can miss a grazing collision that a sphere sweep detects. One static-box sweep does not slide on its own: the examples keep the part of the delta that lies on the hit face. `slide_sphere` does that for a sphere against several boxes.
 
 ## Sphere slide
 
@@ -332,6 +429,14 @@ let moved = slide_sphere_solids(vec3(-2.0, 1.0, 0.0), 0.4, vec3(3.0, 0.0, 0.0), 
 assert!((moved.x + 0.85).abs() < 1e-3);
 ```
 
+Keep triggers out of all four solid slices. A glTF collider's `trigger` flag
+belongs to `GltfCollider`, not `GltfColliderShape`; the shape query alone cannot
+distinguish a goal from a wall. After moving, test triggers separately with
+`overlaps_sphere`. The [Blender tutorial](blender-to-macroquad.md) demonstrates
+that split. Slide helpers return a center only, with no contact list, grounded
+state, velocity update, step climbing, or slope limit. Use the explicit sweep
+and contact queries when a response also needs a hit normal.
+
 ## Physics
 
 The library does not integrate velocity, apply gravity, or solve contacts. There is no `RigidBody` type. A game keeps the velocity and calls `slide_sphere` for a sphere against boxes, or `slide_sphere_solids` when a solid is a sphere or a capsule. Gravity is added to the velocity first. The slide keeps the part of the step that lies on a face, so a resting sphere still strafes and a wall removes only the component into the wall. Restitution and mass are not applied. `Contact` describes an overlap that already exists; it does not move either shape.
@@ -355,7 +460,7 @@ Rejecting a whole step with `overlaps` sticks a sphere that is only touching a f
 
 ## Character movement
 
-There is no character controller. `on_ground`, slope limits, and step offsets are not library fields. `Capsule` is the body shape that controller will use. Nothing here moves a capsule: `slide_sphere` takes a sphere, and the sweep queries are `Aabb::sweep` and `Sphere::sweep_aabb` against one static box.
+There is no character controller. `on_ground`, slope limits, and step offsets are not library fields. `Capsule` is a possible body shape, but no current sweep or slide moves a capsule. `slide_sphere_solids` moves a sphere against a static capsule. The moving-shape sweep queries are `Aabb::sweep`, `Sphere::sweep_aabb`, and `Sphere::sweep_obb`.
 
 A capsule standing on a floor is a `Contact` with an upward normal and a penetration of `0`. That is the ground test. A wall's normal fails the upward check, so the same query does not treat a wall as a floor. A slope limit is the cutoff on `normal.y` in this function; the library does not store one.
 
@@ -370,7 +475,12 @@ fn on_ground(body: &Capsule, floor: &Aabb) -> bool {
 }
 ```
 
-Wish velocity is still the caller's. Add it to the capsule with `offset`, then test `overlaps_aabb` or `contact_aabb` against each static box. A touch counts as an overlap, so a capsule that stays on the floor is rejected when the floor is in that list. Keep the floor out of the horizontal test, then move vertically on its own. A large step can tunnel through a thin wall. `Aabb::sweep` against one box reports that crossing; a sideways delta that only touches the floor is `None`. Neither query walks a slope or a step offset. Those stay in the game until the character controller exists.
+Wish velocity is still the caller's. A capsule moved with `offset` and checked
+only at the endpoint can tunnel through a thin wall. Rejecting every overlap
+also blocks a resting touch on the floor. The sample ground test reports one
+contact; it does not supply a robust capsule movement solver. A sphere-based
+prototype can use `slide_sphere_solids` today. Ground state, stairs, ceilings,
+slopes, and a continuous capsule controller remain application responsibilities.
 
 ## Drawing
 
@@ -380,7 +490,7 @@ Set a `Camera3D` before any of these calls. The samples use `up: Vec3::Y`.
 
 `draw_plane(center, size, texture, color)` is an older helper: a quad in the XZ plane. `size` is the half-extent on X and Z, and the quad can take a texture. `draw_plane_wires(plane, center, size, color)` follows `plane.normal`. `size` is the full side length. `center` is projected onto the plane. A non-unit normal is normalized and `distance` is scaled by the same factor.
 
-```rust
+```rust,no_run
 use macroquad::prelude::*;
 
 let floor = Aabb::from_center_size(vec3(0.0, -0.05, 0.0), vec3(8.0, 0.1, 8.0));

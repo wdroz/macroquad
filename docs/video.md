@@ -6,26 +6,42 @@ of the existing `audio` feature and keeps its soundtrack synchronized with its
 texture. The example `examples/video_texture.rs` draws the texture in 2D; the
 same `Texture2D` works on a 3D mesh or glTF screen surface.
 
-```rust,ignore
-let mut video = VideoPlayer::load("assets/clip.mp4", VideoOptions {
-    max_width: 540, max_height: 960, ..Default::default()
-}).await?;
-video.play()?;
-loop {
-    video.update()?; // before rendering; advances/uploads available frames
-    if let Some(texture) = video.texture() {
-        // Draw this texture on your screen mesh using an unlit material.
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::video::{VideoOptions, VideoPlayer};
+
+#[macroquad::main("Video screen")]
+async fn main() {
+    let mut video = VideoPlayer::load("assets/clip.mp4", VideoOptions {
+        max_width: 540, max_height: 960, ..Default::default()
+    }).await.expect("video metadata");
+    loop {
+        if is_key_pressed(KeyCode::Space) {
+            video.play().expect("play video");
+        }
+        video.update().expect("advance video");
+        clear_background(BLACK);
+        if let Some(texture) = video.texture() {
+            draw_texture(texture, 0.0, 0.0, WHITE);
+            // The same texture can be assigned to a 3D screen mesh.
+        }
+        next_frame().await;
     }
-    next_frame().await;
 }
 ```
+
+This example requests playback after Space. For audible browser playback,
+the host may need a direct DOM user interaction, as described below.
 
 `play()` starts/resumes and restarts an ended clip. `pause()` preserves position;
 `stop()` returns to Ready/zero and releases native decoder resources. Native
 playback starts lazily on `play()`. `set_muted(bool)` preserves the configured
 volume, and `set_volume(0..1)` changes it. `update()` reports asynchronous
 decoder/upload/autoplay errors and pauses playback on error. Dropping a player
-releases all its resources. Dropping an unfinished load cancels metadata loading.
+releases its decoder, audio, browser media and texture handle. A texture clone
+assigned to a mesh, or a queued draw, can keep the GPU texture alive after that;
+drop those owners too when retiring the screen. Dropping an unfinished load
+cancels metadata loading.
 Load/play must run on the macroquad thread; decode work runs in workers.
 Ready players do not allocate or upload frame textures. After `stop()`, repeated
 `pause()`/`update()` calls remain Ready with no frame until the next `play()`.

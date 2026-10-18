@@ -29,7 +29,7 @@ overridden. The GPU regression is `cargo test --test default_alpha_blending`.
 
 Enable `features = ["gltf"]` to use the CPU-only `GltfScene` parser and the
 `GltfModel` rendering adapter. `GltfModel::from_bytes(&bytes)` loads embedded
-PNG/JPEG/WebP base-color textures, applies node world transforms and normal
+PNG/JPEG/WebP base-color and emissive textures, applies node world transforms and normal
 matrices, and splits large index buffers into triangle-safe 16-bit chunks.
 `GltfModel::with_up_axis` rotates those baked vertices the same way
 `GltfScene::with_up_axis` rotates markers. `Vec3::Y` leaves both unchanged.
@@ -47,6 +47,7 @@ temporarily in CPU memory. Source GLBs are never modified.
 ```sh
 cargo run --features gltf --example gltf_textured
 cargo run --features gltf --example gltf_textured -- path/to/model.glb
+cargo run --features gltf --example gltf_retained
 ```
 
 `model.parts` exposes each mesh, source node/name, bounds, and surface metadata
@@ -68,9 +69,19 @@ clamp sampling; use WebGL 2 for full NPOT sampler behavior.
 `Texture2D::from_rgba8_mipmapped` also exposes managed mipmapped texture creation
 with preallocated mip levels for Metal.
 
-`Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, and `Obb` live in
+For static geometry, `RetainedGltfModel::from_model(model, false)` consumes the
+finished CPU model, uploads each chunk once, and releases its CPU geometry.
+Pass `true` to keep a shared CPU model for inspection. Clones share GPU buffers
+and textures; `draw(transform)` submits an instance, and `draw_culled(transform,
+&frustum)` skips chunks outside a camera frustum. These are ordinary draw calls
+with shared geometry, not hardware instancing. Custom lighting, transparency
+sorting, normal transforms and reflected face culling remain caller controlled;
+`GltfModelTransform` supplies the inverse-transpose matrix and mirrored flag.
+For a hand-built `Mesh`, use `RetainedMesh` and `draw_retained_mesh` instead.
+
+`Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, `Obb`, and `Frustum` live in
 `macroquad::math` and the prelude. `Contact` describes an overlapping pair,
-`SweepHit` is a moving box or sphere against one static box, and
+`SweepHit` describes a moving box against an AABB or a sphere against an AABB/OBB,
 `slide_sphere` keeps the leftover motion along a face, and
 `slide_sphere_solids` does the same against spheres and capsules. There is no rigid-body
 world and no character controller. [docs/3d-guide.md](docs/3d-guide.md) covers
@@ -82,7 +93,23 @@ collider / trigger / spawn names. Bot-added examples are listed in
 
 The default mesh chunk limits fit macroquad's default buffers. For larger
 chunks, pass `GltfMeshLimits` to `from_bytes_with_limits` and increase both
-`draw_call_vertex_capacity` and `draw_call_index_capacity` in the app's config.
+`draw_call_vertex_capacity` and `draw_call_index_capacity` in the app's config
+when drawing immediately. Retained geometry does not use the streaming buffer
+capacities, but still validates triangle indices and the 16-bit vertex range.
+
+`Camera3D::screen_to_ray` supplies a world ray for picking;
+`Camera3D::frustum` supplies conservative culling planes. Both use the camera's
+view-projection and respect its chosen up axis. See the guide for viewport and
+framebuffer coordinates and for the difference between containment and culling.
+
+## Video textures (fork feature)
+
+Enable `features = ["video"]` for `video::VideoPlayer`, independently of the
+`audio` feature. Call `update` each frame before drawing its ordinary `Texture2D`
+on a 2D surface or 3D screen. Native playback uses FFmpeg/FFprobe with bounded
+decode queues; native audio currently requires Windows. Browsers use the
+`js/mq_video.js` companion and browser media codecs. See [docs/video.md](docs/video.md)
+for setup, playback controls, cleanup, and platform limitations.
 
 ## Supported Platforms
 

@@ -4,6 +4,12 @@
 //! [`draw_aabb`], [`draw_ray`], [`draw_plane_wires`], [`draw_triangle_wires`],
 //! [`draw_obb`], and [`draw_capsule_wires`]. [`draw_sphere`] takes a center and
 //! a radius, the same fields as a [`Sphere`](crate::math::Sphere).
+//!
+//! [`Mesh`] keeps editable CPU geometry; [`draw_mesh`] submits it each time.
+//! [`RetainedMesh::from_mesh`] uploads unchanged geometry once, then
+//! [`draw_retained_mesh`] draws shared buffers with a per-call transform.
+//! Upload outside the frame loop and reuse the handle. Both paths use the
+//! current camera and material; collision debug wires require a live window too.
 
 use crate::math::{Aabb, Capsule, Obb, Plane, Ray, Triangle};
 use crate::{color::Color, get_context};
@@ -64,8 +70,10 @@ pub struct Mesh {
 /// use macroquad::prelude::*;
 /// # fn example(mesh: &Mesh) -> Result<(), RetainedMeshError> {
 /// let retained = RetainedMesh::from_mesh(mesh)?;
+/// let mut untextured = retained.clone();
+/// untextured.texture = None; // Shares geometry; leaves the original texture unchanged.
 /// draw_retained_mesh(&retained, Mat4::IDENTITY);
-/// draw_retained_mesh(&retained, Mat4::from_translation(Vec3::X));
+/// draw_retained_mesh(&untextured, Mat4::from_translation(Vec3::X));
 /// # Ok(()) }
 /// ```
 #[derive(Clone)]
@@ -324,7 +332,7 @@ pub fn draw_grid_ex(
 ///
 /// `size.x` and `size.y` are half the width and depth: the quad extends
 /// `size` away from `center` on X and Z, and Y stays at `center.y`. This is a
-/// horizontal patch when up is +Y. It is not a [`Plane`](crate::math::Plane).
+/// horizontal patch when up is +Y. It is not a [`Plane`].
 /// A plane that may be tilted is [`draw_plane_wires`], whose `size` is the
 /// full side length.
 ///
@@ -947,7 +955,7 @@ pub fn draw_cylinder_ex(
     }
 }
 
-/// Wireframe of an [`Aabb`](crate::math::Aabb).
+/// Wireframe of an [`Aabb`].
 ///
 /// This is [`draw_cube_wires`] with [`Aabb::center`](crate::math::Aabb::center)
 /// and [`Aabb::size`](crate::math::Aabb::size), so the outline matches

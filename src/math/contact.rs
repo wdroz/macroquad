@@ -14,14 +14,15 @@ use super::{Aabb, Capsule, Obb, Sphere};
 /// `normal` is a unit vector pointing from the second shape toward the first.
 /// `penetration` is how far the shapes overlap along that normal. A pair that
 /// only touches has penetration `0` and still returns a contact, matching the
-/// inclusive boundaries of [`Aabb`] and [`Sphere`]. `point` lies in the
-/// overlap: on the shared face when the pair only touches, and inside the
-/// overlap otherwise. See each query for the exact point.
+/// inclusive boundaries of [`Aabb`] and [`Sphere`]. `point` is the query's
+/// representative contact position. It need not lie inside both shapes when
+/// one contains the other; see each query for the exact construction.
 ///
-/// When no direction is defined (the shapes share a center), `normal` is
-/// [`Vec3::X`]. An axis-aligned box that can leave along `+` or `-` by the
-/// same distance uses the positive axis. When several axes share the smallest
-/// penetration, X wins over Y and Y wins over Z.
+/// Coincident sphere centers use [`Vec3::X`]. An axis-aligned box that can
+/// leave along `+` or `-` by the same distance uses the positive axis.
+/// When several axes share the smallest
+/// penetration, X wins over Y and Y wins over Z. [`Sphere::contact_obb`] uses
+/// these rules in the box's local frame and returns a world-space normal.
 ///
 /// # Example
 ///
@@ -40,7 +41,7 @@ pub struct Contact {
     pub normal: Vec3,
     /// Overlap along [`Self::normal`]. Zero when the shapes only touch.
     pub penetration: f32,
-    /// A point in the overlap. See the query that produced this contact.
+    /// Representative contact position. See the query that produced it.
     pub point: Vec3,
 }
 
@@ -163,6 +164,8 @@ impl Sphere {
     /// box, where [`Sphere::contact_aabb`] would put it after the sphere is
     /// rotated into the box's local frame. A sphere sitting on a face has
     /// penetration `0`.
+    /// Both the returned point and normal are in world space. Move the sphere
+    /// by `contact.normal * contact.penetration` to resolve this pair.
     ///
     /// An empty box (a negative half extent) has no contact. A zero or
     /// non-finite rotation has no contact. A negative or non-finite radius is
@@ -173,11 +176,12 @@ impl Sphere {
     /// ```
     /// use macroquad::math::{Obb, Quat, Sphere, Vec3, vec3};
     ///
-    /// let cover = Obb::new(Vec3::ZERO, vec3(1.0, 0.5, 0.25), Quat::IDENTITY);
-    /// let shot = Sphere::new(vec3(0.0, 0.0, 0.5), 0.25);
+    /// let rotation = Quat::from_rotation_y(0.4);
+    /// let cover = Obb::new(Vec3::ZERO, vec3(1.0, 0.5, 0.25), rotation);
+    /// let shot = Sphere::new(rotation * vec3(0.0, 0.0, 0.4), 0.25);
     /// let contact = shot.contact_obb(&cover).unwrap();
-    /// assert_eq!(contact.penetration, 0.0);
-    /// assert_eq!(contact.normal, Vec3::Z);
+    /// assert!((contact.penetration - 0.1).abs() < 1e-4);
+    /// assert!((contact.normal - rotation * Vec3::Z).length() < 1e-4);
     /// ```
     pub fn contact_obb(&self, obb: &Obb) -> Option<Contact> {
         let (local, aabb, rotation) = obb.in_local_space(self)?;
