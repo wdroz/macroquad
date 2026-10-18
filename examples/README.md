@@ -12,6 +12,7 @@ cargo run --example plane_hit
 cargo run --example triangle_hit
 cargo run --example obb_overlap
 cargo run --example capsule_overlap
+cargo run --example sweep_hit
 cargo run --features gltf --example gltf_textured
 cargo run --features gltf --example marble_maze
 ```
@@ -43,6 +44,10 @@ Arrow keys move an oriented box. The box yaws on its own around Y. `Obb::from_wo
 ## `capsule_overlap`
 
 Moves a vertical `Capsule` with the arrow keys. `a` and `b` are the inner segment; the rounded ends extend past them by `radius`. The capsule turns a different color when `overlaps_aabb` or `overlaps_sphere` hits. One ray reports `Capsule::ray_intersect`. The wires are the example's own spheres along the segment. There is no `draw_capsule_wires` yet.
+
+## `sweep_hit`
+
+Moves a box and a sphere with the arrow keys into one wall. `Aabb::sweep` and `Sphere::sweep_aabb` stop the shape at `SweepHit::t` and the example keeps the leftover motion along `normal`, so holding into the wall slides along it. A pure touch is not an impact. Escape quits.
 
 ## `gltf_textured`
 

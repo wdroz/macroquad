@@ -3,8 +3,10 @@
 //! Consists of re-exported `glam` types with some additions, including 2D
 //! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Capsule`],
 //! [`Ray`], [`Plane`], and [`Triangle`]. [`Contact`] is the overlap of two of
-//! those shapes. [`slide_sphere`] moves a sphere along [`Aabb`] and [`Obb`]
-//! faces. The 3D types are unitless and do not assume an up axis.
+//! those shapes. [`SweepHit`] is the time of impact of a moving [`Aabb`] or
+//! [`Sphere`] against a static [`Aabb`]. [`slide_sphere`] moves a sphere along
+//! [`Aabb`] and [`Obb`] faces. The 3D types are unitless and do not assume an
+//! up axis.
 //! `docs/3d-guide.md` walks through them.
 //!
 //! ```
@@ -27,6 +29,7 @@ mod ray;
 mod rect;
 mod slide;
 mod sphere;
+mod sweep;
 mod triangle;
 
 pub use aabb::{Aabb, RayHit};
@@ -39,6 +42,7 @@ pub use ray::{ClosestHit, Ray};
 pub use rect::{Rect, RectOffset};
 pub use slide::slide_sphere;
 pub use sphere::Sphere;
+pub use sweep::SweepHit;
 pub use triangle::Triangle;
 
 /// Converts 2d polar coordinates to 2d cartesian coordinates.
