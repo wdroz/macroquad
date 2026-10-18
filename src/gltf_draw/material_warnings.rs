@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 
-/// Source material behavior the opt-in base-color/emissive renderer omits.
+/// Source material behavior beyond the opt-in renderer's default preview.
 ///
-/// These diagnostics do not enable lighting, PBR, refraction, or shadows. Alpha
+/// These diagnostics do not select lighting, PBR, refraction, or shadows. Alpha
 /// modes, sidedness, base-color/emissive textures and their supported UV mappings
 /// are handled by the renderer and do not produce these warnings.
 ///
@@ -14,9 +14,10 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum GltfUnsupportedMaterialFeature {
-    /// A material without `KHR_materials_unlit` expects a lighting model. The
-    /// renderer previews its base color plus emissive contribution instead of
-    /// evaluating lighting, metallic/roughness factors, reflections or shadows.
+    /// A material without `KHR_materials_unlit` expects glTF's lighting model.
+    /// The renderer defaults to base-plus-emission preview. Opting into
+    /// [`super::GltfLighting`] adds diffuse hemisphere/directional lighting,
+    /// but still omits metallic/roughness response, reflections and shadows.
     Lighting,
     /// A normal map is not loaded or sampled by this renderer.
     NormalTexture,
@@ -86,12 +87,15 @@ pub struct GltfMaterialWarning {
 /// is an error, matching the model loader's scene-graph policy.
 ///
 /// Every material without `KHR_materials_unlit`, including the default material,
-/// produces [`GltfUnsupportedMaterialFeature::Lighting`]: base plus emissive is
-/// a preview, not a PBR result. For `KHR_materials_unlit`, base color and alpha
+/// produces [`GltfUnsupportedMaterialFeature::Lighting`]. This source inspection
+/// does not know the frame's lighting choice: the default base-plus-emissive
+/// preview and the optional [`super::GltfLighting`] diffuse model both omit
+/// glTF's metallic/roughness lighting response. For `KHR_materials_unlit`, base color and alpha
 /// define the appearance; emissive, normal, occlusion and metallic-roughness
 /// properties are ignored as required by that extension, without warnings.
 /// Optional material extensions other than unlit and emissive strength are
-/// reported separately. No lighting, refraction, or shadow system is implied.
+/// reported separately. No light configuration, refraction, or shadow system
+/// is implied by these diagnostics.
 ///
 /// A GLB binary chunk is required, and unsupported *required* extensions remain
 /// document errors, as in the model loader. This inspection does not validate

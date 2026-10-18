@@ -329,14 +329,15 @@ still cannot remove full-resolution decode peaks.
 
 `GltfModelStats` contains
 load counts, not measured memory or per-frame GPU costs. Skinning, animation,
-morph weights, normal/roughness maps, and lighting remain roadmap work.
+morph weights, normal/roughness maps, and PBR remain roadmap work.
 
 ## Opt-in glTF material passes
 
-`GltfMaterialRenderer` provides a base-color/emissive preview using the existing
-loaded data. It leaves `GltfModel::draw`, retained draws and custom shaders
-unchanged. Construct one renderer in a running application, set the camera, then
-collect **every instance for that view into one frame** before drawing:
+`GltfMaterialRenderer` provides a base-color/emissive preview and optional basic
+lighting using the existing loaded data. It leaves `GltfModel::draw`, retained
+draws and custom shaders unchanged. Construct one renderer in a running
+application, set the camera, then collect **every instance for that view into
+one frame** before drawing:
 
 ```rust,no_run
 use macroquad::prelude::*;
@@ -378,6 +379,62 @@ function before multiplying linear factors; alpha stays linear. Ordinary
 materials preview base plus emissive without lighting. `KHR_materials_unlit`
 uses base color only, as required by the extension. Missing textures are white.
 
+The sidedness guarantees above apply to OpenGL/WebGL. The pinned miniquad
+0.4.11 Metal backend ignores front-face and cull pipeline settings, so
+single-sided materials are not culled there. A Metal shader is supplied, but
+has not been executed in this round; Metal parity is not established.
+
+### Optional basic lighting
+
+Each collection starts in the existing preview mode. Call
+`frame.set_lighting(Some(GltfLighting { .. }))?` to apply hemisphere ambient
+and one directional diffuse light to ordinary materials. The parameters are
+plain values; no scene engine or light objects are required:
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn configure(frame: &mut GltfMaterialFrame<'_>) -> Result<(), String> {
+frame.set_lighting(Some(GltfLighting {
+    hemisphere_up: Vec3::Y,
+    sky_color: vec3(0.45, 0.50, 0.60),
+    ground_color: vec3(0.15, 0.12, 0.10),
+    directional_direction: vec3(-0.35, 0.85, 0.45), // Toward the light.
+    directional_color: vec3(0.70, 0.65, 0.55),
+}))?;
+// To return this collection to the base + emissive preview:
+// frame.set_lighting(None)?;
+# Ok(()) }
+```
+
+Directions are world-space, finite, nonzero vectors; the setter normalizes them.
+Invalid parameters return an error and leave the previous lighting unchanged.
+Colors are finite, nonnegative **linear RGB**, with brightness included in their
+values. Set both hemisphere colors to zero to disable ambient, or set the
+directional color to zero to disable the directional light. `GltfLighting::default()`
+uses Y-up, sky `(0.6, 0.6, 0.6)`, ground `(0.2, 0.2, 0.2)`, a direction toward
+`(1, 2, 1)`, and directional color `(0.8, 0.8, 0.8)`. Supplying these defaults
+still requires opting in with `Some` for each collection.
+
+For a unit world normal `N`, the hemisphere weight is `0.5 + 0.5 * dot(N, up)`;
+the directional weight is `max(dot(N, toward_light), 0)`. The renderer adds
+these light contributions, multiplies the linear base color by the result,
+then adds the textured emissive contribution. Emission stays independent of
+the lights, so dark areas of an emissive texture remain dark. The exact base
+and emissive factors are still applied once. Metallic and roughness factors
+are retained in `GltfSurface` for custom shaders but are not used by this
+diffuse model; it has no specular highlights or PBR response.
+
+Imported normals use the inverse transpose of the composed parent/instance
+matrix, including nonuniform scale. Reflections preserve logical front faces;
+double-sided back faces reverse the lighting normal. A singular composed
+matrix cannot supply inverse normals, so ordinary lit chunks are skipped and
+counted in `skipped_draws`. Preview and `KHR_materials_unlit` chunks do not need
+inverse normals. A zero normal receives the midpoint of the hemisphere colors
+and no directional contribution. The unlit extension always uses only base
+color, even when lighting is selected. Existing current-material draw methods
+and individual part draws remain available for custom lighting, transforms
+and effects.
+
 The default `GltfColorOutput::Srgb` encodes the final RGB for a normal display
 target. Blending then happens in that target's encoded color space, as with
 ordinary macroquad drawing. For linear compositing, call
@@ -392,7 +449,7 @@ shader decodes them; neither output mode changes this texture-filtering limit.
 and selects the default material. This makes dropping the renderer afterward
 safe; select your own material again before further custom drawing. It does not
 advance a frame, change the camera or clear the target. PBR, normal maps,
-lighting, refraction, environment reflections and shadows are separate work.
+refraction, environment reflections and shadows are separate work.
 
 Inspect source bytes once to get structured warnings without opening a window
 or decoding images/geometry:
@@ -410,9 +467,11 @@ Warnings identify the loaded/source node, node path, primitive and material;
 unsupported map warnings also identify their source image when available.
 They describe the source bytes, so call-site material edits are not reflected.
 Unused materials and nodes outside the selected scene are omitted. Non-unlit
-materials report missing lighting even without special maps. Unsupported
-features remain warnings rather than silently enabling an approximation; loader
-errors (such as unsupported UV mappings) still fail loading normally.
+materials retain the `Lighting` warning: the default is a preview, and the
+optional diffuse lighting does not implement glTF's PBR response. This source
+inspection does not know the lighting chosen later for a collection. Unsupported
+maps and material extensions remain warnings; loader errors (such as unsupported
+UV mappings) still fail loading normally.
 See `examples/gltf_materials.rs` and the tiny native/browser pixel fixture
 `examples/gltf_material_check.rs`.
 

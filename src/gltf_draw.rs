@@ -57,8 +57,10 @@
 //!
 //! Opt into [`GltfMaterialRenderer`] for base-color/emissive preview passes,
 //! alpha masks, globally sorted transparent instances and material sidedness.
-//! It uses exact material factors instead of the baked vertex colors and does
-//! not add lighting, PBR or refraction. [`GltfColorOutput`] makes the destination
+//! It uses exact material factors instead of the baked vertex colors and offers
+//! optional [`GltfLighting`] for hemisphere/directional diffuse lighting
+//! with imported normals. PBR and refraction are not included.
+//! [`GltfColorOutput`] makes the destination
 //! color-space policy explicit; the existing draw methods stay unchanged.
 
 use std::{borrow::Cow, collections::HashMap};

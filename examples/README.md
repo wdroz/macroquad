@@ -10,7 +10,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Continuous box/sphere hits, oriented cover, slide against all four solid shapes |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
-| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials` | Immediate GLB draw, retained geometry, staged loading and opt-in material passes |
+| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials` | Immediate GLB draw, retained geometry, staged loading and opt-in material passes/lighting |
 | Renderer behavior | `retained_mesh`, `material_depth_check` | Immutable buffers and draw order, independent depth writes/testing, queued samplers |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 
@@ -164,8 +164,13 @@ on the command line, and prints structured unsupported-material warnings.
 It draws two retained instances in one `GltfMaterialRenderer` collection so
 transparent chunks sort across both instances. The opt-in renderer applies
 opaque/mask/blend alpha, depth writes, sidedness and sRGB base/emissive conversion.
-It previews ordinary materials without lighting; PBR and refraction are absent.
-`KHR_materials_unlit` uses base color only. Escape exits.
+It enables optional hemisphere/directional diffuse lighting and exposes its
+world-space direction and linear light colors as `GltfLighting` values. L toggles
+lighting to compare with the base/emissive preview. The second instance has a
+reflected, nonuniform scale. Imported normals use the composed inverse transpose,
+and textured emission remains independent of lighting. Metallic/roughness PBR,
+highlights, refraction and shadows are absent. `KHR_materials_unlit` uses base
+color only in both modes. Escape exits.
 
 The default output encodes RGB before destination-space blending. Use linear
 output into a linear target with your own final conversion for linear

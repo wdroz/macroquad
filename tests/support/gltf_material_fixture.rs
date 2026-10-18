@@ -4,6 +4,9 @@
 
 use macroquad::prelude::*;
 
+#[path = "gltf_lighting_fixture.rs"]
+mod lighting;
+
 #[derive(Clone, Copy, Debug)]
 enum Geometry {
     Cpu,
@@ -567,6 +570,8 @@ pub async fn run() {
         "parent matrix and default material restored",
     );
     unsafe { get_internal_gl().quad_gl.pop_model_matrix() };
+
+    lighting::run(&mut renderer, &target, &camera);
 
     // Drawing restores the default material: subsequent ordinary drawing must
     // use its own vertex color, regardless of the last glTF material factor.

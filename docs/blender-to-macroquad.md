@@ -261,9 +261,10 @@ with the current camera and **current material**. The default material is
 unlit. The base-color factor is already in the vertex colors, at 8-bit
 precision. The exact factor, alpha mode, cutoff, double-sided flag, emissive
 factor, metallic, roughness, transmission, and unlit flag are on
-`part.surface`. Built-in drawing does not apply alpha masks, choose sidedness,
-light, sort transparency, skin, animate, or refract. Iterate `model.parts` and
-select custom materials when you need those behaviors.
+`part.surface`. These current-material draw calls do not apply alpha masks,
+choose sidedness, light, sort transparency, skin, animate, or refract. Opt into
+`GltfMaterialRenderer` for alpha passes and optional basic lighting, or iterate
+`model.parts` and select custom materials for application-specific rendering.
 
 `part.emissive_texture` retains the optional embedded emissive map. In a lighting shader, decode both color images from sRGB to linear RGB, multiply the emissive image by `part.surface.emissive`, and add it to the lit base color. When there is no emissive map, use a white texture. An emissive factor is not a flat glow when the material also supplies an emissive map; ignoring the map washes out dark details. Base-color and emissive images share the mesh's one UV channel: the loader applies texture-coordinate selection and `KHR_texture_transform`, and returns an error if the two resulting mappings differ.
 
@@ -352,7 +353,18 @@ also covers picking, frustum culling, contacts, sweeps, and slide queries.
 For exported alpha cutouts or blended surfaces, `gltf_materials` opts into
 `GltfMaterialRenderer` and prints unsupported-feature warnings with node and
 material identifiers. This base/emissive preview applies alpha, sidedness and
-color conversion but does not light the scene or refract glass. See the
+color conversion; the example also enables optional hemisphere/directional
+lighting. Press L to compare the lit view with the preview. Its second instance
+uses a reflected, nonuniform scale. The renderer transforms imported normals
+with the inverse transpose and keeps textured emission independent of lighting;
+`KHR_materials_unlit` always displays base color only.
+
+Use `frame.set_lighting(Some(GltfLighting::default()))?` for a starting light,
+then set world-space `hemisphere_up`, `directional_direction` (toward the light),
+and linear RGB `sky_color`, `ground_color`, and `directional_color` to suit the
+scene. It is diffuse lighting: metallic/roughness shading, highlights, normal
+maps, refraction and shadows are not implemented. Keep custom shaders for those
+effects. The renderer does not alter existing current-material draws. See the
 [material passes guide](3d-guide.md#opt-in-gltf-material-passes) before replacing
 a custom renderer, especially its transparency ordering and output-space limits.
 
