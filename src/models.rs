@@ -51,6 +51,203 @@ pub struct Mesh {
     pub texture: Option<Texture2D>,
 }
 
+/// Immutable geometry uploaded once and shared by cheap handle clones.
+///
+/// Draw with [`draw_retained_mesh`]. The source [`Mesh`] may be changed or
+/// dropped after upload; this handle keeps no CPU copy of its geometry.
+/// Queued draws keep the buffers and the selected base texture alive. Once
+/// all handles and queued draws are gone, buffers are deleted at the next
+/// renderer flush (normally the end of the frame) or retained mesh upload.
+/// Creation and drawing require an active macroquad context.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// # fn example(mesh: &Mesh) -> Result<(), RetainedMeshError> {
+/// let retained = RetainedMesh::from_mesh(mesh)?;
+/// draw_retained_mesh(&retained, Mat4::IDENTITY);
+/// draw_retained_mesh(&retained, Mat4::from_translation(Vec3::X));
+/// # Ok(()) }
+/// ```
+#[derive(Clone)]
+pub struct RetainedMesh {
+    pub(crate) buffers: std::sync::Arc<crate::quad_gl::RetainedMeshBuffers>,
+    /// Base texture selected when this handle is drawn. Changing it does not
+    /// reupload geometry or alter already queued draws or other handle clones.
+    pub texture: Option<Texture2D>,
+}
+
+/// Invalid triangle geometry passed to [`RetainedMesh::from_mesh`].
+///
+/// Validation runs before any GPU allocation. Mesh indices are `u16`, so a
+/// mesh can address at most 65,536 vertices. Split larger meshes into chunks.
+///
+/// ```
+/// use macroquad::prelude::*;
+/// let empty = Mesh { vertices: vec![], indices: vec![], texture: None };
+/// assert!(matches!(RetainedMesh::from_mesh(&empty), Err(RetainedMeshError::EmptyMesh)));
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RetainedMeshError {
+    /// At least one vertex and one triangle are required.
+    EmptyMesh,
+    /// More vertices than a `u16` index can address.
+    TooManyVertices,
+    /// More indices than the backend's signed draw count can represent.
+    TooManyIndices,
+    /// The index count is not a multiple of three.
+    IncompleteTriangle,
+    /// An index does not refer to a vertex in the source mesh.
+    IndexOutOfBounds { index: u16, vertex_count: usize },
+}
+
+impl std::fmt::Display for RetainedMeshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyMesh => f.write_str("retained mesh must contain vertices and triangles"),
+            Self::TooManyVertices => f.write_str("retained mesh exceeds 65,536 vertices"),
+            Self::TooManyIndices => f.write_str("retained mesh exceeds the backend index count"),
+            Self::IncompleteTriangle => {
+                f.write_str("retained mesh indices must form complete triangles")
+            }
+            Self::IndexOutOfBounds {
+                index,
+                vertex_count,
+            } => {
+                write!(
+                    f,
+                    "retained mesh index {index} is outside {vertex_count} vertices"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for RetainedMeshError {}
+
+impl RetainedMesh {
+    /// Uploads a triangle mesh into immutable vertex and index buffers.
+    ///
+    /// Returns an error for empty, incomplete, oversized, or out-of-range
+    /// geometry. Unlike immediate batching, this never clamps to the configured
+    /// streaming draw-call capacity. The source mesh and its texture are unchanged.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn example(mesh: &Mesh) -> Result<(), RetainedMeshError> {
+    /// let retained = RetainedMesh::from_mesh(mesh)?;
+    /// draw_retained_mesh(&retained, Mat4::IDENTITY);
+    /// # Ok(()) }
+    /// ```
+    pub fn from_mesh(mesh: &Mesh) -> Result<Self, RetainedMeshError> {
+        validate_retained_mesh(mesh)?;
+        let context = get_context();
+        let buffers = context.gl.upload_retained_mesh(
+            &mut *context.quad_context,
+            &mesh.vertices,
+            &mesh.indices,
+        );
+        Ok(Self {
+            buffers,
+            texture: mesh.texture.clone(),
+        })
+    }
+}
+
+fn validate_retained_mesh(mesh: &Mesh) -> Result<(), RetainedMeshError> {
+    if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+        return Err(RetainedMeshError::EmptyMesh);
+    }
+    if mesh.vertices.len() > u16::MAX as usize + 1 {
+        return Err(RetainedMeshError::TooManyVertices);
+    }
+    if mesh.indices.len() > i32::MAX as usize {
+        return Err(RetainedMeshError::TooManyIndices);
+    }
+    if !mesh.indices.chunks_exact(3).remainder().is_empty() {
+        return Err(RetainedMeshError::IncompleteTriangle);
+    }
+    if let Some(&index) = mesh
+        .indices
+        .iter()
+        .find(|&&i| i as usize >= mesh.vertices.len())
+    {
+        return Err(RetainedMeshError::IndexOutOfBounds {
+            index,
+            vertex_count: mesh.vertices.len(),
+        });
+    }
+    Ok(())
+}
+
+/// Queues retained triangles with the current camera and material.
+///
+/// `transform` is multiplied after the current model matrix. Submission order,
+/// viewport, scissor, render target, custom uniforms and texture bindings are
+/// preserved alongside ordinary immediate draws. Geometry is never reuploaded
+/// by drawing. Each call is a separate draw; this is not hardware instancing.
+///
+/// Custom shaders receive the composed `Model` matrix. As with [`draw_mesh`],
+/// they are responsible for transforming normals and choosing culling behavior
+/// for reflected transforms. CPU vertices are not rewritten.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// # fn example(mesh: &RetainedMesh) {
+/// draw_retained_mesh(mesh, Mat4::from_translation(vec3(2.0, 0.0, 0.0)));
+/// # }
+/// ```
+pub fn draw_retained_mesh(mesh: &RetainedMesh, transform: glam::Mat4) {
+    let context = get_context();
+    context.gl.texture(mesh.texture.as_ref());
+    context.gl.draw_mode(DrawMode::Triangles);
+    context.gl.geometry_retained(mesh, transform);
+}
+
+#[cfg(test)]
+mod retained_mesh_tests {
+    use super::*;
+
+    fn triangle() -> Mesh {
+        Mesh {
+            vertices: vec![Vertex::new(0., 0., 0., 0., 0., crate::color::WHITE); 3],
+            indices: vec![0, 1, 2],
+            texture: None,
+        }
+    }
+
+    #[test]
+    fn retained_mesh_validates_before_gpu_allocation() {
+        let mut mesh = triangle();
+        assert_eq!(validate_retained_mesh(&mesh), Ok(()));
+        mesh.indices.push(0);
+        assert_eq!(
+            validate_retained_mesh(&mesh),
+            Err(RetainedMeshError::IncompleteTriangle)
+        );
+        mesh.indices = vec![0, 1, 3];
+        assert!(matches!(
+            RetainedMesh::from_mesh(&mesh),
+            Err(RetainedMeshError::IndexOutOfBounds {
+                index: 3,
+                vertex_count: 3
+            })
+        ));
+        mesh.indices.clear();
+        assert!(matches!(
+            RetainedMesh::from_mesh(&mesh),
+            Err(RetainedMeshError::EmptyMesh)
+        ));
+        mesh.indices = vec![0, 1, u16::MAX];
+        mesh.vertices.resize(65_536, mesh.vertices[0]);
+        assert_eq!(validate_retained_mesh(&mesh), Ok(()));
+        mesh.vertices.push(mesh.vertices[0]);
+        assert!(matches!(
+            RetainedMesh::from_mesh(&mesh),
+            Err(RetainedMeshError::TooManyVertices)
+        ));
+    }
+}
+
 pub fn draw_mesh(mesh: &Mesh) {
     let context = get_context();
 

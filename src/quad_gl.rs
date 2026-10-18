@@ -6,7 +6,7 @@ pub use miniquad::{FilterMode, TextureId as MiniquadTexture, UniformDesc};
 
 use crate::{color::Color, logging::warn, telemetry, texture::Texture2D, tobytes::ToBytes, Error};
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
 pub(crate) use crate::models::Vertex;
 
@@ -18,6 +18,17 @@ pub enum DrawMode {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GlPipeline(usize);
+
+/// The renderer owns one reference until all public handles and queued draws
+/// have released theirs. GPU deletion therefore never needs a global context
+/// from a public handle's destructor.
+#[derive(Debug)]
+pub(crate) struct RetainedMeshBuffers {
+    pub(crate) vertex_buffer: BufferId,
+    pub(crate) index_buffer: BufferId,
+    pub(crate) vertices_count: usize,
+    pub(crate) indices_count: usize,
+}
 
 struct DrawCall {
     vertices_count: usize,
@@ -37,6 +48,7 @@ struct DrawCall {
     textures: BTreeMap<String, MiniquadTexture>,
     render_pass: Option<RenderPass>,
     capture: bool,
+    retained: Option<crate::models::RetainedMesh>,
 }
 
 impl DrawCall {
@@ -63,6 +75,7 @@ impl DrawCall {
             textures: BTreeMap::new(),
             render_pass,
             capture: false,
+            retained: None,
         }
     }
 }
@@ -572,6 +585,16 @@ pub struct QuadGl {
     draw_calls: Vec<DrawCall>,
     draw_calls_bindings: Vec<Bindings>,
     draw_calls_count: usize,
+    retained_meshes: Vec<Arc<RetainedMeshBuffers>>,
+    // Scratch bindings hold no ownership of the GPU buffers. Every retained
+    // draw replaces their IDs, and immediate draws use separate stream slots.
+    retained_bindings: Option<Bindings>,
+    #[cfg(test)]
+    retained_buffer_uploads: usize,
+    #[cfg(test)]
+    retained_buffer_deletions: usize,
+    #[cfg(test)]
+    stream_buffer_updates: usize,
     state: GlState,
     start_time: f64,
 
@@ -641,6 +664,14 @@ impl QuadGl {
             draw_calls: Vec::with_capacity(200),
             draw_calls_bindings: Vec::with_capacity(200),
             draw_calls_count: 0,
+            retained_meshes: Vec::new(),
+            retained_bindings: None,
+            #[cfg(test)]
+            retained_buffer_uploads: 0,
+            #[cfg(test)]
+            retained_buffer_deletions: 0,
+            #[cfg(test)]
+            stream_buffer_updates: 0,
             start_time: miniquad::date::now(),
 
             white_texture,
@@ -710,6 +741,9 @@ impl QuadGl {
 
     /// Reset only draw calls state
     pub fn clear_draw_calls(&mut self) {
+        for dc in &mut self.draw_calls[..self.draw_calls_count] {
+            dc.retained = None;
+        }
         self.draw_calls_count = 0;
         // Discard the geometry belonging to the cancelled calls too. Repeated
         // clears before a flush must not keep appending unreachable vertices.
@@ -736,6 +770,7 @@ impl QuadGl {
             .draw_calls
             .iter()
             .take(self.draw_calls_count)
+            .filter(|dc| dc.retained.is_none())
             .skip(self.draw_calls_bindings.len())
         {
             let vertex_buffer = ctx.new_buffer(
@@ -756,31 +791,49 @@ impl QuadGl {
 
             self.draw_calls_bindings.push(bindings);
         }
-        debug_assert!(self.draw_calls_bindings.len() >= self.draw_calls_count);
+        debug_assert!(
+            self.draw_calls_bindings.len()
+                >= self.draw_calls[..self.draw_calls_count]
+                    .iter()
+                    .filter(|dc| dc.retained.is_none())
+                    .count()
+        );
 
         let (screen_width, screen_height) = miniquad::window::screen_size();
         let time = (miniquad::date::now() - self.start_time) as f32;
         let time = glam::vec4(time, time.sin(), time.cos(), 0.);
         let gl_depth_workaround = ctx.info().backend == Backend::OpenGl;
 
-        for (dc, bindings) in self.draw_calls[0..self.draw_calls_count]
-            .iter_mut()
-            .zip(self.draw_calls_bindings.iter_mut())
-        {
-            grow_stream_buffer::<Vertex>(
-                ctx,
-                &mut bindings.vertex_buffers[0],
-                BufferType::VertexBuffer,
-                dc.vertices_count,
-                self.max_vertices,
-            );
-            grow_stream_buffer::<u16>(
-                ctx,
-                &mut bindings.index_buffer,
-                BufferType::IndexBuffer,
-                dc.indices_count,
-                self.max_indices,
-            );
+        let mut stream_slot = 0;
+        for dc in &mut self.draw_calls[..self.draw_calls_count] {
+            let bindings = if let Some(mesh) = &dc.retained {
+                let bindings = self.retained_bindings.get_or_insert_with(|| Bindings {
+                    vertex_buffers: vec![mesh.buffers.vertex_buffer],
+                    index_buffer: mesh.buffers.index_buffer,
+                    images: vec![white_texture, white_texture],
+                });
+                bindings.vertex_buffers[0] = mesh.buffers.vertex_buffer;
+                bindings.index_buffer = mesh.buffers.index_buffer;
+                bindings
+            } else {
+                let bindings = &mut self.draw_calls_bindings[stream_slot];
+                stream_slot += 1;
+                grow_stream_buffer::<Vertex>(
+                    ctx,
+                    &mut bindings.vertex_buffers[0],
+                    BufferType::VertexBuffer,
+                    dc.vertices_count,
+                    self.max_vertices,
+                );
+                grow_stream_buffer::<u16>(
+                    ctx,
+                    &mut bindings.index_buffer,
+                    BufferType::IndexBuffer,
+                    dc.indices_count,
+                    self.max_indices,
+                );
+                bindings
+            };
             let pipeline = self.pipelines.get_quad_pipeline_mut(dc.pipeline);
 
             let (width, height) = if let Some(render_pass) = dc.render_pass {
@@ -801,20 +854,26 @@ impl QuadGl {
                 ctx.begin_default_pass(PassAction::Nothing);
             }
 
-            ctx.buffer_update(
-                bindings.vertex_buffers[0],
-                BufferSource::slice(
-                    &self.batch_vertex_buffer
-                        [dc.vertices_start..(dc.vertices_start + dc.vertices_count)],
-                ),
-            );
-            ctx.buffer_update(
-                bindings.index_buffer,
-                BufferSource::slice(
-                    &self.batch_index_buffer
-                        [dc.indices_start..(dc.indices_start + dc.indices_count)],
-                ),
-            );
+            if dc.retained.is_none() {
+                ctx.buffer_update(
+                    bindings.vertex_buffers[0],
+                    BufferSource::slice(
+                        &self.batch_vertex_buffer
+                            [dc.vertices_start..(dc.vertices_start + dc.vertices_count)],
+                    ),
+                );
+                ctx.buffer_update(
+                    bindings.index_buffer,
+                    BufferSource::slice(
+                        &self.batch_index_buffer
+                            [dc.indices_start..(dc.indices_start + dc.indices_count)],
+                    ),
+                );
+                #[cfg(test)]
+                {
+                    self.stream_buffer_updates += 2;
+                }
+            }
 
             bindings.images[0] = dc.texture.unwrap_or(white_texture);
             bindings.images[1] = self
@@ -885,11 +944,13 @@ impl QuadGl {
             dc.indices_count = 0;
             dc.vertices_start = 0;
             dc.indices_start = 0;
+            dc.retained = None;
         }
 
         self.draw_calls_count = 0;
         self.batch_index_buffer.clear();
         self.batch_vertex_buffer.clear();
+        self.collect_retained_meshes(ctx);
     }
 
     pub(crate) fn capture(&mut self, capture: bool) {
@@ -965,6 +1026,102 @@ impl QuadGl {
         self.state.draw_mode = mode;
     }
 
+    pub(crate) fn upload_retained_mesh(
+        &mut self,
+        ctx: &mut dyn RenderingBackend,
+        vertices: &[Vertex],
+        indices: &[u16],
+    ) -> Arc<RetainedMeshBuffers> {
+        self.collect_retained_meshes(ctx);
+        let buffers = Arc::new(RetainedMeshBuffers {
+            vertex_buffer: ctx.new_buffer(
+                BufferType::VertexBuffer,
+                BufferUsage::Immutable,
+                BufferSource::slice(vertices),
+            ),
+            index_buffer: ctx.new_buffer(
+                BufferType::IndexBuffer,
+                BufferUsage::Immutable,
+                BufferSource::slice(indices),
+            ),
+            vertices_count: vertices.len(),
+            indices_count: indices.len(),
+        });
+        #[cfg(test)]
+        {
+            self.retained_buffer_uploads += 2;
+        }
+        self.retained_meshes.push(buffers.clone());
+        buffers
+    }
+
+    fn collect_retained_meshes(&mut self, ctx: &mut dyn RenderingBackend) {
+        self.retained_meshes.retain(|buffers| {
+            if Arc::strong_count(buffers) == 1 {
+                ctx.delete_buffer(buffers.vertex_buffer);
+                ctx.delete_buffer(buffers.index_buffer);
+                #[cfg(test)]
+                {
+                    self.retained_buffer_deletions += 2;
+                }
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    pub(crate) fn geometry_retained(
+        &mut self,
+        mesh: &crate::models::RetainedMesh,
+        transform: glam::Mat4,
+    ) {
+        let pip = self.state.pipeline.unwrap_or(
+            self.pipelines
+                .get(DrawMode::Triangles, self.state.depth_test_enable),
+        );
+        let uniforms = self.state.pipeline.map(|pipeline| {
+            self.pipelines
+                .get_quad_pipeline_mut(pipeline)
+                .uniforms_data
+                .clone()
+        });
+        let texture = mesh.texture.as_ref().map(Texture2D::raw_miniquad_id);
+        let model = self.state.model() * transform;
+        if self.draw_calls_count == self.draw_calls.len() {
+            self.draw_calls.push(DrawCall::new(
+                texture,
+                model,
+                DrawMode::Triangles,
+                pip,
+                None,
+                self.state.render_pass,
+            ));
+        }
+        let dc = &mut self.draw_calls[self.draw_calls_count];
+        dc.vertices_start = 0;
+        dc.indices_start = 0;
+        dc.vertices_count = mesh.buffers.vertices_count;
+        dc.indices_count = mesh.buffers.indices_count;
+        dc.clip = self.state.clip;
+        dc.viewport = self.state.viewport;
+        dc.texture = texture;
+        dc.model = model;
+        dc.draw_mode = DrawMode::Triangles;
+        dc.pipeline = pip;
+        dc.uniforms = uniforms;
+        dc.textures = self
+            .pipelines
+            .get_quad_pipeline_mut(pip)
+            .textures_data
+            .clone();
+        dc.render_pass = self.state.render_pass;
+        dc.capture = self.state.capture;
+        dc.retained = Some(mesh.clone());
+        self.draw_calls_count += 1;
+        self.state.break_batching = false;
+    }
+
     pub fn geometry(&mut self, vertices: &[Vertex], indices: &[u16]) {
         if vertices.len() >= self.max_vertices || indices.len() >= self.max_indices {
             warn!("geometry() exceeded max drawcall size, clamping");
@@ -986,7 +1143,8 @@ impl QuadGl {
         let previous_dc = previous_dc_ix.and_then(|ix| self.draw_calls.get(ix));
 
         if previous_dc.map_or(true, |draw_call| {
-            draw_call.texture != self.state.texture
+            draw_call.retained.is_some()
+                || draw_call.texture != self.state.texture
                 || draw_call.clip != self.state.clip
                 || draw_call.viewport != self.state.viewport
                 || draw_call.model != self.state.model()
@@ -1018,6 +1176,7 @@ impl QuadGl {
                 ));
             }
             self.draw_calls[self.draw_calls_count].texture = self.state.texture;
+            self.draw_calls[self.draw_calls_count].retained = None;
             self.draw_calls[self.draw_calls_count].uniforms = uniforms;
             self.draw_calls[self.draw_calls_count].textures = self
                 .pipelines
@@ -1029,6 +1188,7 @@ impl QuadGl {
             self.draw_calls[self.draw_calls_count].clip = self.state.clip;
             self.draw_calls[self.draw_calls_count].viewport = self.state.viewport;
             self.draw_calls[self.draw_calls_count].model = self.state.model();
+            self.draw_calls[self.draw_calls_count].draw_mode = self.state.draw_mode;
             self.draw_calls[self.draw_calls_count].pipeline = pip;
             self.draw_calls[self.draw_calls_count].render_pass = self.state.render_pass;
             self.draw_calls[self.draw_calls_count].capture = self.state.capture;
@@ -1103,6 +1263,7 @@ impl QuadGl {
         self.max_vertices = max_vertices;
         self.max_indices = max_indices;
         self.clear_draw_calls();
+        self.collect_retained_meshes(ctx);
         // This explicit, infrequent reset is also used between large scenes.
         // Release old CPU high-water allocations so the next asset load can
         // reuse that memory; ordinary frame clears retain capacity as usual.
@@ -1149,6 +1310,104 @@ mod stream_buffer_tests {
             stream_buffer_capacity(usize::MAX / 2 + 1, usize::MAX, usize::MAX),
             usize::MAX
         );
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod retained_buffer_tests {
+    use super::*;
+    use crate::models::{draw_mesh, draw_retained_mesh, Mesh, RetainedMesh};
+
+    // Kept separate from headless tests: this exercises actual native buffer
+    // creation and drawing, with counters compiled out of normal builds.
+    #[test]
+    #[ignore = "requires a native graphics context"]
+    fn retained_uploads_ordering_and_lifetime() {
+        crate::Window::new("retained mesh buffer test", async {
+            let source = Mesh {
+                vertices: vec![Vertex::new(0., 0., 0., 0., 0., crate::color::WHITE); 3],
+                indices: vec![0, 1, 2],
+                texture: None,
+            };
+            let retained = RetainedMesh::from_mesh(&source).unwrap();
+            let clone = retained.clone();
+            let base = glam::Mat4::from_translation(glam::vec3(4., 5., 6.));
+            let instance = glam::Mat4::from_scale(glam::vec3(2., 3., 4.));
+            crate::get_context().gl.push_model_matrix(base);
+            draw_retained_mesh(&retained, instance);
+            draw_retained_mesh(&clone, glam::Mat4::IDENTITY);
+            crate::get_context().gl.pop_model_matrix();
+            {
+                let gl = &crate::get_context().gl;
+                assert_eq!(gl.retained_buffer_uploads, 2);
+                assert_eq!(gl.draw_calls_count, 2);
+                assert_eq!(gl.draw_calls[0].model, base * instance);
+                assert_eq!(gl.draw_calls[1].model, base);
+                assert!(gl.batch_vertex_buffer.is_empty());
+                assert!(gl.batch_index_buffer.is_empty());
+            }
+            crate::get_context().perform_render_passes();
+            crate::window::next_frame().await;
+            draw_retained_mesh(&retained, glam::Mat4::IDENTITY);
+            crate::get_context().perform_render_passes();
+            {
+                let gl = &crate::get_context().gl;
+                assert_eq!(gl.retained_buffer_uploads, 2);
+                assert_eq!(gl.stream_buffer_updates, 0);
+                assert_eq!(gl.draw_calls_bindings.len(), 0);
+                assert_eq!(gl.retained_meshes.len(), 1);
+            }
+
+            draw_mesh(&source);
+            draw_retained_mesh(&clone, glam::Mat4::IDENTITY);
+            draw_mesh(&source);
+            {
+                let gl = &crate::get_context().gl;
+                assert_eq!(gl.draw_calls_count, 3);
+                assert!(gl.draw_calls[0].retained.is_none());
+                assert!(gl.draw_calls[1].retained.is_some());
+                assert!(gl.draw_calls[2].retained.is_none());
+                assert_eq!(gl.batch_vertex_buffer.len(), 6);
+                assert_eq!(gl.batch_index_buffer, [0, 1, 2, 0, 1, 2]);
+            }
+            drop(retained);
+            drop(clone);
+            assert_eq!(crate::get_context().gl.retained_meshes.len(), 1);
+            crate::get_context().perform_render_passes();
+            {
+                let gl = &crate::get_context().gl;
+                assert_eq!(gl.retained_buffer_uploads, 2);
+                assert_eq!(gl.stream_buffer_updates, 4);
+                assert_eq!(gl.draw_calls_bindings.len(), 2);
+                assert!(gl.retained_meshes.is_empty());
+                assert_eq!(gl.retained_buffer_deletions, 2);
+            }
+
+            for reset in [false, true] {
+                let mesh = RetainedMesh::from_mesh(&source).unwrap();
+                draw_retained_mesh(&mesh, glam::Mat4::IDENTITY);
+                drop(mesh);
+                let gl = &mut crate::get_context().gl;
+                if reset {
+                    gl.reset();
+                } else {
+                    gl.clear_draw_calls();
+                }
+                assert!(gl.draw_calls.iter().all(|dc| dc.retained.is_none()));
+                crate::get_context().perform_render_passes();
+                assert!(crate::get_context().gl.retained_meshes.is_empty());
+            }
+            assert_eq!(crate::get_context().gl.retained_buffer_deletions, 6);
+
+            let discarded = RetainedMesh::from_mesh(&source).unwrap();
+            drop(discarded);
+            let next = RetainedMesh::from_mesh(&source).unwrap();
+            assert_eq!(crate::get_context().gl.retained_buffer_deletions, 8);
+            assert_eq!(crate::get_context().gl.retained_meshes.len(), 1);
+            drop(next);
+            crate::get_context().perform_render_passes();
+            assert_eq!(crate::get_context().gl.retained_buffer_deletions, 10);
+        });
     }
 }
 
@@ -1211,7 +1470,7 @@ mod shader {
     {
         RasterizerData out;
 
-        out.position = uniforms.Model * uniforms.Projection * float4(v.position, 1);
+        out.position = uniforms.Projection * uniforms.Model * float4(v.position, 1);
         out.color = v.color0 / 255.0;
         out.uv = v.texcoord;
 

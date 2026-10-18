@@ -20,6 +20,7 @@ cargo run --example frustum_cull
 cargo run --example debug_draw
 cargo run --features gltf --example gltf_textured
 cargo run --example material_depth_check
+cargo run --example retained_mesh
 ```
 
 `material_depth_check` is an OpenGL/WebGL shader regression that exits after checking rendered pixels. It verifies that opaque surfaces hide glass, transparent surfaces keep depth testing without writing depth, subsequent clears reset depth, and changing a custom texture preserves the bindings of earlier queued draws. It also exercises adaptive streaming-buffer growth, reuse with smaller geometry, and recreation after the configured capacity changes.
@@ -81,6 +82,12 @@ A static scene of one of each wireframe: `draw_aabb`, `draw_obb`, `draw_capsule_
 Requires `--features gltf`. With no argument it draws `assets/textured_quad.glb`, a checkerboard quad. An argument is a `.glb` path passed to `load_file`, then `GltfModel::from_bytes`. The camera orbits the model's bounds with `up: Vec3::Y`. `model.draw()` submits the textured chunks. The on-screen line is `model.stats`.
 
 `gltf_textured` still builds without the feature: that binary prints a message and exits. It does not parse a file unless `gltf` is enabled.
+
+## `retained_mesh`
+
+Uploads one small mesh once and draws it repeatedly with different transforms,
+mixed with ordinary immediate drawing. Handle clones share immutable geometry;
+this is separate draw submission, not hardware instancing. Escape quits.
 
 ## Assets
 

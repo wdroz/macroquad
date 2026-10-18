@@ -8,6 +8,39 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 
 There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, and `slide_sphere` are queries a game uses to write those itself. The physics and character sections below are that application code. The narrative for loading a Blender level is [blender-to-macroquad.md](blender-to-macroquad.md).
 
+## Retained geometry
+
+`Mesh` and `draw_mesh` remain the immediate path. For unchanged geometry,
+`RetainedMesh::from_mesh(&mesh)?` uploads immutable vertex/index buffers once.
+`draw_retained_mesh(&retained, transform)` queues a draw using the current
+camera, material, viewport, scissor and render target. Clones share the buffers;
+each submission remains an ordinary draw call, without hardware instancing.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn draw_instances(mesh: &Mesh) -> Result<(), RetainedMeshError> {
+let retained = RetainedMesh::from_mesh(mesh)?; // once, outside the frame loop
+draw_retained_mesh(&retained, Mat4::IDENTITY);
+draw_retained_mesh(&retained, Mat4::from_translation(vec3(2.0, 0.0, 0.0)));
+# Ok(()) }
+```
+
+Immediate and retained submissions keep their relative order, and custom
+uniforms and texture bindings are captured per draw. The supplied transform is
+multiplied after the model stack. Custom shaders receive that composed `Model`
+matrix; they still handle normal transforms and reflected winding/culling.
+The handle's `texture` may be changed without reuploading geometry.
+
+The source CPU mesh can be released after upload. Invalid indices, incomplete
+triangles, empty meshes and meshes exceeding the `u16` vertex range are rejected
+before allocation. Streaming batch capacity does not clamp retained geometry.
+Queued draws keep their mesh alive even if the caller drops its last handle.
+Unused buffers are collected on a renderer flush or the next retained upload;
+ordinary frame completion flushes automatically. Cancelled draws release their
+queued references too. Live retained buffers survive streaming-capacity resets.
+This API does not yet provide a retained glTF adapter or resource diagnostics.
+See `examples/retained_mesh.rs` for a complete example.
+
 ## Ray hits
 
 Every ray query returns `Option<RayHit>`:
