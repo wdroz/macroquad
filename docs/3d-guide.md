@@ -346,9 +346,9 @@ still cannot remove full-resolution decode peaks.
 load counts, not measured memory or per-frame GPU costs. `textures` counts
 base-color and emissive uploads only. Normal and metallic-roughness images,
 their UV selection and transforms, and tangents are retained by
-`GltfModel::from_bytes_with_material_maps` and `GltfMaterialMaps`; the lit
-renderer does not sample them yet. Skinning, animation, morph weights, and
-PBR remain roadmap work.
+`GltfModel::from_bytes_with_material_maps` and `GltfMaterialMaps`.
+`submit_shaded` samples those maps. Skinning, animation, morph weights,
+environment lighting, shadows and transmission remain roadmap work.
 
 ## Opt-in glTF material passes
 
@@ -458,13 +458,29 @@ uses Y-up, sky `(0.6, 0.6, 0.6)`, ground `(0.2, 0.2, 0.2)`, a direction toward
 still requires opting in with `Some` for each collection.
 
 For a unit world normal `N`, the hemisphere weight is `0.5 + 0.5 * dot(N, up)`;
-the directional weight is `max(dot(N, toward_light), 0)`. The renderer adds
-these light contributions, multiplies the linear base color by the result,
-then adds the textured emissive contribution. Emission stays independent of
-the lights, so dark areas of an emissive texture remain dark. The exact base
-and emissive factors are still applied once. Metallic and roughness factors
-are retained in `GltfSurface` for custom shaders but are not used by this
-diffuse model; it has no specular highlights or PBR response.
+the directional weight is `max(dot(N, toward_light), 0)`. `submit` and
+`submit_part` add these light contributions, multiply the linear base color by
+the result, then add the textured emissive contribution. Emission stays
+independent of the lights, so dark areas of an emissive texture remain dark.
+The exact base and emissive factors are still applied once. Those calls do not
+use metallic or roughness factors and do not sample normal or
+metallic-roughness maps.
+
+`submit_shaded`, `submit_part_shaded`, `submit_retained_shaded` and
+`submit_retained_part_shaded` use the same lights with a directional GGX
+response. A missing metallic-roughness map is white, so the surface factors
+pass through: green is roughness and blue is metallic, both linear, and red
+occlusion is ignored. A missing normal map is a flat `(128, 128, 255)` texel,
+not white. Sampled normals are linear, `rgb * 2 - 1`, then `normalTexture.scale`
+on XY. The tangent frame takes the loader's node-world tangent, transforms
+that tangent by the instance matrix, and transforms the geometric normal by
+the inverse transpose. A mirrored instance flips the bitangent. The view vector
+is `normalize(camera_position - world_position)`, so an orthographic camera
+still gets a perspective view. `KHR_materials_unlit` and a frame whose lighting
+is `None` ignore the maps and stay on the preview path. There is no image-based
+lighting, shadow map or transmission. Retained draws need a `GltfShadingModel`
+built with `GltfShadingModel::from_model` while the CPU mesh still exists; that
+upload does not change the retained position buffers.
 
 Imported normals use the inverse transpose of the composed parent/instance
 matrix, including nonuniform scale. Reflections preserve logical front faces;
@@ -492,8 +508,9 @@ and selects the default material. This makes dropping the renderer afterward
 safe; select your own material again before further custom drawing. It does not
 advance a frame, change the camera or clear the target. Keep custom materials
 used by earlier queued draws alive until this flush completes, even after
-switching to a different material. PBR, normal maps,
-refraction, environment reflections and shadows are separate work.
+switching to a different material. Environment reflections, occlusion,
+refraction and shadows are separate work. Normal and metallic-roughness maps
+are sampled only by the `submit_*_shaded` methods above.
 
 Inspect source bytes once to get structured warnings without opening a window
 or decoding images/geometry:
@@ -511,11 +528,12 @@ Warnings identify the loaded/source node, node path, primitive and material;
 unsupported map warnings also identify their source image when available.
 They describe the source bytes, so call-site material edits are not reflected.
 Unused materials and nodes outside the selected scene are omitted. Non-unlit
-materials retain the `Lighting` warning: the default is a preview, and the
-optional diffuse lighting does not implement glTF's PBR response. This source
-inspection does not know the lighting chosen later for a collection. Unsupported
-maps and material extensions remain warnings; loader errors (such as unsupported
-UV mappings) still fail loading normally.
+materials retain the `Lighting` warning: the shaded path is still not glTF's
+full lighting model. This source inspection does not know the lighting chosen
+later for a collection. Normal and metallic-roughness maps are no longer
+warnings. Occlusion, transmission and other material extensions remain
+warnings; loader errors (such as unsupported UV mappings) still fail loading
+normally.
 See `examples/gltf_materials.rs`, which submits whole models, and the tiny
 native/browser pixel fixture `examples/gltf_material_check.rs`, which also
 checks selected-part filtering, independent CPU and retained transforms, and

@@ -10,7 +10,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Continuous box/sphere hits, oriented cover, slide against all four solid shapes |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
-| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, and the selected-part pixel fixture |
+| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, the selected-part pixel fixture, and shaded normal/roughness maps |
 | Renderer behavior | `retained_mesh`, `material_depth_check` | Immutable buffers and draw order, independent depth writes/testing, queued samplers |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 
@@ -169,9 +169,10 @@ It enables optional hemisphere/directional diffuse lighting and exposes its
 world-space direction and linear light colors as `GltfLighting` values. L toggles
 lighting to compare with the base/emissive preview. The second instance has a
 reflected, nonuniform scale. Imported normals use the composed inverse transpose,
-and textured emission remains independent of lighting. Normal and
-metallic-roughness images are retained by the loader and are not sampled here.
-Metallic/roughness PBR, highlights, refraction and shadows are absent. `KHR_materials_unlit` uses base
+and textured emission remains independent of lighting. This sample calls
+`submit_retained`, so it does not sample normal or metallic-roughness maps.
+`gltf_shading` does. Environment lighting, occlusion, refraction and shadows
+are absent. `KHR_materials_unlit` uses base
 color only in both modes. Escape exits.
 
 The default output encodes RGB before destination-space blending. Use linear
@@ -182,6 +183,15 @@ cloning the model, borrow `model.parts` and call `submit_retained_part` with
 an extra affine transform. Positions are already baked, so a spin around a
 chosen point is `T(pivot) * R * T(-pivot)`. See the
 [material passes guide](../docs/3d-guide.md#opt-in-gltf-material-passes).
+
+## `gltf_shading`
+
+Requires `--features gltf`. Draws one procedural quad with `submit_shaded`.
+The left half is a rough dielectric with a flat normal. The right half is a
+rough metal whose normal map points toward +X. The directional light orbits.
+Maps are linear: normal-map XY is the tangent direction after the scale, green
+is roughness and blue is metallic. Escape exits. Without `gltf`, it prints a
+feature reminder and exits.
 
 ## `gltf_material_check`
 

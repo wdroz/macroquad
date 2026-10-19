@@ -59,9 +59,11 @@
 //! alpha masks, globally sorted transparent instances and material sidedness.
 //! It uses exact material factors instead of the baked vertex colors and offers
 //! optional [`GltfLighting`] for hemisphere/directional diffuse lighting
-//! with imported normals. Normal and metallic-roughness images are retained by
-//! [`GltfModel::from_bytes_with_material_maps`] for a later shading pass.
-//! PBR and refraction are not included.
+//! with imported normals. [`GltfMaterialFrame::submit_shaded`] samples the
+//! normal and metallic-roughness images retained by
+//! [`GltfModel::from_bytes_with_material_maps`]. That pass is directional GGX
+//! plus the hemisphere as diffuse irradiance. Environment reflections,
+//! occlusion, shadows and refraction are not included.
 //! [`GltfColorOutput`] makes the destination
 //! color-space policy explicit; the existing draw methods stay unchanged.
 //! [`GltfMaterialFrame::submit`] and [`GltfMaterialFrame::submit_retained`]
@@ -94,12 +96,16 @@ mod loading;
 mod material;
 mod material_maps;
 mod material_warnings;
+mod shading;
 pub use crate::gltf::GltfImageLimits;
 pub use diagnostics::*;
 pub use loading::*;
 pub use material::*;
 pub use material_maps::*;
 pub use material_warnings::*;
+pub use shading::{
+    gltf_tangent_frame, gltf_tangent_normal, shade_gltf_surface, GltfShadingModel, GltfShadingPart,
+};
 
 /// CPU-side material values, retained for a custom shader.
 ///
@@ -565,7 +571,9 @@ impl GltfModel {
     /// emissive images. A missing UV set or a malformed `KHR_texture_transform`
     /// is an error that names the material. Occlusion maps stay unloaded.
     /// [`Self::from_bytes`] validates the same maps and then drops the handles.
-    /// The material renderer does not sample them yet.
+    /// [`GltfMaterialFrame::submit_shaded`](crate::gltf_draw::GltfMaterialFrame::submit_shaded)
+    /// samples them. [`GltfMaterialFrame::submit`](crate::gltf_draw::GltfMaterialFrame::submit)
+    /// does not.
     ///
     /// ```no_run
     /// use macroquad::gltf_draw::{GltfLoadSettings, GltfModel};

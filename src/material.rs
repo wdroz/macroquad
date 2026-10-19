@@ -145,6 +145,26 @@ pub fn load_material(
     })
 }
 
+#[cfg_attr(not(feature = "gltf"), allow(dead_code))]
+pub(crate) fn load_material_with_attributes(
+    shader: crate::ShaderSource,
+    params: MaterialParams,
+    attributes: &[miniquad::VertexAttribute],
+) -> Result<Material, Error> {
+    let context = &mut get_context();
+    let pipeline = context.gl.make_pipeline_with_attributes(
+        &mut *context.quad_context,
+        shader,
+        params.pipeline_params,
+        params.uniforms,
+        params.textures,
+        attributes,
+    )?;
+    Ok(Material {
+        pipeline: Arc::new(GlPipelineGuarded(pipeline)),
+    })
+}
+
 /// All following macroquad rendering calls will use the given material.
 pub fn gl_use_material(material: &Material) {
     get_context().gl.pipeline(Some(material.pipeline.0));

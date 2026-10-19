@@ -1,7 +1,8 @@
 //! GPU copies of normal and metallic-roughness maps.
 //!
 //! The textures live here, not on [`super::GltfDrawMesh`], so existing draw-mesh
-//! struct literals stay valid. The renderer does not sample them yet.
+//! struct literals stay valid. [`super::GltfMaterialFrame::submit_shaded`] samples
+//! them; [`super::GltfMaterialFrame::submit`] does not.
 
 use glam::{Vec2, Vec3, Vec4};
 

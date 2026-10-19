@@ -16,12 +16,20 @@ use std::collections::HashSet;
 pub enum GltfUnsupportedMaterialFeature {
     /// A material without `KHR_materials_unlit` expects glTF's lighting model.
     /// The renderer defaults to base-plus-emission preview. Opting into
-    /// [`super::GltfLighting`] adds diffuse hemisphere/directional lighting,
-    /// but still omits metallic/roughness response, reflections and shadows.
+    /// [`super::GltfLighting`] adds diffuse hemisphere/directional lighting.
+    /// [`super::GltfMaterialFrame::submit_shaded`] also samples normal and
+    /// metallic-roughness maps. Environment reflections, occlusion and shadows
+    /// are still omitted, so this warning remains.
     Lighting,
-    /// A normal map is retained by the loader but not sampled by this renderer.
+    /// Previously reported a normal map the renderer could not sample.
+    /// Retained so existing matches still compile. The lit renderer samples
+    /// the map when it is submitted with the chunk, and this variant is no
+    /// longer produced.
     NormalTexture,
-    /// A metallic-roughness map is retained by the loader but not sampled by this renderer.
+    /// Previously reported a metallic-roughness map the renderer could not sample.
+    /// Retained so existing matches still compile. The lit renderer samples
+    /// the map when it is submitted with the chunk, and this variant is no
+    /// longer produced.
     MetallicRoughnessTexture,
     /// An occlusion map is not loaded or sampled by this renderer.
     OcclusionTexture,
@@ -89,8 +97,10 @@ pub struct GltfMaterialWarning {
 /// Every material without `KHR_materials_unlit`, including the default material,
 /// produces [`GltfUnsupportedMaterialFeature::Lighting`]. This source inspection
 /// does not know the frame's lighting choice: the default base-plus-emissive
-/// preview and the optional [`super::GltfLighting`] diffuse model both omit
-/// glTF's metallic/roughness lighting response. For `KHR_materials_unlit`, base color and alpha
+/// preview omits the metallic-roughness response. Opting into
+/// [`super::GltfLighting`] and submitting material maps evaluates tangent-space
+/// normals and a directional metallic-roughness term, still without
+/// environment lighting, occlusion, or shadows. For `KHR_materials_unlit`, base color and alpha
 /// define the appearance; emissive, normal, occlusion and metallic-roughness
 /// properties are ignored as required by that extension, without warnings.
 /// Optional material extensions other than unlit and emissive strength are
@@ -172,15 +182,6 @@ pub fn gltf_material_warnings(bytes: &[u8]) -> Result<Vec<GltfMaterialWarning>, 
                 }
                 if material.extension_value("KHR_materials_unlit").is_none() {
                     add(F::Lighting, None);
-                    if let Some(info) = material.normal_texture() {
-                        add(F::NormalTexture, Some(info.texture()));
-                    }
-                    if let Some(info) = material
-                        .pbr_metallic_roughness()
-                        .metallic_roughness_texture()
-                    {
-                        add(F::MetallicRoughnessTexture, Some(info.texture()));
-                    }
                     if let Some(info) = material.occlusion_texture() {
                         add(F::OcclusionTexture, Some(info.texture()));
                     }
@@ -296,18 +297,14 @@ mod tests {
         use GltfUnsupportedMaterialFeature as F;
         assert_eq!(
             warnings.iter().map(|w| &w.feature).collect::<Vec<_>>(),
-            [
-                &F::Lighting,
-                &F::NormalTexture,
-                &F::MetallicRoughnessTexture,
-                &F::OcclusionTexture
-            ]
+            [&F::Lighting, &F::OcclusionTexture]
         );
-        assert_eq!(warnings[1].image_index, Some(0));
-        assert_eq!(warnings[1].image_name.as_deref(), Some("normal pixels"));
-        assert_eq!(warnings[2].image_index, Some(1));
-        assert_eq!(warnings[3].image_index, Some(2));
-        assert_eq!(warnings[3].image_name, None);
+        assert_eq!(warnings[1].image_index, Some(2));
+        assert_eq!(warnings[1].image_name, None);
+        assert!(warnings.iter().all(|warning| !matches!(
+            warning.feature,
+            F::NormalTexture | F::MetallicRoughnessTexture
+        )));
     }
 
     #[test]

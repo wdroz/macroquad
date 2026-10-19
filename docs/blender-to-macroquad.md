@@ -424,11 +424,14 @@ with the inverse transpose and keeps textured emission independent of lighting;
 Use `frame.set_lighting(Some(GltfLighting::default()))?` for a starting light,
 then set world-space `hemisphere_up`, `directional_direction` (toward the light),
 and linear RGB `sky_color`, `ground_color`, and `directional_color` to suit the
-scene. It is diffuse lighting: metallic/roughness shading, highlights,
-normal-map sampling, refraction and shadows are not implemented. The loader
-retains normal and metallic-roughness images, UV transforms, and tangents
-through `GltfModel::from_bytes_with_material_maps`. Keep custom shaders for
-sampling those maps until a later pass does. The renderer does not alter existing current-material draws. See the
+scene. `submit` stays diffuse and ignores metallic, roughness and maps.
+`submit_shaded` samples the retained normal and metallic-roughness images:
+linear texels, distinct UV sets, `KHR_texture_transform`, and tangents,
+including a mirrored node's handedness. It adds directional GGX highlights on
+top of the hemisphere. Occlusion, image-based lighting, refraction and shadows
+are not implemented. Load the maps with
+`GltfModel::from_bytes_with_material_maps` (or `GltfModelLoader::take_material_maps`).
+`from_bytes` validates them and drops the handles. The renderer does not alter existing current-material draws. See the
 [material passes guide](3d-guide.md#opt-in-gltf-material-passes) before replacing
 a custom renderer, especially its transparency ordering and output-space limits.
 
@@ -436,5 +439,5 @@ a custom renderer, especially its transparency ordering and output-space limits.
 
 - `GltfScene::with_up_axis` does not change a `GltfModel`, and the reverse is also true. Call both with the same axis when the draw and the markers should leave Y-up. A camera can instead keep `up: Vec3::Y` and skip both calls. That is what the examples do.
 - `GltfModel` still uploads its own GPU textures, and only from a `.glb`. Sampler wrap and filter stay on that draw path. `GltfScene` does not turn its RGBA bytes into a `Texture2D`.
-- Skins, animation clips, morph targets, editable local transforms, and PBR shading are not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) but the material renderer does not sample them. `submit_part` and `submit_retained_part` move one baked chunk by an extra matrix; they do not recover a Blender pivot, a rest pose, or the collider that belongs to that node. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Material passes and diffuse lighting are opt-in; ordinary `draw` calls still use the current material. A name such as `player_spawn.001` is still not a suffix spawn, and a custom `mq_tag` is still not stored.
+- Skins, animation clips, morph targets, editable local transforms, and full PBR shading (image-based lighting, occlusion, shadows, transmission) are not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) and `submit_shaded` samples them. `submit_part` and `submit_retained_part` move one baked chunk by an extra matrix; they do not recover a Blender pivot, a rest pose, or the collider that belongs to that node. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Material passes and diffuse lighting are opt-in; ordinary `draw` calls still use the current material. A name such as `player_spawn.001` is still not a suffix spawn, and a custom `mq_tag` is still not stored.
 - `assets/room.glb` is the file you export in this tutorial, not a checked-in asset. The triangle and checkerboard files are the small fixtures in this repository. The historical Marble Maze and Cinder Court game rounds are documented in the roadmap; their games and level assets are not distributed here.

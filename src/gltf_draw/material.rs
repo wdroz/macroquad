@@ -4,9 +4,15 @@ use miniquad::{
     PipelineParams, ShaderSource, UniformDesc, UniformType,
 };
 
-use super::{
-    GltfAlphaMode, GltfDrawMesh, GltfModel, GltfSurface, RetainedGltfDrawMesh, RetainedGltfModel,
+use super::shading::{
+    mirrored, normal_transform, shading_vertices, validate_shading_maps, GltfShadingModel,
+    GltfShadingPart, SHADED_FRAGMENT, SHADED_METAL, SHADED_VERTEX,
 };
+use super::{
+    GltfAlphaMode, GltfDrawMesh, GltfModel, GltfModelMaterialMaps, GltfPartMaterialMaps,
+    GltfSurface, RetainedGltfDrawMesh, RetainedGltfModel,
+};
+use crate::quad_gl::SHADING_ATTRIBUTES;
 use crate::{
     material::{gl_use_default_material, gl_use_material, load_material, Material, MaterialParams},
     models::draw_mesh,
@@ -41,9 +47,11 @@ pub enum GltfColorOutput {
 /// World-space hemisphere and Lambert directional light for the glTF renderer.
 ///
 /// Colors are nonnegative **linear RGB** irradiance multipliers; values above
-/// one are allowed. No physical units, attenuation, specular term, metallic or
-/// roughness response, occlusion, tone mapping or shadows are implied. The
-/// diffuse base color is multiplied by
+/// one are allowed. No physical units, attenuation, occlusion, tone mapping or
+/// shadows are implied. [`GltfMaterialFrame::submit`] multiplies the diffuse
+/// base color by this light and does not apply metallic or roughness factors.
+/// [`GltfMaterialFrame::submit_shaded`] adds a directional specular term.
+/// The diffuse base color is multiplied by
 /// `mix(ground_color, sky_color, 0.5 + 0.5 * normal.dot(hemisphere_up))`
 /// plus `directional_color * max(normal.dot(directional_direction), 0)`.
 /// Emission is added afterwards, independently of the lights.
@@ -149,8 +157,9 @@ pub struct GltfMaterialStats {
 /// An absent texture means white. By default, ordinary materials preview base
 /// plus emission. [`GltfMaterialFrame::set_lighting`] optionally applies
 /// hemisphere/directional lighting using imported normals; `KHR_materials_unlit`
-/// always uses only base color. Metallic/roughness factors, normal maps,
-/// occlusion, transmission, refraction and shadows are not evaluated.
+/// always uses only base color. [`GltfMaterialFrame::submit_shaded`] samples
+/// normal and metallic-roughness maps. Occlusion, transmission, refraction,
+/// environment lighting and shadows are not evaluated.
 /// Inspect [`super::gltf_material_warnings`] before
 /// discarding the input bytes to identify unsupported source features.
 ///
@@ -183,7 +192,10 @@ pub struct GltfMaterialStats {
 pub struct GltfMaterialRenderer {
     // Opaque/mask and blend, each with double-sided, CCW and CW variants.
     materials: Vec<Material>,
+    shaded: Vec<Material>,
     white: Texture2D,
+    /// Linear `(128, 128, 255)` so a missing normal binding cannot decode as white.
+    flat_normal: Texture2D,
     _not_send_sync: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
@@ -229,9 +241,53 @@ impl GltfMaterialRenderer {
                 )?);
             }
         }
+        let mut shaded = Vec::with_capacity(6);
+        let shaded_uniforms = vec![
+            UniformDesc::new("BaseColor", UniformType::Float4),
+            UniformDesc::new("Emission", UniformType::Float4),
+            UniformDesc::new("AlphaOutput", UniformType::Float4),
+            UniformDesc::new("NormalTransform", UniformType::Mat4),
+            UniformDesc::new("LightParams", UniformType::Float4),
+            UniformDesc::new("HemisphereUp", UniformType::Float4),
+            UniformDesc::new("SkyColor", UniformType::Float4),
+            UniformDesc::new("GroundColor", UniformType::Float4),
+            UniformDesc::new("LightDirection", UniformType::Float4),
+            UniformDesc::new("LightColor", UniformType::Float4),
+            UniformDesc::new("MapParams", UniformType::Float4),
+            UniformDesc::new("CameraPos", UniformType::Float4),
+        ];
+        for blend in [false, true] {
+            for sidedness in 0..3 {
+                shaded.push(crate::material::load_material_with_attributes(
+                    match backend {
+                        Backend::OpenGl => ShaderSource::Glsl {
+                            vertex: SHADED_VERTEX,
+                            fragment: SHADED_FRAGMENT,
+                        },
+                        Backend::Metal => ShaderSource::Msl {
+                            program: SHADED_METAL,
+                        },
+                    },
+                    MaterialParams {
+                        pipeline_params: pipeline_params(blend, sidedness),
+                        uniforms: shaded_uniforms.clone(),
+                        textures: vec![
+                            "EmissiveTexture".into(),
+                            "NormalTexture".into(),
+                            "MetallicRoughnessTexture".into(),
+                        ],
+                    },
+                    &SHADING_ATTRIBUTES,
+                )?);
+            }
+        }
+        let flat_normal = Texture2D::from_rgba8(1, 1, &[128, 128, 255, 255]);
+        flat_normal.set_filter(crate::texture::FilterMode::Nearest);
         Ok(Self {
             materials,
+            shaded,
             white: Texture2D::unmanaged(crate::get_context().gl.white_texture),
+            flat_normal,
             _not_send_sync: std::marker::PhantomData,
         })
     }
@@ -459,6 +515,161 @@ impl<'a> GltfMaterialFrame<'a> {
         Ok(())
     }
 
+    /// Collects every CPU chunk together with its normal and metallic-roughness maps.
+    ///
+    /// `maps.parts` must match `model.parts` in order. Lighting must be enabled
+    /// on this frame or the maps are ignored and the chunk uses the base-color
+    /// preview. `KHR_materials_unlit` chunks also ignore the maps. Normal-map
+    /// texels stay linear: XY is the tangent-space direction after
+    /// `normalTexture.scale`, and Z is the outward component. Metallic-roughness
+    /// texels stay linear too; green is roughness and blue is metallic, each
+    /// multiplied by the surface factor. Red occlusion is not applied.
+    /// Tangents are the node-world values stored on the maps. The instance
+    /// matrix transforms them as vectors and the normal by the inverse
+    /// transpose. A normal map requires one tangent per vertex.
+    ///
+    /// This is a directional GGX response plus the existing hemisphere as
+    /// diffuse irradiance. It does not add environment reflections, shadows,
+    /// or transmission. Existing [`Self::submit`] is unchanged.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn example<'a>(
+    /// #     frame: &mut GltfMaterialFrame<'a>,
+    /// #     model: &'a GltfModel,
+    /// #     maps: &'a GltfModelMaterialMaps,
+    /// # ) -> Result<(), String> {
+    /// frame.set_lighting(Some(GltfLighting::default()))?;
+    /// frame.submit_shaded(model, maps, Mat4::IDENTITY)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn submit_shaded(
+        &mut self,
+        model: &'a GltfModel,
+        maps: &'a GltfModelMaterialMaps,
+        transform: Mat4,
+    ) -> Result<(), String> {
+        check_transform(transform)?;
+        if maps.parts.len() != model.parts.len() {
+            return Err(format!(
+                "glTF material maps have {} chunks and the model has {}",
+                maps.parts.len(),
+                model.parts.len()
+            ));
+        }
+        for (part, part_maps) in model.parts.iter().zip(&maps.parts) {
+            validate_shading_maps(part, part_maps)?;
+        }
+        self.draws.extend(
+            model
+                .parts
+                .iter()
+                .zip(&maps.parts)
+                .map(|(part, part_maps)| {
+                    Draw::shaded(Part::Cpu(part), transform, Maps::Cpu(part_maps))
+                }),
+        );
+        Ok(())
+    }
+
+    /// Collects one CPU chunk and its maps. See [`Self::submit_shaded`].
+    ///
+    /// A length or tangent mismatch returns an error and appends nothing.
+    /// The chunk and maps stay borrowed until the frame is drawn or dropped.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn example<'a>(
+    /// #     frame: &mut GltfMaterialFrame<'a>,
+    /// #     part: &'a GltfDrawMesh,
+    /// #     maps: &'a GltfPartMaterialMaps,
+    /// # ) -> Result<(), String> {
+    /// frame.submit_part_shaded(part, maps, Mat4::IDENTITY)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn submit_part_shaded(
+        &mut self,
+        part: &'a GltfDrawMesh,
+        maps: &'a GltfPartMaterialMaps,
+        transform: Mat4,
+    ) -> Result<(), String> {
+        check_transform(transform)?;
+        validate_shading_maps(part, maps)?;
+        self.draws
+            .push(Draw::shaded(Part::Cpu(part), transform, Maps::Cpu(maps)));
+        Ok(())
+    }
+
+    /// Collects retained chunks with shading buffers from [`GltfShadingModel`].
+    ///
+    /// The shading model must be built from the same CPU chunks, in the same
+    /// order, before that geometry is dropped. Drawing does not upload the
+    /// retained position buffers again. Map sampling follows [`Self::submit_shaded`].
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn example<'a>(
+    /// #     frame: &mut GltfMaterialFrame<'a>,
+    /// #     model: &'a RetainedGltfModel,
+    /// #     shading: &'a GltfShadingModel,
+    /// # ) -> Result<(), String> {
+    /// frame.set_lighting(Some(GltfLighting::default()))?;
+    /// frame.submit_retained_shaded(model, shading, Mat4::IDENTITY)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn submit_retained_shaded(
+        &mut self,
+        model: &'a RetainedGltfModel,
+        shading: &'a GltfShadingModel,
+        transform: Mat4,
+    ) -> Result<(), String> {
+        check_transform(transform)?;
+        if shading.parts().len() != model.parts.len() {
+            return Err(format!(
+                "glTF shading buffers have {} chunks and the retained model has {}",
+                shading.parts().len(),
+                model.parts.len()
+            ));
+        }
+        self.draws.extend(
+            model
+                .parts
+                .iter()
+                .zip(shading.parts())
+                .map(|(part, shading)| {
+                    Draw::shaded(Part::Retained(part), transform, Maps::Retained(shading))
+                }),
+        );
+        Ok(())
+    }
+
+    /// Collects one retained chunk and the shading buffers for that same chunk.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn example<'a>(
+    /// #     frame: &mut GltfMaterialFrame<'a>,
+    /// #     part: &'a RetainedGltfDrawMesh,
+    /// #     shading: &'a GltfShadingPart,
+    /// # ) -> Result<(), String> {
+    /// frame.submit_retained_part_shaded(part, shading, Mat4::IDENTITY)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn submit_retained_part_shaded(
+        &mut self,
+        part: &'a RetainedGltfDrawMesh,
+        shading: &'a GltfShadingPart,
+        transform: Mat4,
+    ) -> Result<(), String> {
+        check_transform(transform)?;
+        self.draws.push(Draw::shaded(
+            Part::Retained(part),
+            transform,
+            Maps::Retained(shading),
+        ));
+        Ok(())
+    }
+
     /// Draws opaque/masked chunks, then all blended chunks back to front.
     ///
     /// Sorting uses `(transformed_center - camera_position).dot(forward)`;
@@ -533,7 +744,23 @@ impl<'a> GltfMaterialFrame<'a> {
             } else {
                 1
             };
-            let material = &self.renderer.materials[usize::from(blend) * 3 + side];
+            let shaded = self.lighting.is_some() && !surface.unlit && draw.maps.is_some();
+            let prepared = if shaded {
+                match prepare_shaded(draw) {
+                    Some(prepared) => Some(prepared),
+                    None => {
+                        stats.skipped_draws += 1;
+                        continue;
+                    }
+                }
+            } else {
+                None
+            };
+            let material = if shaded {
+                &self.renderer.shaded[usize::from(blend) * 3 + side]
+            } else {
+                &self.renderer.materials[usize::from(blend) * 3 + side]
+            };
             gl_use_material(material);
             material.set_uniform("BaseColor", Vec4::from_array(surface.base_color));
             let lighting = self.lighting.unwrap_or_default();
@@ -599,13 +826,63 @@ impl<'a> GltfMaterialFrame<'a> {
                 "EmissiveTexture",
                 draw.part.emissive().unwrap_or(&self.renderer.white).clone(),
             );
-            match draw.part {
-                Part::Cpu(part) => {
-                    crate::get_context().gl.push_model_matrix(draw.transform);
-                    draw_mesh(&part.mesh);
-                    crate::get_context().gl.pop_model_matrix();
+            if let Some((bindings, _)) = prepared.as_ref() {
+                material.set_uniform(
+                    "MapParams",
+                    Vec4::new(
+                        if bindings.has_normal { 1.0 } else { 0.0 },
+                        bindings.normal_scale,
+                        surface.metallic,
+                        surface.roughness,
+                    ),
+                );
+                material.set_uniform("CameraPos", self.camera_position.extend(1.0));
+                material.set_texture(
+                    "NormalTexture",
+                    bindings
+                        .normal_texture
+                        .clone()
+                        .unwrap_or_else(|| self.renderer.flat_normal.clone()),
+                );
+                material.set_texture(
+                    "MetallicRoughnessTexture",
+                    bindings
+                        .metallic_texture
+                        .clone()
+                        .unwrap_or_else(|| self.renderer.white.clone()),
+                );
+            }
+            match prepared.as_ref().map(|(_, shade)| shade) {
+                Some(PreparedShade::Cpu(part)) => {
+                    let Ok(vertices) = shading_vertices(part.part, part.maps) else {
+                        continue;
+                    };
+                    let context = crate::get_context();
+                    context.gl.push_model_matrix(draw.transform);
+                    context.gl.texture(part.part.mesh.texture.as_ref());
+                    context
+                        .gl
+                        .geometry_shading(&vertices, &part.part.mesh.indices);
+                    context.gl.pop_model_matrix();
                 }
-                Part::Retained(part) => part.draw(draw.transform),
+                Some(PreparedShade::Retained(shading)) => {
+                    let Part::Retained(part) = draw.part else {
+                        continue;
+                    };
+                    let context = crate::get_context();
+                    let texture = part.mesh.texture.as_ref().map(Texture2D::raw_miniquad_id);
+                    context
+                        .gl
+                        .geometry_retained_shading(&shading.buffers, texture, draw.transform);
+                }
+                None => match draw.part {
+                    Part::Cpu(part) => {
+                        crate::get_context().gl.push_model_matrix(draw.transform);
+                        draw_mesh(&part.mesh);
+                        crate::get_context().gl.pop_model_matrix();
+                    }
+                    Part::Retained(part) => part.draw(draw.transform),
+                },
             }
         }
         // Material pipelines are not owned by queued draws. Complete them while
@@ -618,8 +895,67 @@ impl<'a> GltfMaterialFrame<'a> {
         for material in &self.renderer.materials {
             material.set_texture("EmissiveTexture", self.renderer.white.clone());
         }
+        for material in &self.renderer.shaded {
+            material.set_texture("EmissiveTexture", self.renderer.white.clone());
+            material.set_texture("NormalTexture", self.renderer.flat_normal.clone());
+            material.set_texture("MetallicRoughnessTexture", self.renderer.white.clone());
+        }
         stats
     }
+}
+
+struct PreparedCpu<'a> {
+    part: &'a GltfDrawMesh,
+    maps: &'a GltfPartMaterialMaps,
+}
+
+enum PreparedShade<'a> {
+    Cpu(PreparedCpu<'a>),
+    Retained(&'a GltfShadingPart),
+}
+
+struct ShadeBindings {
+    has_normal: bool,
+    normal_scale: f32,
+    normal_texture: Option<Texture2D>,
+    metallic_texture: Option<Texture2D>,
+}
+
+fn prepare_shaded<'a>(draw: &'a Draw<'a>) -> Option<(ShadeBindings, PreparedShade<'a>)> {
+    let maps = draw.maps.as_ref()?;
+    let (bindings, prepared) = match maps {
+        Maps::Cpu(maps) => {
+            let Part::Cpu(part) = draw.part else {
+                return None;
+            };
+            let (max_vertices, max_indices) = crate::get_context().gl.stream_limits();
+            if part.mesh.vertices.len() > max_vertices || part.mesh.indices.len() > max_indices {
+                return None;
+            }
+            (
+                ShadeBindings {
+                    has_normal: maps.normal.is_some(),
+                    normal_scale: maps.normal.as_ref().map(|map| map.strength).unwrap_or(1.0),
+                    normal_texture: maps.normal.as_ref().map(|map| map.texture.clone()),
+                    metallic_texture: maps
+                        .metallic_roughness
+                        .as_ref()
+                        .map(|map| map.texture.clone()),
+                },
+                PreparedShade::Cpu(PreparedCpu { part, maps }),
+            )
+        }
+        Maps::Retained(shading) => (
+            ShadeBindings {
+                has_normal: shading.normal_texture.is_some(),
+                normal_scale: shading.normal_scale,
+                normal_texture: shading.normal_texture.clone(),
+                metallic_texture: shading.metallic_texture.clone(),
+            },
+            PreparedShade::Retained(shading),
+        ),
+    };
+    Some((bindings, prepared))
 }
 
 enum Part<'a> {
@@ -648,8 +984,14 @@ impl Part<'_> {
     }
 }
 
+enum Maps<'a> {
+    Cpu(&'a GltfPartMaterialMaps),
+    Retained(&'a GltfShadingPart),
+}
+
 struct Draw<'a> {
     part: Part<'a>,
+    maps: Option<Maps<'a>>,
     transform: Mat4,
     depth: f32,
     normal_transform: Mat4,
@@ -657,8 +999,13 @@ struct Draw<'a> {
 
 impl<'a> Draw<'a> {
     fn new(part: Part<'a>, transform: Mat4) -> Self {
+        Self::shaded(part, transform, None)
+    }
+
+    fn shaded(part: Part<'a>, transform: Mat4, maps: impl Into<Option<Maps<'a>>>) -> Self {
         Self {
             part,
+            maps: maps.into(),
             transform,
             depth: 0.0,
             normal_transform: Mat4::IDENTITY,
@@ -687,40 +1034,6 @@ fn checked_direction(position: Vec3, direction: Vec3) -> Result<Vec3, String> {
     }
     // Scaling first avoids overflow/underflow for valid, very long/short input.
     Ok((direction / largest).normalize())
-}
-
-fn mirrored(matrix: Mat4) -> bool {
-    // f64 avoids overflow in the determinant for finite f32 affine matrices.
-    let x = matrix.x_axis.truncate().as_dvec3();
-    let y = matrix.y_axis.truncate().as_dvec3();
-    let z = matrix.z_axis.truncate().as_dvec3();
-    x.dot(y.cross(z)) < 0.0
-}
-
-fn normal_transform(matrix: Mat4) -> Option<Mat4> {
-    // Cofactor columns are the inverse transpose multiplied by determinant.
-    // f64 handles products of finite f32 scales without overflow/underflow.
-    // Divide by a common positive magnitude, retaining determinant sign:
-    // normal normalization removes the irrelevant magnitude in the shader.
-    let x = matrix.x_axis.truncate().as_dvec3();
-    let y = matrix.y_axis.truncate().as_dvec3();
-    let z = matrix.z_axis.truncate().as_dvec3();
-    let columns = [y.cross(z), z.cross(x), x.cross(y)];
-    let determinant = x.dot(columns[0]);
-    if determinant == 0.0 || !determinant.is_finite() {
-        return None;
-    }
-    let magnitude = columns
-        .iter()
-        .map(|v| v.abs().max_element())
-        .fold(0.0, f64::max);
-    let scale = determinant.signum() / magnitude;
-    Some(Mat4::from_cols(
-        (columns[0] * scale).as_vec3().extend(0.0),
-        (columns[1] * scale).as_vec3().extend(0.0),
-        (columns[2] * scale).as_vec3().extend(0.0),
-        Vec4::W,
-    ))
 }
 
 fn pipeline_params(blend: bool, side: usize) -> PipelineParams {
@@ -911,9 +1224,13 @@ mod tests {
     fn collection_renderer() -> GltfMaterialRenderer {
         GltfMaterialRenderer {
             materials: Vec::new(),
+            shaded: Vec::new(),
             white: Texture2D::unmanaged(miniquad::TextureId::from_raw_id(miniquad::RawId::OpenGl(
                 0,
             ))),
+            flat_normal: Texture2D::unmanaged(miniquad::TextureId::from_raw_id(
+                miniquad::RawId::OpenGl(0),
+            )),
             _not_send_sync: std::marker::PhantomData,
         }
     }
@@ -1195,5 +1512,57 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn shaded_submission_checks_map_lengths_before_appending() {
+        let mut renderer = collection_renderer();
+        let model = collection_model();
+        let texture =
+            Texture2D::unmanaged(miniquad::TextureId::from_raw_id(miniquad::RawId::OpenGl(0)));
+        let mut maps = crate::gltf_draw::GltfPartMaterialMaps {
+            normal: None,
+            metallic_roughness: None,
+            tangents: vec![Vec4::X; 3],
+            material_index: None,
+            material_name: None,
+        };
+        let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+        frame
+            .submit_part_shaded(&model.parts[0], &maps, Mat4::IDENTITY)
+            .unwrap();
+        assert!(frame.draws[0].maps.is_some());
+        drop(frame);
+        maps.normal = Some(crate::gltf_draw::GltfDrawMaterialMap {
+            texture,
+            tex_coord: 1,
+            transform: crate::gltf::GltfUvTransform::default(),
+            strength: f32::NAN,
+            uvs: vec![glam::Vec2::ZERO; 3],
+        });
+        let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+        assert!(frame
+            .submit_part_shaded(&model.parts[0], &maps, Mat4::IDENTITY)
+            .is_err());
+        assert!(frame.draws.is_empty());
+        drop(frame);
+        maps.normal.as_mut().unwrap().strength = 1.0;
+        maps.normal.as_mut().unwrap().uvs.pop();
+        let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+        assert!(frame
+            .submit_part_shaded(&model.parts[0], &maps, Mat4::IDENTITY)
+            .unwrap_err()
+            .contains("do not match"));
+        assert!(frame.draws.is_empty());
+        drop(frame);
+        maps.tangents.clear();
+        maps.normal = None;
+        let whole = crate::gltf_draw::GltfModelMaterialMaps { parts: vec![maps] };
+        let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+        assert!(frame
+            .submit_shaded(&model, &whole, Mat4::IDENTITY)
+            .unwrap_err()
+            .contains("chunks"));
+        assert!(frame.draws.is_empty());
     }
 }

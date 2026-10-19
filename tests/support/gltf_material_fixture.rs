@@ -10,6 +10,9 @@ mod lighting;
 #[path = "gltf_selected_part_fixture.rs"]
 mod selected_parts;
 
+#[path = "gltf_shading_fixture.rs"]
+mod shading;
+
 #[derive(Clone, Copy, Debug)]
 enum Geometry {
     Cpu,
@@ -602,6 +605,7 @@ pub async fn run() {
 
     selected_parts::run(&mut renderer, &target, &camera);
     lighting::run(&mut renderer, &target, &camera);
+    shading::run(&mut renderer, &target, &camera);
 
     // Drawing restores the default material: subsequent ordinary drawing must
     // use its own vertex color, regardless of the last glTF material factor.
