@@ -158,7 +158,7 @@ impl Font {
     ) -> TextDimensions {
         let text = text.as_ref();
 
-        let dpi_scaling = miniquad::window::dpi_scale();
+        let dpi_scaling = crate::window::screen_dpi_scale();
         let font_size = (font_size as f32 * dpi_scaling).ceil() as u16;
 
         let mut width = 0.0;
@@ -336,7 +336,7 @@ pub fn draw_text_ex(text: impl AsRef<str>, x: f32, y: f32, params: TextParams) -
         .font
         .unwrap_or(&get_context().fonts_storage.default_font);
 
-    let dpi_scaling = miniquad::window::dpi_scale();
+    let dpi_scaling = crate::window::screen_dpi_scale();
 
     let rot = params.rotation;
     let font_scale_x = params.font_scale * params.font_scale_aspect;

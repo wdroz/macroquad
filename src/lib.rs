@@ -79,6 +79,7 @@ use std::pin::Pin;
 
 mod cursor_capture;
 mod exec;
+mod input_coordinates;
 mod quad_gl;
 mod tobytes;
 
@@ -233,7 +234,7 @@ struct Context {
     chars_pressed_queue: VecDeque<char>,
     chars_pressed_ui_queue: VecDeque<char>,
     mouse_position: Vec2,
-    last_mouse_position: Option<Vec2>,
+    pointer_coordinates: input_coordinates::PointerCoordinates,
     mouse_wheel: Vec2,
 
     prevent_quit_event: bool,
@@ -374,7 +375,10 @@ impl Context {
             mouse_released: HashSet::new(),
             touches: HashMap::new(),
             mouse_position: vec2(0., 0.),
-            last_mouse_position: None,
+            pointer_coordinates: input_coordinates::PointerCoordinates::new(
+                vec2(screen_width, screen_height),
+                window::screen_dpi_scale(),
+            ),
             mouse_wheel: vec2(0., 0.),
 
             prevent_quit_event: false,
@@ -442,6 +446,7 @@ impl Context {
     }
 
     fn begin_frame(&mut self) {
+        input::sync_input_coordinates();
         telemetry::begin_gpu_query("GPU");
 
         self.ui_context.process_input();
@@ -479,7 +484,8 @@ impl Context {
         self.keys_released.clear();
         self.mouse_pressed.clear();
         self.mouse_released.clear();
-        self.last_mouse_position = Some(crate::prelude::mouse_position_local());
+        input::sync_input_coordinates();
+        self.pointer_coordinates.finish_frame(self.mouse_position);
 
         self.quit_requested = false;
 
@@ -505,7 +511,7 @@ impl Context {
     pub(crate) fn pixel_perfect_projection_matrix(&self) -> glam::Mat4 {
         let (width, height) = miniquad::window::screen_size();
 
-        let dpi = miniquad::window::dpi_scale();
+        let dpi = window::screen_dpi_scale();
 
         glam::Mat4::orthographic_rh_gl(0., width / dpi, height / dpi, 0., -1., 1.)
     }
@@ -558,7 +564,7 @@ pub(crate) fn try_screen_size() -> Option<(f32, f32)> {
     };
     // A context exists only after the macroquad thread has started.
     thread_assert::same_thread();
-    let dpi = miniquad::window::dpi_scale();
+    let dpi = window::screen_dpi_scale();
     if !dpi.is_finite() || dpi == 0.0 {
         return None;
     }
@@ -590,6 +596,8 @@ impl EventHandler for Stage {
         let _z = telemetry::ZoneGuard::new("Event::resize_event");
         get_context().screen_width = width;
         get_context().screen_height = height;
+        input::sync_input_coordinates();
+        get_context().pointer_coordinates.reset();
 
         if miniquad::window::blocking_event_loop() {
             miniquad::window::schedule_update();
@@ -597,6 +605,7 @@ impl EventHandler for Stage {
     }
 
     fn raw_mouse_motion(&mut self, x: f32, y: f32) {
+        input::sync_input_coordinates();
         let context = get_context();
 
         if context.cursor_grabbed {
@@ -614,6 +623,7 @@ impl EventHandler for Stage {
     }
 
     fn mouse_motion_event(&mut self, x: f32, y: f32) {
+        input::sync_input_coordinates();
         let context = get_context();
 
         if !context.cursor_grabbed {
@@ -647,6 +657,7 @@ impl EventHandler for Stage {
     }
 
     fn mouse_button_down_event(&mut self, btn: MouseButton, x: f32, y: f32) {
+        input::sync_input_coordinates();
         let context = get_context();
 
         context.mouse_down.insert(btn);
@@ -667,6 +678,7 @@ impl EventHandler for Stage {
     }
 
     fn mouse_button_up_event(&mut self, btn: MouseButton, x: f32, y: f32) {
+        input::sync_input_coordinates();
         let context = get_context();
         //     println!("btn = {}", btn as u32);
         context.mouse_down.remove(&btn);
@@ -691,6 +703,7 @@ impl EventHandler for Stage {
     }
 
     fn mouse_enter_event(&mut self, btn: MouseButton, x: f32, y: f32) {
+        input::sync_input_coordinates();
         let context = get_context();
 
         if !context.cursor_grabbed {
@@ -712,6 +725,7 @@ impl EventHandler for Stage {
     }
 
     fn touch_event(&mut self, phase: TouchPhase, id: u64, x: f32, y: f32) {
+        input::sync_input_coordinates();
         let context = get_context();
 
         context.touches.insert(

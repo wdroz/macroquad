@@ -539,6 +539,39 @@ native/browser pixel fixture `examples/gltf_material_check.rs`, which also
 checks selected-part filtering, independent CPU and retained transforms, and
 mixed transparency order.
 
+## Logical and physical input
+
+Use `mouse_position_logical()` and `touches_logical()` for HUD hitboxes drawn
+with `screen_width()` / `screen_height()`. Both use logical window coordinates,
+with the origin at the top left and positive Y downward. Their physical
+counterparts, `mouse_position_physical()` and `touches_physical()`, use
+framebuffer pixels. `logical_to_physical` and `physical_to_logical` convert
+positions or displacements using the current `screen_dpi_scale()`.
+
+For mouse look, `mouse_delta_logical()` gives frame displacement in logical
+pixels, positive right/down; `mouse_delta_physical()` gives framebuffer pixels.
+A resize or density change resets relative history so a stationary pointer
+cannot rotate the camera. Browser relative movement is scaled to framebuffer
+pixels before Rust receives it; fractional pixels accumulate across events.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn input(yaw: &mut f32, button: Rect) {
+*yaw -= mouse_delta_logical().x * 0.002;
+let mouse_over_button = button.contains(mouse_position_logical());
+let touch_over_button = touches_logical().iter()
+    .any(|touch| button.contains(touch.position));
+let framebuffer_point = logical_to_physical(mouse_position_logical());
+# let _ = (mouse_over_button, touch_over_button, framebuffer_point);
+# }
+```
+
+Existing functions keep their historical units: `mouse_position()` returns a
+logical tuple; `mouse_delta_position()` returns inverted normalized movement;
+`touches()` returns physical positions and `touches_local()` retains its legacy
+normalization. New code should choose an explicit coordinate API. Coordinate
+conversion does not configure canvas sizing, density caps or frame pacing.
+
 ## Ray hits
 
 Every ray query returns `Option<RayHit>`:

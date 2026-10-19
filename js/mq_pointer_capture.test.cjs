@@ -23,6 +23,7 @@ function listen(target) {
 }
 
 const requests = [];
+const deferred = [];
 let lock = null;
 const canvas = listen({
   style: {},
@@ -38,6 +39,9 @@ const canvas = listen({
       return Promise.reject(Object.assign(new Error('not allowed'), { name: 'NotAllowedError' }));
     }
     if (mode === 'hang') return new Promise(() => {});
+    if (mode === 'deferred') return new Promise((resolve, reject) => {
+      deferred.push({ grant() { lock = canvas; resolve(); }, reject });
+    });
     if (mode === 'legacy') return undefined;
     // The element is locked when the promise resolves, as in the browser.
     return Promise.resolve().then(() => { lock = canvas; });
@@ -53,7 +57,7 @@ const documentListeners = listen({
   set pointerLockElement(value) { lock = value; },
   exitPointerLock() {
     requests.push('exit');
-    lock = null;
+    if (!canvas.deferExit) lock = null;
   },
 });
 const windowListeners = listen({ devicePixelRatio: 1 });
@@ -175,7 +179,85 @@ async function flush() {
   documentListeners.dispatch('pointerlockerror');
   assert.equal(env.mq_capture_state(), Denied);
 
-  console.log('PASS: pointer capture dedupe, denial, escape, focus loss, and gesture recovery');
+  // Pausing or starting portal travel can cancel before the browser grants.
+  env.mq_capture_set_wanted(0);
+  canvas.mode = 'deferred';
+  env.mq_capture_set_wanted(1);
+  const cancelled = deferred.shift();
+  env.mq_capture_set_wanted(0);
+  const exitsBeforeLate = requests.filter(kind => kind === 'exit').length;
+  canvas.deferExit = true;
+  cancelled.grant();
+  documentListeners.dispatch('pointerlockchange');
+  documentListeners.dispatch('mozpointerlockchange');
+  assert.equal(requests.filter(kind => kind === 'exit').length, exitsBeforeLate + 1,
+    'duplicate notifications do not repeat an asynchronous exit');
+  canvas.deferExit = false;
+  lock = null;
+  documentListeners.dispatch('pointerlockchange');
+  await flush();
+  assert.equal(env.mq_capture_state(), Idle, 'cancelled late acquisition stays idle');
+  assert.equal(lock, null, 'cancelled late acquisition is released');
+  assert.equal(requests.filter(kind => kind === 'exit').length, exitsBeforeLate + 1);
+
+  // A promise can settle before pointerlockchange; it must release too.
+  env.mq_capture_set_wanted(1);
+  const promiseOnly = deferred.shift();
+  env.mq_capture_set_wanted(0);
+  promiseOnly.grant();
+  await flush();
+  assert.equal(env.mq_capture_state(), Idle);
+  assert.equal(lock, null, 'promise-only late acquisition is released');
+
+  env.mq_capture_set_wanted(1);
+  const blurred = deferred.shift();
+  documentListeners.focused = false;
+  windowListeners.dispatch('blur');
+  assert.equal(env.mq_capture_state(), Lost);
+  blurred.grant();
+  documentListeners.dispatch('pointerlockchange');
+  await flush();
+  assert.equal(env.mq_capture_state(), Lost, 'late acquisition after blur stays lost');
+  assert.equal(lock, null);
+  const requestsBeforeFocus = requests.filter(kind => kind === 'request').length;
+  documentListeners.focused = true;
+  windowListeners.dispatch('focus');
+  assert.equal(requests.filter(kind => kind === 'request').length, requestsBeforeFocus);
+  windowListeners.dispatch('pointerdown', { type: 'pointerdown' });
+  deferred.shift().grant();
+  documentListeners.dispatch('pointerlockchange');
+  await flush();
+  assert.equal(env.mq_capture_state(), Active, 'a fresh gesture recovers after blur');
+
+  env.mq_capture_set_wanted(0);
+  documentListeners.dispatch('pointerlockchange');
+  env.mq_capture_set_wanted(1);
+  const stale = deferred.shift();
+  env.mq_capture_set_wanted(0);
+  env.mq_capture_set_wanted(1);
+  deferred.shift().grant();
+  documentListeners.dispatch('pointerlockchange');
+  await flush();
+  stale.reject(new Error('late rejection from cancelled request'));
+  await flush();
+  assert.equal(env.mq_capture_state(), Active, 'old rejection preserves a valid successor');
+  assert.equal(lock, canvas);
+
+  env.mq_capture_set_wanted(0);
+  documentListeners.dispatch('pointerlockchange');
+  env.mq_capture_set_wanted(1);
+  const staleSuccess = deferred.shift();
+  env.mq_capture_set_wanted(0);
+  env.mq_capture_set_wanted(1);
+  deferred.shift().grant();
+  documentListeners.dispatch('pointerlockchange');
+  await flush();
+  staleSuccess.grant();
+  await flush();
+  assert.equal(env.mq_capture_state(), Active, 'old success preserves a valid successor');
+  assert.equal(lock, canvas);
+
+  console.log('PASS: pointer capture dedupe, denial, escape, focus loss, cancellation, and gesture recovery');
 })().catch(error => {
   console.error(error);
   process.exit(1);

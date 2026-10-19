@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Input coordinates fixture</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #222; }
+#glcanvas { display: block; width: 100%; height: 100%; outline: none; }
+</style>
+<canvas id="glcanvas" tabindex="1"></canvas>
+<!-- Place the built input_coordinates.wasm next to this HTML file and serve
+     the repository root over HTTP. No canvas sizing/pacing overrides are used. -->
+<script src="../js/mq_js_bundle.js"></script>
+<script>
+window.inputCoordinateFrames = [];
+miniquad_add_plugin({
+    name: "input_coordinates_fixture",
+    version: 1,
+    register_plugin(imports) {
+        imports.env.input_coordinates_report = function (pointer, length) {
+            const json = new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, pointer, length));
+            const frame = JSON.parse(json);
+            window.inputCoordinates = frame;
+            window.inputCoordinateFrames.push(frame);
+            if (window.inputCoordinateFrames.length > 600) window.inputCoordinateFrames.shift();
+        };
+    },
+});
+load("input_coordinates.wasm");
+</script>
+</html>

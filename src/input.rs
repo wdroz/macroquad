@@ -4,6 +4,11 @@
 //! [`cursor_capture`] reports whether that request is idle, in flight, active,
 //! denied, or lost, and [`cursor_capture_events`] lists the states entered
 //! since the previous frame.
+//!
+//! Explicit `*_logical` positions use the same units as 2D drawing and
+//! `screen_width`; `*_physical` positions use framebuffer pixels. Both start at
+//! the top-left, X right and Y down. Legacy [`touches`] retains physical pixels,
+//! while legacy [`mouse_position`] returns logical units.
 
 use std::collections::HashSet;
 
@@ -192,14 +197,67 @@ pub fn show_mouse(shown: bool) {
     miniquad::window::show_mouse(shown);
 }
 
-/// Return mouse position in pixels.
+/// Return mouse position in logical window units (the historical tuple API).
+///
+/// Use [`mouse_position_physical`] for framebuffer pixels.
 pub fn mouse_position() -> (f32, f32) {
-    let context = get_context();
+    mouse_position_logical().into()
+}
 
-    (
-        context.mouse_position.x / miniquad::window::dpi_scale(),
-        context.mouse_position.y / miniquad::window::dpi_scale(),
-    )
+/// Mouse position in logical window units, suitable for 2D drawing and picking.
+///
+/// Captured motion accumulates into a virtual position which can leave the window.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// let position = mouse_position_logical();
+/// draw_circle(position.x, position.y, 4.0, RED);
+/// ```
+pub fn mouse_position_logical() -> Vec2 {
+    crate::window::physical_to_logical(mouse_position_physical())
+}
+
+/// Mouse position in framebuffer pixels, with X right and Y down.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// let pixels = mouse_position_physical();
+/// let logical = physical_to_logical(pixels);
+/// ```
+pub fn mouse_position_physical() -> Vec2 {
+    sync_input_coordinates();
+    get_context().mouse_position
+}
+
+/// Mouse displacement since the previous frame in logical window units.
+///
+/// Positive X is right and positive Y is down. Reads do not consume the delta.
+/// Zero on the first frame and after resize or density changes. Captured motion
+/// uses the platform's relative events; otherwise this is absolute-position
+/// displacement. Native raw-event scaling/acceleration remains platform defined;
+/// the web host scales CSS movement to framebuffer pixels before conversion.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// let look = mouse_delta_logical() * 0.002; // Radians per logical unit.
+/// ```
+pub fn mouse_delta_logical() -> Vec2 {
+    crate::window::physical_to_logical(mouse_delta_physical())
+}
+
+/// Mouse displacement since the previous frame in framebuffer pixels.
+///
+/// Uses the same sign, reset and capture rules as [`mouse_delta_logical`]. This
+/// is a displacement, not a velocity; do not multiply by frame time for mouse look.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// let physical_motion = mouse_delta_physical();
+/// ```
+pub fn mouse_delta_physical() -> Vec2 {
+    sync_input_coordinates();
+    let context = get_context();
+    context.pointer_coordinates.delta(context.mouse_position)
 }
 
 /// Return mouse position in range [-1; 1].
@@ -209,15 +267,17 @@ pub fn mouse_position_local() -> Vec2 {
     convert_to_local(Vec2::new(pixels_x, pixels_y))
 }
 
-/// Returns the difference between the current mouse position and the mouse position on the previous frame.
+/// Legacy inverted normalized mouse displacement: previous minus current.
+///
+/// Each full window width/height is two units. This preserves the historical
+/// units and sign; [`mouse_delta_logical`] uses positive right/down logical
+/// displacement instead. Resize or density changes clear both histories.
 pub fn mouse_delta_position() -> Vec2 {
+    sync_input_coordinates();
     let context = get_context();
-
-    let current_position = mouse_position_local();
-    let last_position = context.last_mouse_position.unwrap_or(current_position);
-
-    // Calculate the delta
-    last_position - current_position
+    context
+        .pointer_coordinates
+        .legacy_delta(context.mouse_position)
 }
 
 /// This is set to true by default, meaning touches will raise mouse events in addition to raising touch events.
@@ -232,22 +292,78 @@ pub fn simulate_mouse_with_touch(option: bool) {
     get_context().simulate_mouse_with_touch = option;
 }
 
-/// Return touches with positions in pixels.
+/// Legacy touch positions in framebuffer pixels, unlike [`mouse_position`].
+///
+/// Use [`touches_logical`] for coordinates matching 2D drawing and mouse picking.
 pub fn touches() -> Vec<Touch> {
+    touches_physical()
+}
+
+/// Touches in framebuffer pixels, preserving IDs and phases from [`touches`].
+///
+/// Touch order is unspecified. Ended/cancelled touches remain until frame end.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// for touch in touches_physical() {
+///     let logical = physical_to_logical(touch.position);
+/// }
+/// ```
+pub fn touches_physical() -> Vec<Touch> {
+    sync_input_coordinates();
     get_context().touches.values().cloned().collect()
 }
 
-/// Return touches with positions in range [-1; 1].
+/// Touches in logical window units, matching [`mouse_position_logical`].
+///
+/// No application-side DPI division is needed. IDs and phases are unchanged;
+/// enabling mouse simulation does not remove these touch events.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// for touch in touches_logical() {
+///     draw_circle(touch.position.x, touch.position.y, 10.0, GREEN);
+/// }
+/// ```
+pub fn touches_logical() -> Vec<Touch> {
+    let density = crate::window::screen_dpi_scale();
+    touches_physical()
+        .into_iter()
+        .map(|mut touch| {
+            touch.position = crate::input_coordinates::to_logical(touch.position, density);
+            touch
+        })
+        .collect()
+}
+
+/// Legacy normalization of raw touch pixels by the logical window size.
+///
+/// Retained for compatibility: on a high-DPI display this is not the same
+/// normalization as [`mouse_position_local`], and can exceed `[-1, 1]` within
+/// the window. For consistent input, normalize [`touches_logical`] instead.
 pub fn touches_local() -> Vec<Touch> {
-    get_context()
-        .touches
-        .values()
-        .map(|touch| {
-            let mut touch = touch.clone();
+    touches_physical()
+        .into_iter()
+        .map(|mut touch| {
             touch.position = convert_to_local(touch.position);
             touch
         })
         .collect()
+}
+
+/// Refresh before accepting physical events as well as at frame boundaries:
+/// DPI changes can occur without a framebuffer resize callback.
+pub(crate) fn sync_input_coordinates() {
+    let density = crate::window::screen_dpi_scale();
+    let context = get_context();
+    let size = Vec2::new(context.screen_width, context.screen_height);
+    let ratio = context.pointer_coordinates.sync(size, density);
+    if ratio != 1.0 {
+        context.mouse_position *= ratio;
+        for touch in context.touches.values_mut() {
+            touch.position *= ratio;
+        }
+    }
 }
 
 pub fn mouse_wheel() -> (f32, f32) {

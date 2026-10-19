@@ -113,17 +113,56 @@ pub unsafe fn get_internal_gl<'a>() -> InternalGlContext<'a> {
 
 pub fn screen_width() -> f32 {
     let context = get_context();
-    context.screen_width / miniquad::window::dpi_scale()
+    context.screen_width / screen_dpi_scale()
 }
 
 pub fn screen_height() -> f32 {
     let context = get_context();
 
-    context.screen_height / miniquad::window::dpi_scale()
+    context.screen_height / screen_dpi_scale()
 }
 
+/// Current framebuffer pixels per logical window unit.
+///
+/// On the web this reads the host's current density, including browser zoom
+/// and display changes, rather than miniquad's initial cached value.
 pub fn screen_dpi_scale() -> f32 {
-    miniquad::window::dpi_scale()
+    #[cfg(target_arch = "wasm32")]
+    let density = unsafe {
+        extern "C" {
+            fn dpi_scale() -> f32;
+        }
+        dpi_scale()
+    };
+    #[cfg(not(target_arch = "wasm32"))]
+    let density = miniquad::window::dpi_scale();
+    crate::input_coordinates::valid_density(density)
+}
+
+/// Converts a logical window position or displacement to framebuffer pixels.
+///
+/// Uses [`screen_dpi_scale`] now; both coordinate systems start at the window's
+/// top-left, with X right and Y down. Does not apply camera or viewport transforms.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// let physical = logical_to_physical(vec2(100.0, 80.0));
+/// ```
+pub fn logical_to_physical(position: glam::Vec2) -> glam::Vec2 {
+    crate::input_coordinates::to_physical(position, screen_dpi_scale())
+}
+
+/// Converts framebuffer pixels to logical window positions or displacements.
+///
+/// These are the units of [`screen_width`], [`screen_height`] and 2D drawing.
+/// No camera or viewport transformation is applied.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// let logical = physical_to_logical(vec2(200.0, 160.0));
+/// ```
+pub fn physical_to_logical(position: glam::Vec2) -> glam::Vec2 {
+    crate::input_coordinates::to_logical(position, screen_dpi_scale())
 }
 
 /// Request the window size to be the given value. This takes DPI into account.
@@ -131,8 +170,8 @@ pub fn screen_dpi_scale() -> f32 {
 /// Note that the OS might decide to give a different size. Additionally, the size in macroquad won't be updated until the next `next_frame().await`.
 pub fn request_new_screen_size(width: f32, height: f32) {
     miniquad::window::set_window_size(
-        (width * miniquad::window::dpi_scale()) as u32,
-        (height * miniquad::window::dpi_scale()) as u32,
+        (width * screen_dpi_scale()) as u32,
+        (height * screen_dpi_scale()) as u32,
     );
     // We do not set the context.screen_width and context.screen_height here.
     // After `set_window_size` is called, EventHandlerFree::resize will be invoked, setting the size correctly.

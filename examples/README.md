@@ -10,6 +10,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Continuous box/sphere hits, oriented cover, slide against all four solid shapes |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
+| Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
 | Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, the selected-part pixel fixture, and shaded normal/roughness maps |
 | Renderer behavior | `retained_mesh`, `material_depth_check` | Immutable buffers and draw order, independent depth writes/testing, queued samplers |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
@@ -31,6 +32,7 @@ cargo run --example slide_solids
 cargo run --example picking_ray
 cargo run --example frustum_cull
 cargo run --example debug_draw
+cargo run --example input_coordinates
 cargo run --features gltf --example gltf_textured
 cargo run --example material_depth_check
 cargo run --example retained_mesh
@@ -46,6 +48,20 @@ These commands run from the fork root and open a window. To compile a sample
 without opening a window, use `cargo build --example <name>` with the same
 feature flags and omit runtime arguments after `--`. Pure collision and scene-loader tests can run without graphics;
 rendering and texture uploads need a graphics context.
+
+## `input_coordinates`
+
+Displays the public logical and physical mouse/touch APIs together. Logical
+coordinates match 2D drawing and HUD hitboxes; physical coordinates use
+framebuffer pixels. Mouse deltas are positive right/down. The example also
+shows the legacy inverted normalized delta. Move, resize, change display
+density, and touch the window to compare values. `examples/input_coordinates.html`
+is a small browser fixture host for the WASM build, with JSON state for automated
+checks. It needs the matching bundle and WASM served over HTTP.
+
+```sh
+cargo build --target wasm32-unknown-unknown --example input_coordinates
+```
 
 ## `aabb_overlap`
 

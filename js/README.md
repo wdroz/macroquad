@@ -42,6 +42,19 @@ logging stubs:
 node js/mq_js_bundle.test.cjs path/to/game.wasm
 ```
 
+Include `mq_input_coordinates.js` immediately before the pointer-capture source.
+When regenerating the miniquad portion, keep `mouse_relative_position`
+delegating to `macroquad_input_position`, and forward browser movement through
+`macroquad_input_raw_motion` instead of flooring each event. The helper maps
+mouse and touch positions through the actual canvas-to-CSS ratios and preserves
+fractional relative motion across miniquad's integer WASM ABI. It discards
+fractional remainders when canvas geometry, display density or pointer lock
+changes. It does not alter canvas sizing or frame scheduling. Run:
+
+```sh
+node js/mq_input_coordinates.test.cjs
+```
+
 The optional `video` feature uses the separate `mq_video.js` plugin. Load it
 after the bundle and before `load("app.wasm")`. See `docs/video.md` for the
 playback API and native decoder requirements. Check its browser lifecycle and

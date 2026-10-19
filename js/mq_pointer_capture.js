@@ -17,12 +17,21 @@
     let gesture = 0;
     let consumed = 0;
     let attempt = 0;
+    let exiting = false;
 
     function locked() {
         return document.pointerLockElement === canvas || document.mozPointerLockElement === canvas;
     }
     function transition(next) {
         state = next;
+    }
+    function exitLock() {
+        if (!locked() || exiting) return;
+        exiting = true;
+        try {
+            originalExit();
+            if (!locked()) exiting = false;
+        } catch (error) { exiting = false; }
     }
     function finishFailure(next) {
         pending = false;
@@ -55,16 +64,22 @@
         }
         if (!result || typeof result.then !== "function") return;
         result.then(function () {
-            if (token !== attempt) return;
-            pending = false;
-            if (!wanted) {
-                transition(Idle);
+            if (token !== attempt) {
+                // Cancellation cannot cancel the browser's in-flight request.
+                // Release its late acquisition unless a newer request wants it.
+                if (locked() && (!wanted || !pageFocused())) onLockChange();
                 return;
             }
-            if (locked()) transition(Active);
+            pending = false;
+            if (locked()) onLockChange();
             else finishFailure(Denied);
         }, function () {
             if (token !== attempt) return;
+            if (locked() && wanted && pageFocused()) {
+                pending = false;
+                transition(Active);
+                return;
+            }
             finishFailure(Denied);
         });
     }
@@ -72,9 +87,7 @@
         wanted = false;
         pending = false;
         attempt++;
-        if (locked()) {
-            try { originalExit(); } catch (error) { /* already unlocked */ }
-        }
+        exitLock();
         transition(Idle);
     }
     function isEscape(event) {
@@ -97,9 +110,15 @@
     function onLockChange() {
         if (locked()) {
             pending = false;
+            if (!wanted || !pageFocused()) {
+                transition(wanted ? Lost : Idle);
+                exitLock();
+                return;
+            }
             transition(Active);
             return;
         }
+        exiting = false;
         if (!wanted) {
             pending = false;
             transition(Idle);
@@ -130,9 +149,7 @@
         if (state !== Active && state !== Requested && !locked()) return;
         pending = false;
         attempt++;
-        if (locked()) {
-            try { originalExit(); } catch (error) { /* already unlocked */ }
-        }
+        exitLock();
         consumed = gesture;
         transition(wanted ? Lost : Idle);
     }
