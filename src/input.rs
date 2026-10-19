@@ -1,7 +1,13 @@
 //! Cross-platform mouse, keyboard (and gamepads soon) module.
+//!
+//! [`set_cursor_grab`] asks the platform to capture the cursor.
+//! [`cursor_capture`] reports whether that request is idle, in flight, active,
+//! denied, or lost, and [`cursor_capture_events`] lists the states entered
+//! since the previous frame.
 
 use std::collections::HashSet;
 
+pub use crate::cursor_capture::CursorCapture;
 use crate::prelude::screen_height;
 use crate::prelude::screen_width;
 use crate::Vec2;
@@ -35,11 +41,150 @@ pub struct Touch {
     pub position: Vec2,
 }
 
-/// Constrain mouse to window
+/// Ask the platform to capture or release the mouse cursor.
+///
+/// `true` confines the cursor on desktop and requests Pointer Lock in the
+/// browser. `false` releases it. The frame loop does not repeat this call.
+/// Read [`cursor_capture`] for the result: desktop confirms in this call,
+/// while a browser may stay [`CursorCapture::Requested`] and later report
+/// [`CursorCapture::Denied`] or [`CursorCapture::Lost`]. A denied or lost
+/// browser lock does not retry on its own. While this `true` request is still
+/// in force, the next mouse or touch press asks once inside that event.
+/// Calling this again without such a press does not ask the browser.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+///
+/// #[macroquad::main("Look")]
+/// async fn main() {
+///     set_cursor_grab(true);
+///     loop {
+///         if is_key_pressed(KeyCode::G) {
+///             set_cursor_grab(true);
+///         }
+///         if is_key_pressed(KeyCode::Tab) {
+///             set_cursor_grab(false);
+///         }
+///         if cursor_capture() == CursorCapture::Active {
+///             let _look = mouse_delta_position();
+///         }
+///         next_frame().await;
+///     }
+/// }
+/// ```
 pub fn set_cursor_grab(grab: bool) {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if browser_capture_ready() {
+            unsafe { mq_capture_set_wanted(grab as i32) };
+            // miniquad applies the grab on the next browser frame. The bundle
+            // wrapper drops a duplicate or ungated request.
+            miniquad::window::set_cursor_grab(grab);
+            sync_cursor_capture();
+        } else {
+            let context = get_context();
+            context.cursor_grabbed = grab;
+            context.capture.legacy_set(grab);
+            miniquad::window::set_cursor_grab(grab);
+        }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let context = get_context();
+        context.capture.set_wanted(grab);
+        apply_desktop_capture(context);
+    }
+}
+
+/// Current pointer-capture state.
+///
+/// See [`CursorCapture`] for the desktop and browser meanings. The value stays
+/// at the last report until the next [`set_cursor_grab`] or a platform event.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+///
+/// # async fn frame() {
+/// if cursor_capture() == CursorCapture::Lost {
+///     draw_text("Click to capture the mouse", 20.0, 20.0, 24.0, WHITE);
+/// }
+/// # next_frame().await;
+/// # }
+/// ```
+pub fn cursor_capture() -> CursorCapture {
+    get_context().capture.state()
+}
+
+/// Capture states entered since the previous frame, oldest first.
+///
+/// Reading this does not drain it. The list is cleared at the end of the frame,
+/// same as the pressed-key sets. A desktop grab contributes `Requested` and
+/// then `Active` on the frame of the call.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+///
+/// # async fn frame() {
+/// for state in cursor_capture_events() {
+///     if state == CursorCapture::Denied {
+///         draw_text("Browser refused pointer lock", 20.0, 48.0, 24.0, WHITE);
+///     }
+/// }
+/// # next_frame().await;
+/// # }
+/// ```
+pub fn cursor_capture_events() -> Vec<CursorCapture> {
+    get_context().capture.events().to_vec()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn apply_desktop_capture(context: &mut crate::Context) {
+    for grab in context.capture.take_platform() {
+        miniquad::window::set_cursor_grab(grab);
+    }
+    context.cursor_grabbed = context.capture.state() == CursorCapture::Active;
+}
+
+/// Desktop focus change. The browser plugin owns this transition on wasm.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn note_capture_focus(focused: bool) {
     let context = get_context();
-    context.cursor_grabbed = grab;
-    miniquad::window::set_cursor_grab(grab);
+    context.capture.focus_changed(focused);
+    apply_desktop_capture(context);
+}
+
+/// Copy the browser plugin's state. No-op on desktop and without the plugin.
+pub(crate) fn sync_cursor_capture() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        if !browser_capture_ready() {
+            return;
+        }
+        let context = get_context();
+        let Some(state) = CursorCapture::from_raw(unsafe { mq_capture_state() }) else {
+            return;
+        };
+        context.capture.observe_browser(state);
+        context.cursor_grabbed = state == CursorCapture::Active;
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn browser_capture_ready() -> bool {
+    unsafe { mq_capture_ready() == 1 }
+}
+
+#[cfg(target_arch = "wasm32")]
+extern "C" {
+    fn mq_capture_set_wanted(wanted: i32);
+    fn mq_capture_state() -> i32;
+    fn mq_capture_ready() -> i32;
+}
+
+#[cfg(target_arch = "wasm32")]
+#[no_mangle]
+extern "C" fn macroquad_pointer_capture_crate_version() -> u32 {
+    1
 }
 
 /// Set mouse cursor visibility

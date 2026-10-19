@@ -77,6 +77,7 @@ use std::future::Future;
 use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 
+mod cursor_capture;
 mod exec;
 mod quad_gl;
 mod tobytes;
@@ -239,6 +240,7 @@ struct Context {
     quit_requested: bool,
 
     cursor_grabbed: bool,
+    capture: cursor_capture::CaptureController,
 
     input_events: Vec<Vec<MiniquadInputEvent>>,
 
@@ -379,6 +381,7 @@ impl Context {
             quit_requested: false,
 
             cursor_grabbed: false,
+            capture: cursor_capture::CaptureController::new(),
 
             input_events: Vec::new(),
 
@@ -496,6 +499,7 @@ impl Context {
         }
 
         self.dropped_files.clear();
+        self.capture.clear_events();
     }
 
     pub(crate) fn pixel_perfect_projection_matrix(&self) -> glam::Mat4 {
@@ -802,8 +806,10 @@ impl EventHandler for Stage {
     fn update(&mut self) {
         let _z = telemetry::ZoneGuard::new("Event::update");
 
-        // Unless called every frame, cursor will not remain grabbed
-        miniquad::window::set_cursor_grab(get_context().cursor_grabbed);
+        // Do not call set_cursor_grab here. A browser treats a per-frame
+        // requestPointerLock as a retry after Escape or a rejected promise.
+        // Desktop grab sticks until release or focus loss.
+        crate::input::sync_cursor_capture();
 
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -907,24 +913,31 @@ impl EventHandler for Stage {
     }
 
     fn window_minimized_event(&mut self) {
-        let context = get_context();
+        {
+            let context = get_context();
 
-        #[cfg(target_os = "android")]
-        context.audio_context.pause();
+            #[cfg(target_os = "android")]
+            context.audio_context.pause();
 
-        // Clear held down keys and button and announce them as released
-        context.mouse_released.extend(context.mouse_down.drain());
-        context.keys_released.extend(context.keys_down.drain());
+            // Clear held down keys and button and announce them as released
+            context.mouse_released.extend(context.mouse_down.drain());
+            context.keys_released.extend(context.keys_down.drain());
 
-        // Announce all touches as released
-        for (_, touch) in context.touches.iter_mut() {
-            touch.phase = input::TouchPhase::Ended;
+            // Announce all touches as released
+            for (_, touch) in context.touches.iter_mut() {
+                touch.phase = input::TouchPhase::Ended;
+            }
+
+            context
+                .input_events
+                .iter_mut()
+                .for_each(|arr| arr.push(MiniquadInputEvent::WindowMinimized));
         }
 
-        context
-            .input_events
-            .iter_mut()
-            .for_each(|arr| arr.push(MiniquadInputEvent::WindowMinimized));
+        // Desktop focus loss releases the OS grab once. The browser plugin
+        // reports the same transition; regaining focus does not capture again.
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::input::note_capture_focus(false);
     }
 
     fn quit_requested_event(&mut self) {

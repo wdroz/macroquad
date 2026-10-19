@@ -30,7 +30,11 @@ node js/mq_js_bundle.test.cjs
 The fork also requires `glDepthMask` to forward to `gl.depthMask(Boolean(value))`
 so transparent meshes can depth-test without writing depth. Preserve that
 binding when regenerating the bundle. The test checks both disabling and
-enabling writes. Pass a final WASM build to verify that every imported GL
+enabling writes. Append `mq_pointer_capture.js` at the end of the bundle when
+regenerating it. That plugin is the browser half of `set_cursor_grab`: it
+deduplicates Pointer Lock requests, records denial and Escape or focus loss,
+and does not request again until a pointer or touch press. `node js/mq_pointer_capture.test.cjs`
+checks that sequence and that the bundle still ends with the plugin source. Pass a final WASM build to verify that every imported GL
 function has a real binding, before the loader can replace omissions with
 logging stubs:
 

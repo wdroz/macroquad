@@ -13,6 +13,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, the selected-part pixel fixture, and shaded normal/roughness maps |
 | Renderer behavior | `retained_mesh`, `material_depth_check` | Immutable buffers and draw order, independent depth writes/testing, queued samplers |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
+| Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
 
 Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).
 
@@ -38,6 +39,7 @@ cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials
 cargo run --features gltf --example gltf_material_check
 cargo run --features video --example video_texture -- path/to/clip.mp4
+cargo run --example cursor_capture
 ```
 
 These commands run from the fork root and open a window. To compile a sample
@@ -212,6 +214,16 @@ custom texture preserves the bindings of earlier queued draws. It also
 exercises adaptive streaming-buffer growth, reuse with smaller geometry, and
 recreation after the configured capacity changes. A failure panics instead of
 waiting for input.
+
+## `cursor_capture`
+
+`G` calls `set_cursor_grab(true)` and `Tab` calls `set_cursor_grab(false)`.
+The on-screen line is `cursor_capture`, and the yellow lines are
+`cursor_capture_events` for this frame. Desktop confirms `Active` in the same
+call. A browser may stay `Denied` until the next click; that click asks once,
+inside the pointer event, while the earlier request is still wanted. Escape is
+not handled by the example, so the browser's unlock shows as `Lost` until the
+next click. `Q` quits. The frame loop does not call `set_cursor_grab`.
 
 ## `video_texture`
 

@@ -25,7 +25,7 @@ const context = vm.createContext({
 const bundle = fs.readFileSync(path.join(__dirname, 'mq_js_bundle.js'), 'utf8');
 vm.runInContext(bundle, context, { filename: 'mq_js_bundle.js' });
 const names = Array.from(context.plugins, plugin => plugin.name);
-assert.deepEqual(names, ['macroquad_audio', 'sapp_jsutils', 'quad_net']);
+assert.deepEqual(names, ['macroquad_audio', 'sapp_jsutils', 'quad_net', 'macroquad_pointer_capture']);
 assert.equal(Object.hasOwn(context, 'register_plugin'), false, 'quad_net registration must stay local');
 context.register_plugins(context.plugins);
 for (const name of ['audio_init', 'js_create_object', 'ws_connect', 'ws_is_connected', 'ws_send', 'ws_try_recv', 'http_make_request', 'http_try_recv']) {
