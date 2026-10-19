@@ -9,8 +9,8 @@ use super::shading::{
     GltfShadingPart, SHADED_FRAGMENT, SHADED_METAL, SHADED_VERTEX,
 };
 use super::{
-    GltfAlphaMode, GltfDrawMesh, GltfModel, GltfModelMaterialMaps, GltfPartMaterialMaps,
-    GltfSurface, RetainedGltfDrawMesh, RetainedGltfModel,
+    GltfAlphaMode, GltfDrawMesh, GltfModel, GltfModelMaterialMaps, GltfNodePose,
+    GltfPartMaterialMaps, GltfSurface, RetainedGltfDrawMesh, RetainedGltfModel,
 };
 use crate::quad_gl::SHADING_ATTRIBUTES;
 use crate::{
@@ -449,6 +449,28 @@ impl<'a> GltfMaterialFrame<'a> {
         Ok(())
     }
 
+    /// Collects a selected CPU chunk with a replacement node world matrix.
+    ///
+    /// The pose removes the baked rest matrix before applying its replacement.
+    /// A different node returns an error and appends nothing. The matrix is
+    /// captured now, so the pose may be changed or dropped after submission.
+    /// Parent transforms, inverse-transpose normals, reflected winding and
+    /// global transparency order follow [`Self::submit_part`].
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn submit<'a>(frame: &mut GltfMaterialFrame<'a>, part: &'a GltfDrawMesh, pose: &GltfNodePose) -> Result<(), String> {
+    /// frame.submit_part_posed(part, pose)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn submit_part_posed(
+        &mut self,
+        part: &'a GltfDrawMesh,
+        pose: &GltfNodePose,
+    ) -> Result<(), String> {
+        self.submit_part(part, pose.for_node(part.node)?)
+    }
+
     /// Collects all retained chunks without uploading or copying geometry.
     ///
     /// The same transform validation and global transparency order apply as
@@ -513,6 +535,27 @@ impl<'a> GltfMaterialFrame<'a> {
         check_transform(transform)?;
         self.draws.push(Draw::new(Part::Retained(part), transform));
         Ok(())
+    }
+
+    /// Collects a replacement node pose using the chunk's existing GPU buffers.
+    ///
+    /// No geometry is cloned or uploaded. The node must match, and all CPU,
+    /// retained and whole-model submissions share lighting and transparency
+    /// sorting. As with [`Self::submit_part_posed`], the pose matrix is captured
+    /// without borrowing the pose until drawing.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn submit<'a>(frame: &mut GltfMaterialFrame<'a>, part: &'a RetainedGltfDrawMesh, pose: &GltfNodePose) -> Result<(), String> {
+    /// frame.submit_retained_part_posed(part, pose)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn submit_retained_part_posed(
+        &mut self,
+        part: &'a RetainedGltfDrawMesh,
+        pose: &GltfNodePose,
+    ) -> Result<(), String> {
+        self.submit_retained_part(part, pose.for_node(part.node)?)
     }
 
     /// Collects every CPU chunk together with its normal and metallic-roughness maps.
@@ -1308,6 +1351,33 @@ mod tests {
         assert!(std::ptr::eq(*part, &model.parts[1]));
         // Dropping an undrawn collection must also remain headless.
         drop(frame);
+    }
+
+    #[test]
+    fn posed_collection_captures_each_replacement_and_rejects_other_nodes_atomically() {
+        let model = collection_model();
+        let mut renderer = collection_renderer();
+        let mut frame = renderer.begin(Vec3::Z, -Vec3::Z).unwrap();
+        let mut pose = GltfNodePose::new(0, Mat4::from_translation(Vec3::X * 4.)).unwrap();
+        pose.set_world(Mat4::from_translation(Vec3::Y)).unwrap();
+        let first = pose.transform();
+        frame.submit_part_posed(&model.parts[0], &pose).unwrap();
+        pose.set_world(Mat4::from_translation(Vec3::Z * 2.))
+            .unwrap();
+        frame.submit_part_posed(&model.parts[2], &pose).unwrap();
+        assert_eq!(frame.draws[0].transform, first);
+        assert_eq!(frame.draws[1].transform, pose.transform());
+        let Part::Cpu(part) = &frame.draws[1].part else {
+            panic!("expected borrowed CPU chunk");
+        };
+        assert!(std::ptr::eq(*part, &model.parts[2]));
+        let wrong_node = GltfNodePose::new(17, Mat4::IDENTITY).unwrap();
+        let error = frame
+            .submit_part_posed(&model.parts[1], &wrong_node)
+            .unwrap_err();
+        assert!(error.contains("node 17") && error.contains("chunk node 0"));
+        assert_eq!(frame.draws.len(), 2);
+        assert_eq!(model.parts[0].mesh.vertices[0].position, Vec3::ZERO);
     }
 
     #[test]

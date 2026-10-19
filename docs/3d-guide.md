@@ -397,7 +397,7 @@ These calls borrow the existing chunk without cloning model metadata or
 geometry; retained draws reuse uploaded buffers. The additional affine matrix
 acts on already baked scene coordinates, so rotation around a chosen pivot
 still needs `T(pivot) * R * T(-pivot)`. No rest pose or automatic pivot is
-inferred. Selected parts share factors, lighting, validation and stable global
+inferred by these additional-transform methods. Selected parts share factors, lighting, validation and stable global
 transparency sorting with whole-model submissions in the same frame. Submitting
 a model and one of its parts draws that part twice; omission is caller controlled.
 
@@ -538,6 +538,65 @@ See `examples/gltf_materials.rs`, which submits whole models, and the tiny
 native/browser pixel fixture `examples/gltf_material_check.rs`, which also
 checks selected-part filtering, independent CPU and retained transforms, and
 mixed transparency order.
+
+## Replacing an imported node pose
+
+Use `GltfModel::from_bytes_with_pose` to retain authored node world matrices
+alongside the world-baked chunks. For load limits, incremental loading or
+material maps, call `GltfModelLoader::take_pose` after completion alongside
+`take_model` and `take_material_maps`. All three results reuse the same parse;
+the pose sidecar includes empty nodes and a spawn's full authored rotation.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn moved(bytes: &[u8], renderer: &mut GltfMaterialRenderer) -> Result<(), String> {
+let (cpu, rest) = GltfModel::from_bytes_with_pose(bytes)?;
+let mut pose = rest.node(cpu.parts[0].node)?;
+let model = RetainedGltfModel::from_model(cpu, false).map_err(|e| e.to_string())?;
+// This is the complete replacement world matrix, with an authored node pivot.
+pose.set_world(Mat4::from_translation(vec3(2., 0., 0.))
+    * Mat4::from_rotation_y(0.7))?;
+let part = &model.parts[0];
+let bounds = part.posed_bounds(&pose, Mat4::IDENTITY)?;
+let mut frame = renderer.begin(vec3(0., 2., 6.), -Vec3::Z)?;
+frame.set_lighting(Some(GltfLighting::default()))?;
+frame.submit_retained_part_posed(part, &pose)?;
+frame.draw();
+# let _ = bounds;
+# Ok(()) }
+```
+
+`GltfNodePose` caches `world * inverse(rest_world)` when `set_world` is called.
+It removes the baked node placement before applying the replacement, so a
+non-origin object rotates around its authored node origin. Set the replacement
+to a spawn node's `rest.rest_world(spawn.node)` to keep its yaw as well as its
+position. A replacement is the complete node world matrix, including any
+desired scale; it replaces the old scale too. Setting it back to
+`pose.rest_world()` restores exact identity drawing. The sidecar's node IDs
+belong to its source model; matching numbers from another file are unrelated.
+
+CPU `submit_part_posed` and retained `submit_retained_part_posed` use the existing
+material collection, including inverse-transpose normals, reflected winding,
+parent transforms and global transparency sorting. The pose is copied at
+submission, so later edits affect subsequent submissions. Retained buffers are
+reused and no per-frame vertex vectors are cloned. For normal/roughness-map
+shading, pass `pose.transform()` to the existing selected shaded submission
+after selecting the part with the matching node. `draw_posed` on either chunk
+uses the current material and follows the custom normal/culling contract above.
+
+`posed_bounds(&pose, parent)` conservatively transforms the stored eight bound
+corners for culling. Supply the full parent matrix; the pure query does not
+read the model stack. The renderer sorts the correspondingly transformed chunk
+center. Singular rest matrices cannot recover lost local geometry, so creating
+that node's editable pose returns an identified error while ordinary loading
+and drawing remain available. Singular replacement matrices work for bounds
+and unlit drawing; ordinary lit draws skip them. Invalid updates leave the
+previous pose intact.
+
+When reorienting the source model, apply the same `with_up_axis(up)` to the
+original pose sidecar before creating editable poses. Selected node edits do
+not update descendants, colliders, triggers, spawn markers, animations or morph
+targets. Those remain separate application work.
 
 ## Logical and physical input
 

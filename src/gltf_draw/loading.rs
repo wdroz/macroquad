@@ -406,7 +406,8 @@ impl<'a> Prepared<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> (GltfModel, GltfModelMaterialMaps) {
+    fn finish(mut self) -> (GltfModel, GltfModelMaterialMaps, GltfModelPose) {
+        let pose = GltfModelPose::from_scene(&self.scene);
         if self.model.parts.is_empty() {
             self.model.bounds_min = Vec3::ZERO;
             self.model.bounds_max = Vec3::ZERO;
@@ -420,7 +421,7 @@ impl<'a> Prepared<'a> {
         let material_maps = GltfModelMaterialMaps {
             parts: self.material_parts,
         };
-        (self.model, material_maps)
+        (self.model, material_maps, pose)
     }
 }
 
@@ -468,6 +469,7 @@ pub struct GltfModelLoader<'a> {
     prepared: Option<Prepared<'a>>,
     result: Option<GltfModel>,
     material_maps: Option<GltfModelMaterialMaps>,
+    pose: Option<GltfModelPose>,
     error: Option<String>,
     _render_thread: PhantomData<Rc<()>>,
 }
@@ -493,6 +495,7 @@ impl<'a> GltfModelLoader<'a> {
             prepared: None,
             result: None,
             material_maps: None,
+            pose: None,
             error: None,
             _render_thread: PhantomData,
         })
@@ -527,6 +530,7 @@ impl<'a> GltfModelLoader<'a> {
             self.prepared = None;
             self.result = None;
             self.material_maps = None;
+            self.pose = None;
             self.progress = GltfLoadProgress::new(GltfLoadStage::Failed, 0);
             self.error = Some(error.clone());
             return Err(error);
@@ -551,9 +555,10 @@ impl<'a> GltfModelLoader<'a> {
                 PreflightImages => GltfLoadProgress::new(LoadTextures, prepared.texture_jobs.len()),
                 LoadTextures => GltfLoadProgress::new(ConvertMeshes, prepared.primitive_jobs.len()),
                 ConvertMeshes => {
-                    let (model, maps) = self.prepared.take().unwrap().finish();
+                    let (model, maps, pose) = self.prepared.take().unwrap().finish();
                     self.result = Some(model);
                     self.material_maps = Some(maps);
+                    self.pose = Some(pose);
                     GltfLoadProgress::new(Complete, 0)
                 }
                 _ => unreachable!(),
@@ -597,6 +602,7 @@ impl<'a> GltfModelLoader<'a> {
         self.prepared = None;
         self.result = None;
         self.material_maps = None;
+        self.pose = None;
         self.error = Some("glTF loading cancelled".into());
         self.progress = GltfLoadProgress::new(GltfLoadStage::Cancelled, 0);
     }
@@ -626,6 +632,22 @@ impl<'a> GltfModelLoader<'a> {
     /// ```
     pub fn take_material_maps(&mut self) -> Option<GltfModelMaterialMaps> {
         self.material_maps.take()
+    }
+
+    /// Takes the scene's rest world matrices once loading has completed.
+    ///
+    /// Reuses the existing parse and includes empty/spawn nodes. The model and
+    /// material-map take methods leave this sidecar in place. Pending, cancelled
+    /// and failed loads return `None`; dropping the loader releases an untaken
+    /// sidecar. Apply the same up-axis conversion as the corresponding model.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let mut load = GltfModelLoader::new(&[], GltfLoadSettings::default()).unwrap();
+    /// assert!(load.take_pose().is_none());
+    /// ```
+    pub fn take_pose(&mut self) -> Option<GltfModelPose> {
+        self.pose.take()
     }
 }
 
@@ -844,6 +866,57 @@ mod tests {
     }
 
     #[test]
+    fn rest_pose_sidecar_survives_independent_takes_and_keeps_empty_node_yaw() {
+        let bytes = fixture(|json| {
+            json["materials"][0]["pbrMetallicRoughness"]
+                .as_object_mut()
+                .unwrap()
+                .remove("baseColorTexture");
+            json["nodes"][0]["translation"] = serde_json::json!([3., 2., 1.]);
+            json["nodes"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!({
+                    "name": "player_spawn", "translation": [-2., 1., 4.],
+                    "rotation": [0., 0.3420201433256687, 0., 0.9396926207859084]
+                }));
+            json["scenes"][0]["nodes"]
+                .as_array_mut()
+                .unwrap()
+                .push(serde_json::json!(1));
+        });
+        let mut load = GltfModelLoader::new(&bytes, GltfLoadSettings::default()).unwrap();
+        assert!(load.take_pose().is_none());
+        while load.poll().unwrap().stage != GltfLoadStage::Complete {}
+        let model = load.take_model().unwrap();
+        assert!(load.take_material_maps().is_some());
+        let poses = load.take_pose().unwrap();
+        assert!(load.take_pose().is_none());
+        drop(load);
+        assert_eq!(
+            poses
+                .rest_world(model.parts[0].node)
+                .unwrap()
+                .w_axis
+                .truncate(),
+            Vec3::new(3., 2., 1.)
+        );
+        let mut pose = poses.node(model.parts[0].node).unwrap();
+        let spawn = poses.rest_world(1).unwrap();
+        pose.set_world(spawn).unwrap();
+        assert!(pose
+            .transform()
+            .transform_point3(Vec3::new(3., 2., 1.))
+            .abs_diff_eq(Vec3::new(-2., 1., 4.), 1e-5));
+        assert!(spawn.transform_vector3(Vec3::X).abs_diff_eq(
+            Vec3::new(40_f32.to_radians().cos(), 0., -40_f32.to_radians().sin()),
+            1e-5
+        ));
+        let (_, sync_poses) = GltfModel::from_bytes_with_pose(&bytes).unwrap();
+        assert_eq!(sync_poses.rest_world(1), Some(spawn));
+    }
+
+    #[test]
     fn polling_preserves_borrowed_binary_and_exposes_each_stage() {
         let bytes = untextured_fixture();
         let original = gltf::binary::Glb::from_slice(&bytes).unwrap();
@@ -909,6 +982,7 @@ mod tests {
             load.cancel();
             assert!(load.prepared.is_none());
             assert!(load.take_model().is_none());
+            assert!(load.take_pose().is_none());
             assert_eq!(load.progress().stage, GltfLoadStage::Cancelled);
             let first = load.poll().unwrap_err();
             load.cancel();
@@ -926,6 +1000,7 @@ mod tests {
         assert_eq!(load.poll().unwrap_err(), error);
         assert_eq!(load.progress().stage, GltfLoadStage::Failed);
         assert!(load.take_model().is_none());
+        assert!(load.take_pose().is_none());
     }
 
     #[test]

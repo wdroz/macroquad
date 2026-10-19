@@ -11,7 +11,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Continuous box/sphere hits, oriented cover, slide against all four solid shapes |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
-| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, the selected-part pixel fixture, and shaded normal/roughness maps |
+| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading`, `gltf_pose_check` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, selected-part and replacement-pose pixel fixtures, and shaded normal/roughness maps |
 | Renderer behavior | `retained_mesh`, `material_depth_check`, `font_atlas_lifetime` | Immutable buffers and draw order, independent depth writes/testing, queued samplers, queued text across atlas growth and font drop |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 | Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
@@ -41,6 +41,7 @@ cargo run --features gltf --example gltf_retained
 cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials
 cargo run --features gltf --example gltf_material_check
+cargo run --features gltf --example gltf_pose_check
 cargo run --features video --example video_texture -- path/to/clip.mp4
 cargo run --example cursor_capture
 ```
@@ -234,6 +235,17 @@ transparency. A passing run prints `GLTF_MATERIAL_FIXTURE_PASS` and stays on a
 green screen. A failure panics instead of waiting for input. The same binary
 can be built for the browser. Without `gltf`, it prints a feature reminder
 and exits.
+
+## `gltf_pose_check`
+
+Requires `--features gltf`. It runs the same generated GLB pixel assertions as
+`tests/gltf_pose.rs`. A mesh imported under a non-origin rest transform moves
+to a spawn's position and yaw through a replacement node pose. The checks
+cover CPU and retained draws, reflected rest/replacement/parent transforms,
+inverse-transpose lighting, posed bounds, and repeated retained draws without
+new geometry uploads. A passing native or browser run prints
+`GLTF_POSE_FIXTURE_PASS` and stays green. Without `gltf`, it prints a feature
+reminder and exits.
 
 ## `material_depth_check`
 

@@ -71,6 +71,12 @@
 //! [`GltfMaterialFrame::submit_retained_part`] borrow one existing chunk and
 //! apply a caller-supplied affine transform, without cloning model metadata
 //! or recovering a rest pose.
+//! [`GltfModelPose`] retains authored node matrices from that same load through
+//! [`GltfModelLoader::take_pose`] or [`GltfModel::from_bytes_with_pose`]. Create a
+//! [`GltfNodePose`] for a selected node and replace its world matrix; posed part
+//! drawing/submission removes the baked rest transform, reuses geometry and
+//! retains the authored origin as the pivot. These edits do not propagate to
+//! descendants or scene markers. Apply matching model/sidecar up-axis conversion.
 //!
 //! [`GltfModelLoader`] and [`RetainedGltfModelLoader`] split the same
 //! construction into pollable units. Synchronous constructors remain.
@@ -96,6 +102,7 @@ mod loading;
 mod material;
 mod material_maps;
 mod material_warnings;
+mod pose;
 mod shading;
 pub use crate::gltf::GltfImageLimits;
 pub use diagnostics::*;
@@ -103,6 +110,7 @@ pub use loading::*;
 pub use material::*;
 pub use material_maps::*;
 pub use material_warnings::*;
+pub use pose::*;
 pub use shading::{
     gltf_tangent_frame, gltf_tangent_normal, shade_gltf_surface, GltfShadingModel, GltfShadingPart,
 };
@@ -469,6 +477,30 @@ impl GltfModel {
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
         Self::from_bytes_with_options(bytes, GltfLoadOptions::default())
+    }
+
+    /// Loads default draw chunks and their node rest matrices in one parse.
+    ///
+    /// Use the sidecar to replace individual node world transforms without
+    /// reconstructing pivots or copying vertices. Normal/roughness maps are
+    /// validated and dropped, as with [`Self::from_bytes`]. For explicit load
+    /// settings or maps as well, use [`GltfModelLoader::take_pose`] alongside
+    /// its other take methods. Call this inside a running macroquad context.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn load(bytes: &[u8]) -> Result<(), String> {
+    /// let (cpu, rest) = GltfModel::from_bytes_with_pose(bytes)?;
+    /// let mut pose = rest.node(cpu.parts[0].node)?;
+    /// pose.set_world(Mat4::from_translation(Vec3::Y) * pose.rest_world())?;
+    /// let model = RetainedGltfModel::from_model(cpu, false).map_err(|e| e.to_string())?;
+    /// model.parts[0].draw_posed(&pose)?;
+    /// # Ok(()) }
+    /// ```
+    pub fn from_bytes_with_pose(bytes: &[u8]) -> Result<(Self, GltfModelPose), String> {
+        let mut loader = GltfModelLoader::new(bytes, GltfLoadSettings::default())?;
+        while loader.poll()?.stage != GltfLoadStage::Complete {}
+        Ok((loader.take_model().unwrap(), loader.take_pose().unwrap()))
     }
 
     /// [`GltfModel::from_bytes`] with an explicit chunk size.

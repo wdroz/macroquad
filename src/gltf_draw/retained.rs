@@ -317,11 +317,11 @@ impl RetainedGltfModel {
     }
 }
 
-fn is_affine(matrix: Mat4) -> bool {
+pub(super) fn is_affine(matrix: Mat4) -> bool {
     matrix.is_finite() && matrix.row(3) == Vec4::W
 }
 
-fn transformed_bounds(min: Vec3, max: Vec3, matrix: Mat4) -> Option<Aabb> {
+pub(super) fn transformed_bounds(min: Vec3, max: Vec3, matrix: Mat4) -> Option<Aabb> {
     if !is_affine(matrix) || !min.is_finite() || !max.is_finite() || min.cmpgt(max).any() {
         return None;
     }
