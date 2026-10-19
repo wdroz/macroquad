@@ -60,7 +60,7 @@ const documentListeners = listen({
     if (!canvas.deferExit) lock = null;
   },
 });
-const windowListeners = listen({ devicePixelRatio: 1 });
+const windowListeners = listen({ devicePixelRatio: 1, PointerEvent: function () {} });
 const context = vm.createContext({
   console,
   Promise,
@@ -72,6 +72,8 @@ context.register_plugins(context.plugins);
 const env = context.importObject.env;
 assert.equal(env.mq_capture_ready(), 1);
 assert.equal(env.mq_capture_state(), Idle);
+assert.equal(env.mq_capture_events_ready(), 1);
+assert.equal(env.mq_capture_next_event(), -1);
 
 async function flush() {
   await new Promise(resolve => setImmediate(resolve));
@@ -85,6 +87,9 @@ async function flush() {
   assert.equal(env.mq_capture_state(), Requested);
   await flush();
   assert.equal(env.mq_capture_state(), Active);
+  assert.equal(env.mq_capture_next_event(), Requested);
+  assert.equal(env.mq_capture_next_event(), Active);
+  assert.equal(env.mq_capture_next_event(), -1);
 
   documentListeners.dispatch('pointerlockchange');
   assert.equal(env.mq_capture_state(), Active);
@@ -108,7 +113,7 @@ async function flush() {
   lock = null;
   documentListeners.dispatch('pointerlockchange');
   assert.equal(env.mq_capture_state(), Lost);
-  windowListeners.dispatch('mousedown', { type: 'mousedown' });
+  windowListeners.dispatch('pointerdown', { type: 'pointerdown' });
   await flush();
   assert.equal(env.mq_capture_state(), Denied);
   const deniedRequests = requests.filter(kind => kind === 'request').length;
@@ -116,7 +121,7 @@ async function flush() {
   assert.equal(requests.filter(kind => kind === 'request').length, deniedRequests);
 
   canvas.mode = 'grant';
-  windowListeners.dispatch('touchstart', { type: 'touchstart' });
+  windowListeners.dispatch('pointerdown', { type: 'pointerdown', pointerType: 'touch', isPrimary: true });
   await flush();
   assert.equal(env.mq_capture_state(), Active);
 
@@ -257,7 +262,52 @@ async function flush() {
   assert.equal(env.mq_capture_state(), Active, 'old success preserves a valid successor');
   assert.equal(lock, canvas);
 
-  console.log('PASS: pointer capture dedupe, denial, escape, focus loss, cancellation, and gesture recovery');
+  env.mq_capture_set_wanted(0);
+  documentListeners.dispatch('pointerlockchange');
+  env.mq_capture_set_wanted(1);
+  const refocused = deferred.shift();
+  documentListeners.focused = false;
+  windowListeners.dispatch('blur');
+  documentListeners.focused = true;
+  windowListeners.dispatch('focus');
+  refocused.grant();
+  documentListeners.dispatch('pointerlockchange');
+  await flush();
+  assert.equal(env.mq_capture_state(), Lost, 'refocusing does not authorize an obsolete pending grant');
+  assert.equal(lock, null);
+
+  canvas.mode = 'throw';
+  while (env.mq_capture_next_event() !== -1) {}
+  const beforeClick = requests.filter(kind => kind === 'request').length;
+  windowListeners.dispatch('pointerdown', { type: 'pointerdown', button: 2, isPrimary: true });
+  windowListeners.dispatch('pointerdown', { type: 'pointerdown', button: 0, isPrimary: false });
+  assert.equal(requests.filter(kind => kind === 'request').length, beforeClick, 'secondary presses do not recapture');
+  windowListeners.dispatch('pointerdown', { type: 'pointerdown', button: 0, isPrimary: true });
+  windowListeners.dispatch('mousedown', { type: 'mousedown', button: 0 });
+  windowListeners.dispatch('touchstart', { type: 'touchstart' });
+  assert.equal(requests.filter(kind => kind === 'request').length, beforeClick + 1,
+    'compatibility events do not retry a synchronously refused pointer press');
+  assert.equal(env.mq_capture_next_event(), Requested);
+  assert.equal(env.mq_capture_next_event(), Denied, 'a request and immediate denial both remain observable');
+  assert.equal(env.mq_capture_next_event(), -1);
+
+  // Browsers without PointerEvent retain mouse/touch recovery.
+  const fallbackCanvas = { requestPointerLock() { throw new Error('refused'); } };
+  const fallbackDocument = listen({ querySelector() { return fallbackCanvas; }, hasFocus() { return true; } });
+  const fallbackWindow = listen({});
+  const fallbackEnv = {};
+  vm.runInNewContext(source, {
+    window: fallbackWindow, document: fallbackDocument,
+    miniquad_add_plugin(plugin) { plugin.register_plugin({ env: fallbackEnv }); },
+  });
+  fallbackEnv.mq_capture_set_wanted(1);
+  fallbackEnv.mq_capture_events_ready();
+  fallbackWindow.dispatch('mousedown', { button: 0 });
+  fallbackWindow.dispatch('touchstart');
+  assert.deepEqual(Array.from({ length: 4 }, () => fallbackEnv.mq_capture_next_event()),
+    [Requested, Denied, Requested, Denied]);
+
+  console.log('PASS: pointer capture dedupe, state history, primary gestures, cancellation, and focus recovery');
 })().catch(error => {
   console.error(error);
   process.exit(1);

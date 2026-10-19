@@ -98,8 +98,8 @@ pub fn gltf_tangent_normal(n: Vec3, t: Vec3, b: Vec3, sampled_rgb: Vec3, scale: 
 /// World tangent frame for one shaded vertex.
 ///
 /// `geometric_normal` and `tangent` are the loader's node-world values
-/// ([`super::GltfPartMaterialMaps`] tangents already include the node inverse
-/// transpose and a mirrored node's handedness flip). `instance` is the
+/// ([`super::GltfPartMaterialMaps`] tangents already include the node's forward
+/// vector transform and a mirrored node's handedness flip). `instance` is the
 /// additional parent/instance matrix, the same matrix the renderer uploads as
 /// `Model`. The normal uses that matrix's inverse transpose. The tangent uses
 /// the matrix itself, then Gram-Schmidt against the normal. `handedness` is

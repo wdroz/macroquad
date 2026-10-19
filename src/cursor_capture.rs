@@ -266,6 +266,14 @@ mod tests {
                 CursorCapture::Active,
             ]
         );
+        let events = capture.events().to_vec();
+        assert_eq!(
+            capture.events(),
+            events.as_slice(),
+            "reading does not drain events"
+        );
+        capture.clear_events();
+        assert!(capture.events().is_empty());
         assert!(capture.take_platform().is_empty());
         assert_eq!(CursorCapture::from_raw(3), Some(CursorCapture::Denied));
         assert_eq!(CursorCapture::from_raw(9), None);

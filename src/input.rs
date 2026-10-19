@@ -81,10 +81,12 @@ pub fn set_cursor_grab(grab: bool) {
     #[cfg(target_arch = "wasm32")]
     {
         if browser_capture_ready() {
+            // Subscribe before requesting: a synchronous refusal can enter
+            // Requested and Denied before the first subsequent frame.
+            unsafe { mq_capture_events_ready() };
             unsafe { mq_capture_set_wanted(grab as i32) };
-            // miniquad applies the grab on the next browser frame. The bundle
-            // wrapper drops a duplicate or ungated request.
-            miniquad::window::set_cursor_grab(grab);
+            // The plugin already applied the request. Also queuing miniquad's
+            // copy could replay an obsolete true after a same-frame release.
             sync_cursor_capture();
         } else {
             let context = get_context();
@@ -125,6 +127,8 @@ pub fn cursor_capture() -> CursorCapture {
 /// Reading this does not drain it. The list is cleared at the end of the frame,
 /// same as the pressed-key sets. A desktop grab contributes `Requested` and
 /// then `Active` on the frame of the call.
+/// The current browser bundle also preserves transitions between frames;
+/// older capture plugins can report only their latest state.
 ///
 /// ```no_run
 /// use macroquad::prelude::*;
@@ -166,6 +170,11 @@ pub(crate) fn sync_cursor_capture() {
             return;
         }
         let context = get_context();
+        if unsafe { mq_capture_events_ready() } == 1 {
+            while let Some(state) = CursorCapture::from_raw(unsafe { mq_capture_next_event() }) {
+                context.capture.observe_browser(state);
+            }
+        }
         let Some(state) = CursorCapture::from_raw(unsafe { mq_capture_state() }) else {
             return;
         };
@@ -184,6 +193,9 @@ extern "C" {
     fn mq_capture_set_wanted(wanted: i32);
     fn mq_capture_state() -> i32;
     fn mq_capture_ready() -> i32;
+    // Optional on older loaders, whose missing-import stub returns zero.
+    fn mq_capture_events_ready() -> i32;
+    fn mq_capture_next_event() -> i32;
 }
 
 #[cfg(target_arch = "wasm32")]

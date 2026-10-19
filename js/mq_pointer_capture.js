@@ -18,12 +18,18 @@
     let consumed = 0;
     let attempt = 0;
     let exiting = false;
+    // Older Rust builds only poll the scalar state, so retain history only
+    // after a build explicitly subscribes to the optional event transport.
+    let recordEvents = false;
+    const events = [];
 
     function locked() {
         return document.pointerLockElement === canvas || document.mozPointerLockElement === canvas;
     }
     function transition(next) {
+        if (state === next) return;
         state = next;
+        if (recordEvents) events.push(next);
     }
     function exitLock() {
         if (!locked() || exiting) return;
@@ -67,7 +73,7 @@
             if (token !== attempt) {
                 // Cancellation cannot cancel the browser's in-flight request.
                 // Release its late acquisition unless a newer request wants it.
-                if (locked() && (!wanted || !pageFocused())) onLockChange();
+                if (locked()) onLockChange();
                 return;
             }
             pending = false;
@@ -96,21 +102,27 @@
     function onGesture(event) {
         if (event && event.repeat) return;
         if (isEscape(event)) return;
+        if (event && ((event.button != null && event.button !== 0) || event.isPrimary === false)) return;
         // An active or in-flight lock does not spend a new gesture. Escape is
         // not a recapture press; the browser uses it to drop the lock.
         if (!wanted || state === Active || state === Requested) return;
         gesture++;
         tryRequest(true);
     }
-    // Capture phase runs before the page's click handler. pointerdown and
-    // mousedown both fire for one click; a pending request drops the second.
-    for (const name of ["pointerdown", "mousedown", "touchstart"]) {
+    // Pointer Events already cover mouse, pen and touch. Listening to their
+    // compatibility events too would retry the same press on synchronous denial.
+    const gestureEvents = typeof window.PointerEvent === "function"
+        ? ["pointerdown"] : ["mousedown", "touchstart"];
+    for (const name of gestureEvents) {
         window.addEventListener(name, onGesture, true);
     }
     function onLockChange() {
         if (locked()) {
             pending = false;
-            if (!wanted || !pageFocused()) {
+            // A blur invalidates pending requests even if focus has returned
+            // before the browser finally grants them. Only a fresh request or
+            // an existing active lock authorizes this acquisition.
+            if (!wanted || !pageFocused() || (state !== Requested && state !== Active)) {
                 transition(wanted ? Lost : Idle);
                 exitLock();
                 return;
@@ -181,6 +193,13 @@
             };
             imports.env.mq_capture_state = function () { return state; };
             imports.env.mq_capture_ready = function () { return 1; };
+            imports.env.mq_capture_events_ready = function () {
+                recordEvents = true;
+                return 1;
+            };
+            imports.env.mq_capture_next_event = function () {
+                return events.length ? events.shift() : -1;
+            };
         },
     });
 })();

@@ -605,6 +605,7 @@ impl EventHandler for Stage {
     }
 
     fn raw_mouse_motion(&mut self, x: f32, y: f32) {
+        input::sync_cursor_capture();
         input::sync_input_coordinates();
         let context = get_context();
 
@@ -623,6 +624,7 @@ impl EventHandler for Stage {
     }
 
     fn mouse_motion_event(&mut self, x: f32, y: f32) {
+        input::sync_cursor_capture();
         input::sync_input_coordinates();
         let context = get_context();
 
@@ -657,6 +659,7 @@ impl EventHandler for Stage {
     }
 
     fn mouse_button_down_event(&mut self, btn: MouseButton, x: f32, y: f32) {
+        input::sync_cursor_capture();
         input::sync_input_coordinates();
         let context = get_context();
 
@@ -678,6 +681,7 @@ impl EventHandler for Stage {
     }
 
     fn mouse_button_up_event(&mut self, btn: MouseButton, x: f32, y: f32) {
+        input::sync_cursor_capture();
         input::sync_input_coordinates();
         let context = get_context();
         //     println!("btn = {}", btn as u32);

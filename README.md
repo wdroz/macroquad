@@ -38,7 +38,8 @@ submits the textured meshes with the current camera and material.
 
 For memory-constrained scenes, `GltfModel::from_bytes_with_options` accepts
 `GltfLoadOptions { max_texture_size: Some(512), ..Default::default() }`.
-This bounds both edges of each uploaded base-color/emissive image, preserves
+This bounds both edges of each uploaded base-color, emissive, normal, and
+metallic-roughness image, preserves
 aspect ratio, and never enlarges an image. The default is `None`: existing
 `from_bytes` and `from_bytes_with_limits` calls retain full resolution. The
 cap reduces GPU texture and mipmap memory; the original image is still decoded
@@ -91,9 +92,12 @@ diffuse light from imported normals. Unlit materials ignore it, and the
 existing `draw` methods stay available. Normal and metallic-roughness images,
 UV transforms, and tangents are retained by
 `GltfModel::from_bytes_with_material_maps` (and on the CPU by
-`GltfMaterialMaps`); this renderer does not sample them. Refraction and
-shadows are not part of this renderer. `examples/gltf_materials.rs` toggles
-the light; `examples/gltf_material_check.rs` also checks selected parts.
+`GltfMaterialMaps`). The opt-in `submit_shaded` methods sample these maps with
+hemisphere diffuse and directional GGX lighting; `GltfShadingModel` retains
+the extra attributes for GPU drawing. Occlusion, environment lighting,
+refraction, and shadows are not evaluated. `examples/gltf_materials.rs`
+toggles diffuse lighting, `examples/gltf_shading.rs` shows map sampling, and
+`examples/gltf_material_check.rs` checks both paths and selected parts.
 
 `GltfModelLoader` and `RetainedGltfModelLoader` perform the same construction
 one stage at a time. Parsing, one image decode, and one mesh conversion can

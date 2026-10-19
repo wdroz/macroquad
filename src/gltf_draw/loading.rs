@@ -616,7 +616,8 @@ impl<'a> GltfModelLoader<'a> {
     /// [`Self::take_model`] leaves these in place. Dropping the loader releases
     /// an untaken set, including shading textures that are not also stored on
     /// the model. Pending, cancelled, and failed loads return [`None`]. The
-    /// material renderer does not sample this data yet.
+    /// material renderer samples these maps through
+    /// [`GltfMaterialFrame::submit_shaded`].
     ///
     /// ```
     /// use macroquad::prelude::*;

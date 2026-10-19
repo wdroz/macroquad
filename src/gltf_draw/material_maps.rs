@@ -45,7 +45,7 @@ pub struct GltfDrawMaterialMap {
 /// Maps and world-space tangents for one [`super::GltfDrawMesh`].
 ///
 /// `tangents` is empty or the same length as the chunk's vertices. `xyz` is
-/// the tangent after the node matrix (inverse transpose, then normalized) and
+/// the tangent after the node's forward vector transform, then normalized.
 /// `w` is the glTF handedness. A mirrored node flips `w`. [`GltfModel::with_up_axis`](super::GltfModel::with_up_axis)
 /// does not rotate this value; use [`GltfModelMaterialMaps::with_up_axis`] with
 /// the same axis.
@@ -101,7 +101,7 @@ pub struct GltfModelMaterialMaps {
 impl GltfModelMaterialMaps {
     /// Rotates tangent directions by the same rule as [`super::GltfModel::with_up_axis`].
     ///
-    /// [`macroquad::math::Vec3::Y`] returns a clone. Handedness is unchanged
+    /// [`Vec3::Y`] returns a clone. Handedness is unchanged
     /// because this rotation is not a mirror. UVs and textures stay put.
     ///
     /// ```

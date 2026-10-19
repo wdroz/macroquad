@@ -195,7 +195,7 @@ fn glb(json: serde_json::Value, binary: &[u8]) -> Vec<u8> {
     bytes
 }
 
-fn normal_mapped_glb() -> Vec<u8> {
+fn normal_mapped_glb(node_transform: Mat4) -> Vec<u8> {
     let mut binary = Vec::new();
     for point in [
         [-0.8_f32, -0.8, 0.],
@@ -232,7 +232,7 @@ fn normal_mapped_glb() -> Vec<u8> {
             "asset": {"version": "2.0"},
             "scene": 0,
             "scenes": [{"nodes": [0]}],
-            "nodes": [{"name": "panel", "mesh": 0}],
+            "nodes": [{"name": "panel", "mesh": 0, "matrix": node_transform.to_cols_array()}],
             "meshes": [{"primitives": [{"attributes": {
                 "POSITION": 0, "NORMAL": 1, "TANGENT": 2, "TEXCOORD_0": 3
             }, "indices": 4, "material": 0}]}],
@@ -595,7 +595,66 @@ pub(super) fn run(renderer: &mut GltfMaterialRenderer, target: &RenderTarget, ca
         },
     );
 
-    let bytes = normal_mapped_glb();
+    // Baking a node's shear and applying it to an instance must produce the
+    // same tangent frame. A +Y texel follows cross(+Z, normalize(1, .5, 0)),
+    // so it catches -X light. Applying the inverse transpose to T would keep
+    // that bitangent on +Y and leave the center dark instead.
+    let mut imported_shear = Mat4::IDENTITY;
+    imported_shear.x_axis.y = 0.5;
+    let local_bytes = normal_mapped_glb(identity);
+    let node_bytes = normal_mapped_glb(imported_shear);
+    let local_assets =
+        GltfModel::from_bytes_with_material_maps(&local_bytes, GltfLoadSettings::default())
+            .unwrap();
+    let node_assets =
+        GltfModel::from_bytes_with_material_maps(&node_bytes, GltfLoadSettings::default()).unwrap();
+    let local_scene = ShadedScene::new(
+        local_assets.model.parts[0].clone(),
+        local_assets.material_maps.parts[0].clone(),
+    );
+    let node_scene = ShadedScene::new(
+        node_assets.model.parts[0].clone(),
+        node_assets.material_maps.parts[0].clone(),
+    );
+    let expected = normal_from_map(
+        Vec3::Z,
+        vec4(1., 0., 0., 1.),
+        imported_shear,
+        Vec3::new(128., 255., 128.),
+        1.,
+    );
+    for retained in [false, true] {
+        let instance_image = local_scene.render(
+            renderer,
+            target,
+            Some(no_hemi(-Vec3::X)),
+            imported_shear,
+            retained,
+            "instance shear normal map",
+        );
+        let node_image = node_scene.render(
+            renderer,
+            target,
+            Some(no_hemi(-Vec3::X)),
+            identity,
+            retained,
+            "loaded node shear normal map",
+        );
+        near(
+            &node_image,
+            32,
+            reference(Vec3::ONE, 0., 1., expected, -Vec3::X),
+            8,
+            "loaded node shear follows the surface edge tangent",
+        );
+        same_pixels(
+            &node_image,
+            &instance_image,
+            "node and instance shear agree",
+        );
+    }
+
+    let bytes = normal_mapped_glb(identity);
     let assets =
         GltfModel::from_bytes_with_material_maps(&bytes, GltfLoadSettings::default()).unwrap();
     assert!(assets.material_maps.parts[0].normal.is_some());

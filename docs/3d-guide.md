@@ -472,9 +472,9 @@ response. A missing metallic-roughness map is white, so the surface factors
 pass through: green is roughness and blue is metallic, both linear, and red
 occlusion is ignored. A missing normal map is a flat `(128, 128, 255)` texel,
 not white. Sampled normals are linear, `rgb * 2 - 1`, then `normalTexture.scale`
-on XY. The tangent frame takes the loader's node-world tangent, transforms
-that tangent by the instance matrix, and transforms the geometric normal by
-the inverse transpose. A mirrored instance flips the bitangent. The view vector
+on XY. Tangents use the forward vector transform for both the baked node matrix
+and the additional instance matrix. The geometric normal uses the inverse
+transpose. A mirrored instance flips the bitangent. The view vector
 is `normalize(camera_position - world_position)`, so an orthographic camera
 still gets a perspective view. `KHR_materials_unlit` and a frame whose lighting
 is `None` ignore the maps and stay on the preview path. There is no image-based

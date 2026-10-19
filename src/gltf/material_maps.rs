@@ -2,7 +2,8 @@
 //!
 //! These stay off [`super::GltfScene`] and [`super::GltfPrimitive`] so existing
 //! struct literals keep compiling. [`GltfMaterialMaps`] retains the decoded
-//! images even though the material renderer does not sample them yet.
+//! images for CPU inspection. The draw loader uploads parallel maps for
+//! [`crate::gltf_draw::GltfMaterialFrame::submit_shaded`].
 
 use std::collections::HashMap;
 
@@ -408,6 +409,12 @@ pub(crate) fn resolve_primitive_maps<'b>(
         Some(indices) => indices.into_u32().collect(),
         None => (0..positions.len() as u32).collect(),
     };
+    if !indices.len().is_multiple_of(3) {
+        return Err(format!(
+            "{label}: primitive has {} indices, which is not a multiple of 3",
+            indices.len()
+        ));
+    }
     if indices
         .iter()
         .any(|index| *index as usize >= positions.len())
@@ -688,21 +695,30 @@ fn geometric_normals(positions: &[Vec3], indices: &[u32]) -> Vec<Vec3> {
     normals
 }
 
-/// Transforms mesh-local tangents the same way draw normals are transformed.
+/// Transforms mesh-local tangents as surface directions, using the node matrix.
 ///
 /// A negative determinant flips `w`. A singular matrix yields zero tangents.
 pub(crate) fn world_tangents(local: &[Vec4], world: Mat4) -> Vec<Vec4> {
     if local.is_empty() {
         return Vec::new();
     }
-    let normal_matrix = world.inverse().transpose();
-    let mirrored = world.determinant() < 0.0;
+    // The inverse transpose belongs to normals, not surface edge directions.
+    // Use f64 for the determinant and vector products so finite f32 scales do
+    // not overflow or underflow before normalization or the handedness test.
+    let x = world.x_axis.truncate().as_dvec3();
+    let y = world.y_axis.truncate().as_dvec3();
+    let z = world.z_axis.truncate().as_dvec3();
+    let determinant = x.dot(y.cross(z));
+    if determinant == 0.0 || !determinant.is_finite() {
+        return vec![Vec4::ZERO; local.len()];
+    }
+    let mirrored = determinant < 0.0;
     local
         .iter()
         .map(|tangent| {
-            let xyz = normal_matrix
-                .transform_vector3(tangent.truncate())
-                .normalize_or_zero();
+            let direction =
+                x * f64::from(tangent.x) + y * f64::from(tangent.y) + z * f64::from(tangent.z);
+            let xyz = direction.normalize_or_zero().as_vec3();
             let w = if mirrored { -tangent.w } else { tangent.w };
             if xyz.is_finite() && w.is_finite() {
                 xyz.extend(w)
@@ -868,6 +884,24 @@ mod tests {
     }
 
     #[test]
+    fn incomplete_triangles_are_rejected_like_the_scene_loader() {
+        let bytes = distinct_uv_fixture();
+        let parsed = gltf::binary::Glb::from_slice(&bytes).unwrap();
+        let mut json: serde_json::Value = serde_json::from_slice(&parsed.json).unwrap();
+        // The index view has two padding bytes before the image, so the
+        // fourth index is validly stored and in bounds, but not a triangle.
+        json["bufferViews"][5]["byteLength"] = serde_json::json!(8);
+        json["accessors"][5]["count"] = serde_json::json!(4);
+        let bytes = glb(json, parsed.bin.unwrap().as_ref());
+        assert!(super::super::GltfScene::from_bytes(&bytes).is_err());
+        let error = GltfMaterialMaps::from_bytes(&bytes)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("mirrored"), "{error}");
+        assert!(error.contains("multiple of 3"), "{error}");
+    }
+
+    #[test]
     fn image_limits_reject_a_normal_map_before_decode_and_ignore_occlusion() {
         let mut image = png([1, 2, 3, 4]);
         image[16..20].copy_from_slice(&1_000u32.to_be_bytes());
@@ -932,5 +966,40 @@ mod tests {
         assert!((baked[0].truncate() - Vec3::X).length() < 1.0e-5);
         assert_eq!(baked[0].w, 1.0);
         assert!(world_tangents(&[], world).is_empty());
+    }
+
+    #[test]
+    fn node_tangents_follow_surface_edges_under_nonuniform_scale_and_shear() {
+        let local = Vec3::new(1.0, 1.0, 0.0).normalize();
+        let mut shear = Mat4::IDENTITY;
+        shear.x_axis.y = 0.5;
+        for world in [Mat4::from_scale(Vec3::new(2.0, 1.0, 0.5)), shear] {
+            let baked = world_tangents(&[local.extend(1.0)], world)[0];
+            // Tangents are surface edge directions, so the forward matrix
+            // applies. Only normals use the inverse transpose.
+            let expected = world.transform_vector3(local).normalize();
+            assert!(baked.truncate().abs_diff_eq(expected, 1.0e-5), "{baked:?}");
+            let (_, instance, _) =
+                crate::gltf_draw::gltf_tangent_frame(Vec3::Z, local, 1.0, world).unwrap();
+            assert!(baked.truncate().abs_diff_eq(instance, 1.0e-5));
+            assert_eq!(baked.w, 1.0);
+        }
+    }
+
+    #[test]
+    fn node_tangents_keep_mirrors_at_extreme_scales_and_zero_singular_frames() {
+        let local = [Vec4::new(1.0, 1.0, 0.0, -1.0)];
+        for scale in [1.0e-20, 1.0e20] {
+            let world = Mat4::from_scale(Vec3::new(-scale, scale, scale));
+            let baked = world_tangents(&local, world)[0];
+            assert!(baked
+                .truncate()
+                .abs_diff_eq(Vec3::new(-1.0, 1.0, 0.0).normalize(), 1.0e-5));
+            assert_eq!(baked.w, 1.0);
+        }
+        assert_eq!(
+            world_tangents(&local, Mat4::from_scale(Vec3::ZERO)),
+            [Vec4::ZERO]
+        );
     }
 }
