@@ -62,6 +62,8 @@ cargo run --features gltf --example gltf_textured -- path/to/model.glb
 cargo run --features gltf --example gltf_retained
 cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials
+cargo run --features gltf --example gltf_shading
+cargo run --features gltf --example gltf_pose_check
 ```
 
 `model.parts` exposes each mesh, source node/name, bounds, and surface metadata
@@ -87,6 +89,13 @@ The separate CPU-only `macroquad::gltf::GltfMorphData` sidecar imports
 POSITION/NORMAL morph deltas and default weights and evaluates explicit weights
 with deformed bounds. It does not change these draw methods; see the
 [morph evaluation guide](docs/3d-guide.md#cpu-morph-data-and-evaluation).
+
+`GltfModel::from_bytes_with_pose` (or `GltfModelLoader::take_pose`) keeps the
+authored node matrices. `GltfNodePose::set_world` replaces one node's world
+matrix and draws around that node's origin. `GltfModelPose::hierarchy` edits
+local translation, rotation, and scale and updates descendants. Those poses
+do not move colliders or spawn markers. See
+[docs/3d-guide.md](docs/3d-guide.md#replacing-an-imported-node-pose).
 
 For static geometry, `RetainedGltfModel::from_model(model, false)` consumes the
 finished CPU model, uploads each chunk once, and releases its CPU geometry.
@@ -123,6 +132,17 @@ the later upload cap. After a scene change, `retire_unused_render_resources`
 flushes queued draws and collects unused textures and retained buffers.
 `GltfResourceReport` and `telemetry::renderer_diagnostics` report estimated
 bytes and upload counts, not process or driver memory.
+
+`CursorCapture` reports whether `set_cursor_grab` is idle, requested, active,
+denied, or lost. The browser bundle asks for Pointer Lock once per gesture and
+does not repeat the request every frame. `mouse_position_logical` /
+`mouse_position_physical`, the matching touch accessors, and
+`logical_to_physical` / `physical_to_logical` separate logical window units
+from framebuffer pixels. `Camera3D::screen_to_ray` takes the logical window
+point. `examples/cursor_capture.rs` and `examples/input_coordinates.rs` show
+the two APIs. On the web, optional density, framebuffer, and frame-rate caps
+live in [docs/browser-host.md](docs/browser-host.md); `examples/canvas_host.rs`
+is the fixture.
 
 `Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, `Obb`, and `Frustum` live in
 `macroquad::math` and the prelude. `Contact` describes an overlapping pair,

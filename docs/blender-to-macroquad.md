@@ -99,9 +99,9 @@ File → Export → glTF 2.0 (`.glb` / `.gltf`).
 1. **Format: glTF Binary (`.glb`)** when the game will draw the level. `GltfModel` only accepts a `.glb`. `GltfScene::from_bytes` also accepts a `.gltf` whose buffers are `data:` URIs. External `.bin` files are unsupported; an external image is an error when a loaded primitive samples it.
 2. **Include → Custom Properties**, so `mq_shape` and `mq_role` reach the node extras. Name suffixes still work if this box is unchecked.
 3. **Transform → +Y Up** stays checked.
-4. **Data → Mesh**: apply modifiers if the collider should see the modified surface, and export UVs and normals if you will draw the mesh.
-5. **Data → Material**: export materials, and keep images packed into the `.glb` (the exporter's automatic image mode). PNG, JPEG, and WebP are decoded. A WebP image uses `EXT_texture_webp`.
-6. Leave Draco compression off. This loader does not decode it.
+4. **Data → Mesh**: apply modifiers if the collider should see the modified surface, and export UVs, normals, and tangents when the mesh will be drawn or shaded. Leave the exporter's **Shape Keys** option enabled when the object has them (it sits under Mesh or Animation, depending on the Blender version). `GltfMorphData` reads the POSITION and NORMAL deltas. Tangent morphs are not evaluated, and the draw path does not deform the GPU mesh.
+5. **Data → Material**: export materials, and keep images packed into the `.glb` (the exporter's automatic image mode). PNG, JPEG, and WebP are decoded. A WebP image uses `EXT_texture_webp`. A normal map and a metallic-roughness map are loaded with the draw model; occlusion is not.
+6. Leave Draco compression off. This loader does not decode it. Skinning and animation clips can be written into the file, and this library does not play them.
 7. Do not export a camera or a light unless you want those nodes in the hierarchy. They are not special-cased.
 
 Custom property names are exactly `mq_shape` and `mq_role`, string values `box` / `sphere` / `capsule` and `collider` / `trigger` / `spawn`.
@@ -277,12 +277,14 @@ let _stats = frame.draw();
 
 `submit_retained_part` borrows the existing chunk and its GPU buffers. The
 extra matrix is applied to coordinates that are already baked into the scene,
-then the parent model matrix active at `draw` is applied as well. A rotation
-around a chosen point is `Mat4::from_translation(pivot) * rotation *
-Mat4::from_translation(-pivot)`. The loader does not store a rest matrix and
-does not invent that pivot. Submitting the whole model and one of its parts
+then the parent model matrix active at `draw` is applied as well. These
+additional-transform calls do not read a rest pose. A rotation around a chosen
+point is `Mat4::from_translation(pivot) * rotation *
+Mat4::from_translation(-pivot)`. Submitting the whole model and one of its parts
 draws that part twice. This draw path does not move colliders, triggers, or
-spawns. `submit_part` is the same call for a CPU `GltfDrawMesh`.
+spawns. `submit_part` is the same call for a CPU `GltfDrawMesh`. To rotate
+around the node's authored origin, use the pose sidecar below instead of
+building that pivot by hand.
 
 Construct `GltfMaterialRenderer` once inside the running application and keep
 it. Each `begin` starts unlit; `set_lighting(Some(..))` opts that collection
@@ -290,9 +292,62 @@ into hemisphere and directional diffuse light. See
 [material passes](3d-guide.md#opt-in-gltf-material-passes) for alpha sorting,
 color output, and the shapes this light model does not cover.
 
+## Authored poses and shape keys
+
+`GltfModel::from_bytes_with_pose` keeps the authored node world matrices next
+to the baked chunks. `GltfModelLoader::take_pose` returns the same sidecar
+after a pollable load, together with `take_model` and `take_material_maps`.
+`GltfNodePose::set_world` replaces one node's world matrix. The draw transform
+is `replacement * inverse(rest)`, so a rotation is around the authored node
+origin, including a spawn yaw stored on that node. Setting the world matrix
+back to `pose.rest_world()` restores the baked placement.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn lift_gate(bytes: &[u8], part: &RetainedGltfDrawMesh) -> Result<(), String> {
+let (cpu, rest) = GltfModel::from_bytes_with_pose(bytes)?;
+let mut pose = rest.node(part.node)?;
+let _model = RetainedGltfModel::from_model(cpu, false).map_err(|e| e.to_string())?;
+pose.set_world(pose.rest_world() * Mat4::from_translation(Vec3::Y * 2.0))?;
+part.draw_posed(&pose)?;
+# Ok(()) }
+```
+
+`rest.hierarchy()` builds an independent `GltfHierarchyPose`. Edit one node's
+`GltfLocalTransform` with `set_local`; descendants recompute immediately.
+`node_pose(handle)` is the snapshot to pass to `draw_posed`, `posed_bounds`,
+or `submit_retained_part_posed`. `reset_local` restores one authored matrix
+and `reset` restores the whole instance. A matrix that contains shear uses
+`set_local_matrix` instead of translation/rotation/scale. Colliders, triggers,
+and spawns stay where `GltfScene` stored them. Apply the same `with_up_axis`
+to the scene, the draw model, and the pose sidecar before creating editable
+poses. The [hierarchy guide](3d-guide.md#editing-an-imported-hierarchy) shows
+culling and transparent sorting with those poses. `examples/gltf_pose_check.rs`
+is the pixel fixture.
+
+Shape keys are separate from that transform. `GltfMorphData::from_bytes` loads
+mesh-local POSITION/NORMAL deltas and the node's default weights. It does not
+open a window or upload a mesh. Pass `None` to use the file's weights, or one
+finite weight per target. Weights are not clamped. Apply the node's world
+matrix, including `with_up_axis`, after evaluation. GPU morph drawing, weight
+clips, and skinning are not available.
+
+```rust
+use macroquad::gltf::GltfMorphData;
+use macroquad::math::Mat4;
+# fn smile(bytes: &[u8], face_node: usize) -> Result<(), macroquad::gltf::GltfError> {
+let morphs = GltfMorphData::from_bytes(bytes)?;
+let face = morphs.evaluate(face_node, 0, Some(&[1.0]))?;
+let _bounds = face.transformed_bounds(Mat4::IDENTITY)?;
+# Ok(()) }
+```
+
+The [morph guide](3d-guide.md#cpu-morph-data-and-evaluation) covers missing
+normal deltas and the weight rules.
+
 ## CPU images and draw materials
 
-`scene.images` holds the base-color images sampled by loaded primitives, decoded to 8-bit RGBA (`GltfImage`: `width`, `height`, and row-major `pixels` with row 0 at the top). `GltfPrimitive::base_color_texture` is an index into that list, or `None` when the material has no base-color image. Images no loaded primitive samples are omitted. Normal, metallic-roughness, occlusion, and emissive maps are not loaded. The bytes are the file's stored channels (sRGB for a base-color texture), not linear, and not a `Texture2D`. `with_up_axis` does not move them.
+`scene.images` holds the base-color images sampled by loaded primitives, decoded to 8-bit RGBA (`GltfImage`: `width`, `height`, and row-major `pixels` with row 0 at the top). `GltfPrimitive::base_color_texture` is an index into that list, or `None` when the material has no base-color image. Images no loaded primitive samples are omitted. Emissive images are uploaded with `GltfModel`, not stored in this list. Normal and metallic-roughness images are the separate `GltfMaterialMaps` sidecar (`GltfMaterialMaps::from_bytes`), still CPU RGBA and still not a `Texture2D`. Occlusion maps are not loaded. The bytes are the file's stored channels (sRGB for a base-color texture; linear for a normal or metallic-roughness texture), and not a `Texture2D`. `with_up_axis` does not move them.
 
 ```rust
 use macroquad::gltf::GltfScene;
@@ -346,14 +401,14 @@ let model = GltfModel::from_bytes_with_options(&bytes, GltfLoadOptions {
 # }
 ```
 
-Both image dimensions stay at or below this limit; a 4096×2048 image becomes 512×256. Smaller images stay unchanged, and the aspect ratio, UVs, and sampler settings are preserved. This applies to embedded base-color and emissive images and their mipmaps. `None` is the default, preserving the original full-resolution behavior of the existing loading methods. The cap bounds retained GPU image memory, but the decoder still briefly holds the original image in CPU memory. It does not edit or re-encode the source GLB. Supply `mesh_limits` in the same options value when changing mesh chunk sizes as well.
+Both image dimensions stay at or below this limit; a 4096×2048 image becomes 512×256. Smaller images stay unchanged, and the aspect ratio, UVs, and sampler settings are preserved. The cap applies to each embedded base-color, emissive, normal, and metallic-roughness image and its mipmaps. Occlusion maps are not uploaded. `None` is the default, preserving the original full-resolution behavior of the existing loading methods. The cap bounds retained GPU image memory, but the decoder still briefly holds the original image in CPU memory. It does not edit or re-encode the source GLB. Supply `mesh_limits` in the same options value when changing mesh chunk sizes as well.
 
 For an explicit source-size guard, wrap those options with
 `options.with_image_limits(GltfImageLimits { max_source_pixels: Some(2048 * 2048),
 max_decoded_bytes: Some(16 * 1024 * 1024) })` and pass the result to
 `GltfModel::from_bytes_with_settings`. Import `GltfImageLimits` from
-`macroquad::gltf_draw`. The loader checks metadata for every consumed base-color
-and emissive image before decoding pixels or creating textures. Rejections name
+`macroquad::gltf_draw`. The loader checks metadata for every consumed base-color,
+emissive, normal, and metallic-roughness image before decoding pixels or creating textures. Rejections name
 the image and material. Each limit is per image; the byte estimate is source
 width × height × 4 for RGBA8, not total model or decoder memory. Existing
 constructors and defaults stay uncapped. See the [3D guide](3d-guide.md#loading-and-materials)
@@ -405,6 +460,8 @@ cargo run --features gltf --example gltf_retained
 cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials -- path/to/room.glb
 cargo run --features gltf --example gltf_material_check
+cargo run --features gltf --example gltf_shading
+cargo run --features gltf --example gltf_pose_check
 ```
 
 With no path, `gltf_textured` shows the checkerboard. A path is loaded with
@@ -437,7 +494,7 @@ a custom renderer, especially its transparency ordering and output-space limits.
 
 ## What the loader does not do yet
 
-- `GltfScene::with_up_axis` does not change a `GltfModel`, and the reverse is also true. Call both with the same axis when the draw and the markers should leave Y-up. A camera can instead keep `up: Vec3::Y` and skip both calls. That is what the examples do.
-- `GltfModel` still uploads its own GPU textures, and only from a `.glb`. Sampler wrap and filter stay on that draw path. `GltfScene` does not turn its RGBA bytes into a `Texture2D`.
-- Skins, animation clips, morph targets, editable local transforms, and full PBR shading (image-based lighting, occlusion, shadows, transmission) are not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) and `submit_shaded` samples them. `submit_part` and `submit_retained_part` move one baked chunk by an extra matrix; they do not recover a Blender pivot, a rest pose, or the collider that belongs to that node. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Material passes and diffuse lighting are opt-in; ordinary `draw` calls still use the current material. A name such as `player_spawn.001` is still not a suffix spawn, and a custom `mq_tag` is still not stored.
+- `GltfScene::with_up_axis` does not change a `GltfModel` or a `GltfModelPose`, and those calls do not change the scene. Call all three with the same axis when the draw, the pose, and the markers should leave Y-up. A camera can instead keep `up: Vec3::Y` and skip them. That is what the examples do.
+- `GltfModel` still uploads its own GPU textures, and only from a `.glb`. Sampler wrap and filter stay on that draw path. `GltfScene` and `GltfMaterialMaps` do not turn their RGBA bytes into a `Texture2D`.
+- Skins, animation clips, and GPU morph drawing are not implemented. `GltfMorphData` evaluates POSITION/NORMAL shape-key deltas on the CPU and leaves the uploaded mesh unchanged. `GltfNodePose` replaces one node's world matrix for drawing, and `GltfHierarchyPose` edits local transforms so descendants follow. Neither moves colliders, triggers, or spawns. `submit_part` and `submit_retained_part` still apply an extra matrix to baked coordinates and do not read that rest pose. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Full PBR (image-based lighting, occlusion, shadows, transmission) is not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) and `submit_shaded` samples them. Material passes and lighting are opt-in; ordinary `draw` calls still use the current material. A name such as `player_spawn.001` is still not a suffix spawn, and a custom `mq_tag` is still not stored.
 - `assets/room.glb` is the file you export in this tutorial, not a checked-in asset. The triangle and checkerboard files are the small fixtures in this repository. The historical Marble Maze and Cinder Court game rounds are documented in the roadmap; their games and level assets are not distributed here.

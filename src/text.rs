@@ -26,7 +26,31 @@ pub(crate) struct CharacterInfo {
     pub sprite: SpriteKey,
 }
 
-/// TTF font loaded to GPU
+/// TTF font loaded to GPU.
+///
+/// Growing this font's atlas, or dropping the last handle, keeps any atlas
+/// texture already captured by text queued for the current frame. Those
+/// textures are collected after the frame is submitted. Atlas packing, glyph
+/// rasterization, and the public methods are unchanged.
+/// `examples/font_atlas_lifetime.rs` checks growth across several atlas sizes
+/// and a font dropped before flush.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+///
+/// let font = get_default_font();
+/// let _ = draw_text_ex(
+///     "queued",
+///     20.0,
+///     40.0,
+///     TextParams {
+///         font: Some(&font),
+///         ..Default::default()
+///     },
+/// );
+/// // Dropping `font` here still leaves that queued draw's atlas alive
+/// // until the frame is submitted.
+/// ```
 #[derive(Clone)]
 pub struct Font {
     font: Arc<fontdue::Font>,

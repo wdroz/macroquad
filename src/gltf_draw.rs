@@ -1,10 +1,14 @@
 //! Textured GLB conversion for [`crate::gltf::GltfScene`].
 //!
 //! Call [`GltfModel::from_bytes`] inside a running macroquad application: it
-//! uploads embedded PNG, JPEG and WebP base-color and emissive images. Geometry, transforms,
+//! uploads embedded PNG, JPEG and WebP base-color and emissive images. Normal
+//! and metallic-roughness images stay available through
+//! [`GltfModel::from_bytes_with_material_maps`]. Geometry, transforms,
 //! normals and indices come from the fork's CPU scene loader. This module keeps
 //! material metadata so applications can use their own lighting shader. It does
-//! not implement PBR, skins, animation, external image URIs, or morph targets.
+//! not implement full PBR, skins, animation clips, external image URIs, or GPU
+//! morph drawing. [`crate::gltf::GltfMorphData`] evaluates POSITION/NORMAL
+//! morph deltas on the CPU and does not change these draw methods.
 //! `EXT_texture_webp` is resolved in memory; the input file is never changed.
 //! [`GltfModel::with_up_axis`] rotates the baked mesh with the same rule as
 //! [`crate::gltf::GltfScene::with_up_axis`].
@@ -310,9 +314,10 @@ impl Default for GltfMeshLimits {
 /// Mesh batching and optional GPU texture resolution for a [`GltfModel`] load.
 ///
 /// The default preserves every source image at its original resolution. Set
-/// `max_texture_size` to bound both dimensions of uploaded base-color and
-/// emissive textures, preserving aspect ratio and never enlarging an image.
-/// This does not modify the GLB or reduce the decoder's temporary source image.
+/// `max_texture_size` to bound both dimensions of each uploaded base-color,
+/// emissive, normal, and metallic-roughness image, preserving aspect ratio
+/// and never enlarging an image. Occlusion maps are not uploaded. This does
+/// not modify the GLB or reduce the decoder's temporary source image.
 ///
 /// ```
 /// use macroquad::gltf_draw::GltfLoadOptions;
@@ -326,7 +331,9 @@ impl Default for GltfMeshLimits {
 pub struct GltfLoadOptions {
     /// Maximum vertices and indices per draw chunk.
     pub mesh_limits: GltfMeshLimits,
-    /// Optional maximum image edge in pixels. Zero is rejected.
+    /// Optional maximum edge, in pixels, of each uploaded base-color, emissive,
+    /// normal, and metallic-roughness image. Zero is rejected. Occlusion maps
+    /// are not uploaded.
     pub max_texture_size: Option<u16>,
 }
 
@@ -544,12 +551,14 @@ impl GltfModel {
 
     /// Load an embedded GLB with explicit mesh and texture budgets.
     ///
-    /// Images exceeding `max_texture_size` are resized with a triangle filter
-    /// before upload. Their UVs and sampler settings remain unchanged. A cap
-    /// limits retained GPU image memory, including mipmaps; decoding still
-    /// temporarily uses the original image resolution. Source files are never
-    /// rewritten. [`Self::from_bytes`] and [`Self::from_bytes_with_limits`]
-    /// retain their original full-resolution behavior.
+    /// Base-color, emissive, normal, and metallic-roughness images exceeding
+    /// `max_texture_size` are resized with a triangle filter before upload.
+    /// Occlusion maps are not loaded. UVs and sampler settings remain
+    /// unchanged. A cap limits retained GPU image memory, including mipmaps;
+    /// decoding still temporarily uses the original image resolution. Source
+    /// files are never rewritten. [`Self::from_bytes`] and
+    /// [`Self::from_bytes_with_limits`] retain their original full-resolution
+    /// behavior.
     /// Call this inside a running macroquad application, before uploading the
     /// result with [`RetainedGltfModel::from_model`] when using retained drawing.
     ///

@@ -291,16 +291,21 @@ impl Camera3D {
     /// Unprojects `point` into a world [`Ray`] through the camera's view-projection.
     ///
     /// `point` is in pixels of the surface this camera draws to, origin at the
-    /// top left, y down — the same space as [`mouse_position`](crate::input::mouse_position)
-    /// and [`Camera2D::world_to_screen`]. The center of that surface is
-    /// `(x + width / 2, y + height / 2)`.
+    /// top left, y down. A window uses logical pixels, the same space as
+    /// [`mouse_position`](crate::input::mouse_position),
+    /// [`mouse_position_logical`](crate::input::mouse_position_logical), and
+    /// [`Camera2D::world_to_screen`].
+    /// [`mouse_position_physical`](crate::input::mouse_position_physical) is
+    /// framebuffer pixels and is the wrong scale when the display density is
+    /// not 1. A render target uses that texture's pixel size. The center of
+    /// the surface is `(x + width / 2, y + height / 2)`.
     ///
     /// The view-projection is the one [`Camera::matrix`] builds. [`Self::aspect`],
-    /// when set, wins. Otherwise the aspect is the framebuffer width over its
-    /// height. That framebuffer is the render target's texture when
-    /// [`Self::render_target`] is set, and the window otherwise. A viewport is
+    /// when set, wins. Otherwise the aspect is that surface's width over its
+    /// height. The surface is the render target's texture when
+    /// [`Self::render_target`] is set, and the logical window otherwise. A viewport is
     /// the GL viewport `(x, y, width, height)` with its origin at the bottom
-    /// left of that framebuffer; it is converted to top-left pixels the same
+    /// left of that surface; it is converted to top-left pixels the same
     /// way as [`Camera2D::world_to_screen`]. The viewport does not change the
     /// projection, only which pixels the point is measured in.
     ///

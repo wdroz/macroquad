@@ -39,10 +39,17 @@
 //! [`models::RetainedMesh`] and `RetainedGltfModel` upload geometry once.
 //! `GltfMaterialRenderer` is an opt-in base-color and emissive pass with
 //! optional diffuse lighting. `submit_part` and `submit_retained_part` draw
-//! one borrowed chunk under an extra transform. `GltfModelLoader` polls that
+//! one borrowed chunk under an extra transform. `GltfModelPose` replaces an
+//! imported node's world matrix, and `GltfHierarchyPose` edits local
+//! transforms so descendants follow. `submit_shaded` samples retained normal
+//! and metallic-roughness maps. `GltfMorphData` evaluates shape-key deltas on
+//! the CPU and does not deform the GPU mesh. `GltfModelLoader` polls that
 //! work in stages, and `GltfLoadSettings` can reject an oversized source image
-//! before decode. There is still no rigid-body world and no character
-//! controller. Guides: `docs/3d-guide.md` and `docs/blender-to-macroquad.md`.
+//! before decode. [`input::CursorCapture`] reports pointer-lock state.
+//! `mouse_position_logical` and `mouse_position_physical` keep logical window
+//! units separate from framebuffer pixels. There is still no rigid-body world
+//! and no character controller. Guides: `docs/3d-guide.md`,
+//! `docs/blender-to-macroquad.md`, and `docs/browser-host.md`.
 //!
 //! ```
 //! use macroquad::math::{Aabb, vec3};

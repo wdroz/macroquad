@@ -15,6 +15,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Renderer behavior | `retained_mesh`, `material_depth_check`, `font_atlas_lifetime` | Immutable buffers and draw order, independent depth writes/testing, queued samplers, queued text across atlas growth and font drop |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 | Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
+| Browser host | `canvas_host` | Density, framebuffer budgets, and a requested frame-rate cap |
 
 Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).
 
@@ -41,9 +42,11 @@ cargo run --features gltf --example gltf_retained
 cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials
 cargo run --features gltf --example gltf_material_check
+cargo run --features gltf --example gltf_shading
 cargo run --features gltf --example gltf_pose_check
 cargo run --features video --example video_texture -- path/to/clip.mp4
 cargo run --example cursor_capture
+cargo run --example canvas_host
 ```
 
 These commands run from the fork root and open a window. To compile a sample
@@ -309,4 +312,4 @@ Both generators use Python and do not require Blender. Historical game-round
 prototypes, including Marble Maze and Cinder Court, and their level assets are
 not checked in. The `room.glb` in the Blender tutorial is an export you create.
 
-The guides are [`docs/3d-guide.md`](../docs/3d-guide.md) and [`docs/blender-to-macroquad.md`](../docs/blender-to-macroquad.md).
+The guides are [`docs/3d-guide.md`](../docs/3d-guide.md), [`docs/blender-to-macroquad.md`](../docs/blender-to-macroquad.md), and [`docs/browser-host.md`](../docs/browser-host.md). The 3D guide also covers pointer capture, queued font-atlas lifetime, and the logical coordinates `Camera3D::screen_to_ray` expects.

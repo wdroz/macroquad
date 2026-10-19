@@ -332,7 +332,17 @@ pub struct GltfShadingModel {
 
 /// One retained chunk's shading buffers and map textures.
 ///
-/// Pair it with the [`super::RetainedGltfDrawMesh`] of the same index.
+/// Pair it with the [`super::RetainedGltfDrawMesh`] at the same index in
+/// [`GltfShadingModel::parts`] and [`super::RetainedGltfModel::parts`].
+/// The fields stay private; pass the whole [`GltfShadingModel`] to a shaded
+/// retained submission.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// # fn pair(shading: &GltfShadingModel, model: &RetainedGltfModel) {
+/// assert_eq!(shading.parts().len(), model.parts.len());
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct GltfShadingPart {
     pub(crate) buffers: std::sync::Arc<crate::quad_gl::ShadingBuffers>,

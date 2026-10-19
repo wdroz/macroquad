@@ -8,7 +8,7 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 
 There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, `slide_sphere`, and `slide_sphere_solids` are queries a game uses to write those itself. The physics and character sections below are application code. The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting, loading, drawing, and moving through a marked level. The [example index](../examples/README.md) lists runnable samples.
 
-Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission and [optional basic lighting](#optional-basic-lighting). Collision queries start at [Ray hits](#ray-hits). Gravity and a capsule standing on a floor are the application samples in [Physics](#physics) and [Character movement](#character-movement).
+Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission, [optional basic lighting](#optional-basic-lighting), and shaded normal/roughness maps. [Replacing an imported node pose](#replacing-an-imported-node-pose), [Editing an imported hierarchy](#editing-an-imported-hierarchy), and [CPU morph data and evaluation](#cpu-morph-data-and-evaluation) cover moving a baked node and reading shape keys. Collision queries start at [Ray hits](#ray-hits). Gravity and a capsule standing on a floor are the application samples in [Physics](#physics) and [Character movement](#character-movement). Mouse look uses [Logical and physical input](#logical-and-physical-input) and [Pointer capture](#pointer-capture). Browser density and frame-rate caps are in [Browser canvas budgets](#browser-canvas-budgets).
 
 ## Retained geometry
 
@@ -304,8 +304,9 @@ and sampler bindings are captured for each queued draw, so a shared material
 can be updated between parts. Normal transforms and reflected front-face
 selection follow the retained shader contract above.
 
-`GltfLoadOptions::max_texture_size` caps uploaded base-color and emissive image
-dimensions while preserving aspect ratio. Full-resolution decoding still
+`GltfLoadOptions::max_texture_size` caps each uploaded base-color, emissive,
+normal, and metallic-roughness image while preserving aspect ratio. Occlusion
+maps are not uploaded. Full-resolution decoding still
 happens first; it is not a bound on peak CPU memory. To reject oversized sources
 before pixel decoding and texture allocation, add per-image limits without
 changing an existing `GltfLoadOptions` literal:
@@ -733,6 +734,75 @@ logical tuple; `mouse_delta_position()` returns inverted normalized movement;
 `touches()` returns physical positions and `touches_local()` retains its legacy
 normalization. New code should choose an explicit coordinate API. Coordinate
 conversion does not configure canvas sizing, density caps or frame pacing.
+`Camera3D::screen_to_ray` expects the logical window point, or the render
+target's pixel size when one is set.
+
+## Pointer capture
+
+`set_cursor_grab(true)` asks the platform to capture the cursor.
+`cursor_capture()` reports the current `CursorCapture`: `Idle`, `Requested`,
+`Active`, `Denied`, or `Lost`. `cursor_capture_events()` lists the states
+entered since the previous frame, oldest first, and is cleared at the end of
+the frame. Reading it does not drain the list. The frame loop does not call
+`set_cursor_grab` again.
+
+On desktop the grab is synchronous. `set_cursor_grab(true)` returns with
+`cursor_capture() == CursorCapture::Active`, and that frame's events are
+`Requested` then `Active`. Desktop code does not observe `Denied`. Focus loss
+releases the grab once and becomes `Lost`. Focus returning does not grab
+again; call `set_cursor_grab(true)` for a new request.
+
+In the browser, `js/mq_js_bundle.js` tracks the Pointer Lock promise. A request
+without a user gesture becomes `Denied`. Escape, a rejected promise, and focus
+loss do not call `requestPointerLock` again. While the last
+`set_cursor_grab(true)` still stands, the next primary pointer or touch press
+asks once, inside that event. `set_cursor_grab(false)` cancels the retry.
+Calling `set_cursor_grab(true)` on later frames does not ask again until one
+of those presses. An older bundle without the capture plugin reports only
+`Idle` or `Active`.
+
+Use `mouse_delta_logical()` for mouse look while capture is `Active`. Positive
+X is right and positive Y is down. `examples/cursor_capture.rs` prints the
+state. `G` grabs, `Tab` releases, and `Q` quits.
+
+```rust,no_run
+use macroquad::prelude::*;
+# async fn look(yaw: &mut f32) {
+if cursor_capture() != CursorCapture::Active {
+    if is_mouse_button_pressed(MouseButton::Left) {
+        set_cursor_grab(true);
+    }
+} else {
+    *yaw -= mouse_delta_logical().x * 0.002;
+}
+# next_frame().await;
+# }
+```
+
+## Queued font atlases
+
+Growing a font atlas, or dropping the last `Font` handle, keeps the texture
+already captured by text queued for this frame. Those textures are collected
+after the frame is submitted, on the same boundary as other unused textures.
+No extra font clone or manual flush is required for that case. Atlas packing,
+glyph rasterization, and the public `Font` methods are unchanged. Text
+positions stay in logical pixels, including when the display density is not 1.
+`examples/font_atlas_lifetime.rs` forces several atlas replacements and drops
+the font before flush. `cargo test --test font_atlas_lifetime` is the same
+GPU check.
+
+## Browser canvas budgets
+
+Native windows keep using `Conf`. The browser host can cap density, framebuffer
+pixels, the longest framebuffer edge, and the requested frame rate. Set
+`window.macroquadConfig` before `load("app.wasm")`, or replace it later with
+`window.macroquadHost.configure`. One effective scale keeps the framebuffer,
+projection, text, and logical/physical input together. `targetFps` is a maximum
+requested rate. Display refresh, throttling, and rendering cost can make the
+achieved rate lower, and a late frame does not produce catch-up frames.
+[Browser canvas configuration](browser-host.md) lists the fields, the
+requested-versus-effective report, and the rounding limits.
+`examples/canvas_host.rs` is the self-contained fixture.
 
 ## Ray hits
 
@@ -820,7 +890,7 @@ let first = if sphere_hit.hit.t < box_hit.hit.t {
 assert!(first.t > 0.0);
 ```
 
-`Camera3D::screen_to_ray` unprojects a screen point into a `Ray`. The point is in pixels of the surface the camera draws to, origin at the top left, y down, which is `mouse_position` when the camera draws to the window. A viewport is that camera's GL viewport, converted the same way as `Camera2D::world_to_screen`. A render target uses the texture's size instead of the window. The direction is a unit vector. A perspective ray starts at `position`, so `t` is the distance from the camera. An orthographic ray starts on the near plane and stays parallel to the look direction. `examples/picking_ray.rs` highlights the box under the mouse. `examples/ray_cast.rs` still builds its ray by hand.
+`Camera3D::screen_to_ray` unprojects a screen point into a `Ray`. The point is in pixels of the surface the camera draws to, origin at the top left, y down. A window uses logical pixels: `mouse_position_logical()` (the same units as `mouse_position()` and `screen_width()`). `mouse_position_physical()` is framebuffer pixels and misses the center when the display density is not 1. A render target uses the texture's pixel size instead of the logical window. A viewport is that camera's GL viewport, converted the same way as `Camera2D::world_to_screen`, in the same pixel space as the surface. The direction is a unit vector. A perspective ray starts at `position`, so `t` is the distance from the camera. An orthographic ray starts on the near plane and stays parallel to the look direction. `examples/picking_ray.rs` highlights the box under the mouse. `examples/ray_cast.rs` still builds its ray by hand.
 
 The viewport changes the pixel rectangle, not the projection aspect. Set
 `aspect` explicitly when a subviewport should use its own width/height ratio;
