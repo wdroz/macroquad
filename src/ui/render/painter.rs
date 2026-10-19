@@ -27,33 +27,32 @@ pub struct ElementState {
 pub(crate) enum DrawCommand {
     DrawCharacter {
         dest: Rect,
-        source: Rect,
+        sprite: SpriteKey,
         color: Color,
     },
     DrawRect {
         rect: Rect,
-        source: Rect,
+        sprite: SpriteKey,
         fill: Option<Color>,
         stroke: Option<Color>,
     },
     DrawSprite {
         rect: Rect,
-        source: Rect,
+        sprite: SpriteKey,
         color: Color,
         offsets: Option<RectOffset>,
-        offsets_uv: Option<RectOffset>,
     },
     DrawTriangle {
         p0: Vec2,
         p1: Vec2,
         p2: Vec2,
-        source: Rect,
+        sprite: SpriteKey,
         color: Color,
     },
     DrawLine {
         start: Vec2,
         end: Vec2,
-        source: Rect,
+        sprite: SpriteKey,
         color: Color,
     },
     DrawRawTexture {
@@ -70,11 +69,11 @@ impl DrawCommand {
         match self.clone() {
             DrawCommand::DrawCharacter {
                 dest,
-                source,
+                sprite,
                 color,
             } => DrawCommand::DrawCharacter {
                 dest: dest.offset(offset),
-                source,
+                sprite,
                 color,
             },
             DrawCommand::DrawRawTexture { rect, texture } => DrawCommand::DrawRawTexture {
@@ -83,50 +82,48 @@ impl DrawCommand {
             },
             DrawCommand::DrawRect {
                 rect,
-                source,
+                sprite,
                 fill,
                 stroke,
             } => DrawCommand::DrawRect {
                 rect: rect.offset(offset),
-                source,
+                sprite,
                 fill,
                 stroke,
             },
             DrawCommand::DrawSprite {
                 rect,
-                source,
+                sprite,
                 color,
                 offsets,
-                offsets_uv,
             } => DrawCommand::DrawSprite {
                 rect: rect.offset(offset),
-                source,
+                sprite,
                 color,
                 offsets,
-                offsets_uv,
             },
             DrawCommand::DrawLine {
                 start,
                 end,
-                source,
+                sprite,
                 color,
             } => DrawCommand::DrawLine {
                 start: start + offset,
                 end: end + offset,
-                source,
+                sprite,
                 color,
             },
             DrawCommand::DrawTriangle {
                 p0,
                 p1,
                 p2,
-                source,
+                sprite,
                 color,
             } => DrawCommand::DrawTriangle {
                 p0: p0 + offset,
                 p1: p1 + offset,
                 p2: p2 + offset,
-                source,
+                sprite,
                 color,
             },
             DrawCommand::Clip { rect } => DrawCommand::Clip {
@@ -350,21 +347,16 @@ impl Painter {
                 return Some(advance);
             }
 
-            let source = self
-                .font_atlas
-                .lock()
-                .unwrap()
-                .get_uv_rect(font_data.sprite);
-
-            if let Some(source) = source {
-                let cmd = DrawCommand::DrawCharacter {
-                    dest,
-                    source,
-                    color,
-                };
-                self.add_command(cmd);
-                return Some(font_data.advance);
-            }
+            // The sprite key is resolved when the frame is rasterized. A later
+            // widget in this frame can grow the atlas and repack this glyph;
+            // the UV has to be the rect in that final image.
+            let cmd = DrawCommand::DrawCharacter {
+                dest,
+                sprite: font_data.sprite,
+                color,
+            };
+            self.add_command(cmd);
+            return Some(font_data.advance);
         }
 
         None
@@ -427,15 +419,14 @@ impl Painter {
             return;
         }
 
-        let source = self
-            .font_atlas
+        self.font_atlas
             .lock()
             .unwrap()
-            .get_uv_rect(SpriteKey::Id(0))
+            .get(SpriteKey::Id(0))
             .unwrap();
         self.add_command(DrawCommand::DrawRect {
             rect,
-            source,
+            sprite: SpriteKey::Id(0),
             stroke: stroke.into(),
             fill: fill.into(),
         });
@@ -455,21 +446,14 @@ impl Painter {
             return;
         }
 
-        let atlas = self.font_atlas.lock().unwrap();
-        let source_uv = atlas.get_uv_rect(sprite).unwrap();
-        let (w, h) = (atlas.width(), atlas.height());
-        drop(atlas);
+        self.font_atlas.lock().unwrap().get(sprite).unwrap();
+        // Pixel margins stay on the command. Their UV scale is the atlas size
+        // at raster time, after any same-frame repack.
         self.add_command(DrawCommand::DrawSprite {
             rect,
-            source: source_uv,
+            sprite,
             color,
             offsets: margin,
-            offsets_uv: margin.map(|margin| RectOffset {
-                left: margin.left / w as f32,
-                right: margin.right / w as f32,
-                top: margin.top / h as f32,
-                bottom: margin.bottom / h as f32,
-            }),
         });
     }
 
@@ -484,18 +468,17 @@ impl Painter {
             return;
         }
 
-        let source = self
-            .font_atlas
+        self.font_atlas
             .lock()
             .unwrap()
-            .get_uv_rect(SpriteKey::Id(0))
+            .get(SpriteKey::Id(0))
             .unwrap();
 
         self.add_command(DrawCommand::DrawTriangle {
             p0,
             p1,
             p2,
-            source,
+            sprite: SpriteKey::Id(0),
             color: color.into(),
         });
     }
@@ -508,16 +491,15 @@ impl Painter {
             return;
         }
 
-        let source = self
-            .font_atlas
+        self.font_atlas
             .lock()
             .unwrap()
-            .get_uv_rect(SpriteKey::Id(0))
+            .get(SpriteKey::Id(0))
             .unwrap();
         self.add_command(DrawCommand::DrawLine {
             start,
             end,
-            source,
+            sprite: SpriteKey::Id(0),
             color: color.into(),
         });
     }
@@ -588,5 +570,88 @@ impl From<Color> for LabelParams {
 impl From<(Color, Alignment)> for LabelParams {
     fn from((color, alignment): (Color, Alignment)) -> LabelParams {
         LabelParams { color, alignment }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::text::atlas::{self, SpriteKey};
+    use crate::texture::Image;
+    use std::sync::{Arc, Mutex};
+
+    fn solid(width: u16, height: u16) -> Image {
+        Image::gen_image_color(width, height, Color::new(1.0, 1.0, 1.0, 1.0))
+    }
+
+    // A label recorded before a later widget grows the UI atlas used to keep
+    // UVs from the pre-repack image. Rasterization samples one replacement
+    // texture, so those UVs have to be resolved from the final CPU image.
+    #[test]
+    fn recorded_sprites_sample_the_atlas_after_same_frame_growth() {
+        let atlas = Arc::new(Mutex::new(atlas::detached(64, 32)));
+        let mut painter = Painter::new(Arc::clone(&atlas));
+        let margin = RectOffset::new(2.0, 2.0, 2.0, 2.0);
+
+        {
+            let mut atlas = atlas.lock().unwrap();
+            atlas.cache_sprite(SpriteKey::Id(0), solid(4, 4));
+            atlas.cache_sprite(SpriteKey::Id(1), solid(20, 10));
+            atlas.cache_sprite(SpriteKey::Id(2), solid(39, 10));
+        }
+        painter.draw_sprite(
+            Rect::new(0.0, 0.0, 20.0, 10.0),
+            SpriteKey::Id(1),
+            Color::new(1.0, 1.0, 1.0, 1.0),
+            Some(margin),
+        );
+        painter.draw_rect(
+            Rect::new(0.0, 0.0, 4.0, 4.0),
+            None,
+            Some(Color::new(1.0, 1.0, 1.0, 1.0)),
+        );
+        let baked_before_growth = {
+            let atlas = atlas.lock().unwrap();
+            (
+                atlas.get_uv_rect(SpriteKey::Id(1)).unwrap(),
+                atlas.get_uv_rect(SpriteKey::Id(0)).unwrap(),
+            )
+        };
+
+        atlas
+            .lock()
+            .unwrap()
+            .cache_sprite(SpriteKey::Id(3), solid(20, 24));
+
+        let commands = painter.commands.clone();
+        let atlas_ref = atlas.lock().unwrap();
+        let sprite_uv = atlas_ref.get_uv_rect(SpriteKey::Id(1)).unwrap();
+        let white_uv = atlas_ref.get_uv_rect(SpriteKey::Id(0)).unwrap();
+        assert_ne!(sprite_uv, baked_before_growth.0);
+        assert_ne!(white_uv, baked_before_growth.1);
+        assert_eq!((atlas_ref.width(), atlas_ref.height()), (128, 64));
+
+        let mut lists = Vec::new();
+        super::super::render_command(&mut lists, commands[0].clone(), &atlas_ref);
+        let sampled = lists[0].vertices[0].uv;
+        assert_eq!(sampled.x, sprite_uv.x);
+        assert_eq!(sampled.y, sprite_uv.y);
+        // Nine-slice inset uses the post-growth image size, not the size at
+        // the moment the widget was recorded.
+        let inset = lists[0].vertices[1].uv;
+        let grown_inset = sprite_uv.y + margin.top / f32::from(atlas_ref.height());
+        assert!((inset.y - grown_inset).abs() < 1e-5);
+        let stale_inset = baked_before_growth.0.y + margin.top / 32.0;
+        assert!((inset.y - stale_inset).abs() > 1e-4);
+
+        lists.clear();
+        super::super::render_command(&mut lists, commands[1].clone(), &atlas_ref);
+        assert_eq!(lists[0].vertices[0].uv.x, white_uv.x);
+        assert_eq!(lists[0].vertices[0].uv.y, white_uv.y);
+
+        drop(atlas_ref);
+        // `detached` has no live texture; leaking both owners skips `Drop`.
+        std::mem::forget(painter);
+        std::mem::forget(atlas);
     }
 }

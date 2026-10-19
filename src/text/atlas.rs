@@ -115,16 +115,22 @@ impl Atlas {
         self.texture
     }
 
+    /// UV of `key` in the CPU image `texture()` will upload.
+    ///
+    /// Sprite rectangles live in that image. Dividing by the current GPU
+    /// texture size is wrong after the image grows and before the upload:
+    /// the GPU texture is still the previous one, and a same-frame caller
+    /// that samples the replacement would use coordinates for the old size.
     pub fn get_uv_rect(&self, key: SpriteKey) -> Option<Rect> {
-        let ctx = get_quad_context();
         self.get(key).map(|sprite| {
-            let (w, h) = ctx.texture_size(self.texture);
+            let w = f32::from(self.image.width);
+            let h = f32::from(self.image.height);
 
             Rect::new(
-                sprite.rect.x / w as f32,
-                sprite.rect.y / h as f32,
-                sprite.rect.w / w as f32,
-                sprite.rect.h / h as f32,
+                sprite.rect.x / w,
+                sprite.rect.y / h,
+                sprite.rect.w / w,
+                sprite.rect.h / h,
             )
         })
     }
@@ -217,24 +223,31 @@ impl Atlas {
     }
 }
 
+/// Atlas with no live GPU texture. Tests must `mem::forget` it so `Drop`
+/// does not touch the quad context.
+#[cfg(test)]
+pub(crate) fn detached(width: u16, height: u16) -> Atlas {
+    let texture = miniquad::TextureId::from_raw_id(miniquad::RawId::OpenGl(0));
+
+    Atlas {
+        texture,
+        image: Image::gen_image_color(width, height, Color::new(0.0, 0.0, 0.0, 0.0)),
+        sprites: HashMap::new(),
+        cursor_x: 0,
+        cursor_y: 0,
+        max_line_height: 0,
+        dirty: false,
+        filter: miniquad::FilterMode::Nearest,
+        unique_id: Atlas::UNIQUENESS_OFFSET,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn atlas(width: u16, height: u16) -> Atlas {
-        let texture = miniquad::TextureId::from_raw_id(miniquad::RawId::OpenGl(0));
-
-        Atlas {
-            texture,
-            image: Image::gen_image_color(width, height, Color::new(0.0, 0.0, 0.0, 0.0)),
-            sprites: HashMap::new(),
-            cursor_x: 0,
-            cursor_y: 0,
-            max_line_height: 0,
-            dirty: false,
-            filter: miniquad::FilterMode::Nearest,
-            unique_id: Atlas::UNIQUENESS_OFFSET,
-        }
+        detached(width, height)
     }
 
     fn sprite(width: u16, height: u16, color: Color) -> Image {
@@ -407,5 +420,37 @@ mod tests {
         assert_eq!(pixels, [blue, red, green, white]);
 
         std::mem::forget(first_atlas);
+    }
+
+    // `get_uv_rect` used the GPU texture size. After a grow the CPU image is
+    // already the replacement, and the GPU texture is still the old one until
+    // `texture()` uploads it. UVs must match the image that upload will send.
+    #[test]
+    fn uv_rect_uses_cpu_image_size_after_growth() {
+        let mut atlas = atlas(64, 32);
+        atlas.cache_sprite(SpriteKey::Id(1), sprite(20, 10, WHITE));
+        let before = atlas.get_uv_rect(SpriteKey::Id(1)).unwrap();
+
+        atlas.cache_sprite(SpriteKey::Id(2), sprite(20, 40, WHITE));
+
+        let sprite = atlas.get(SpriteKey::Id(1)).unwrap().rect;
+        let uv = atlas.get_uv_rect(SpriteKey::Id(1)).unwrap();
+        assert_eq!((atlas.width(), atlas.height()), (128, 64));
+        assert_eq!(
+            uv,
+            Rect::new(
+                sprite.x / 128.0,
+                sprite.y / 64.0,
+                sprite.w / 128.0,
+                sprite.h / 64.0,
+            )
+        );
+        assert_ne!(uv, before);
+        // Dividing the repacked rect by the pre-growth GPU size is the stale
+        // coordinate a same-frame sampler used to upload against.
+        let stale = Rect::new(sprite.x / 64.0, sprite.y / 32.0, sprite.w / 64.0, sprite.h / 32.0);
+        assert_ne!(uv, stale);
+
+        std::mem::forget(atlas);
     }
 }

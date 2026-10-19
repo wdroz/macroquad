@@ -1096,37 +1096,53 @@ impl Ui {
     }
 
     pub fn render(&mut self, draw_list: &mut Vec<DrawList>) {
-        self.render_window(&self.root_window, Vec2::new(0., 0.), draw_list);
+        // Clone the `Arc` before locking so the window walk can borrow `self`.
+        // Rasterization resolves sprite keys against this final image; a
+        // widget later in the frame may already have grown and repacked it.
+        let atlas = Arc::clone(&self.atlas);
+        let atlas = atlas.lock().unwrap();
+        self.render_window(&self.root_window, Vec2::new(0., 0.), draw_list, &atlas);
 
         for window in self.windows_focus_order.iter().rev() {
             let window = &self.windows[window];
             if window.was_active {
-                self.render_window(window, Vec2::new(0., 0.), draw_list);
+                self.render_window(window, Vec2::new(0., 0.), draw_list, &atlas);
             }
         }
 
         if let Some(modal) = self.modal.as_ref() {
             if modal.was_active {
-                self.render_window(modal, Vec2::new(0., 0.), draw_list);
+                self.render_window(modal, Vec2::new(0., 0.), draw_list, &atlas);
             }
         }
 
         if let Some((id, DragState::Dragging(orig))) = self.dragging {
             let window = &self.windows[&id];
 
-            self.render_window(window, self.input.mouse_position - orig, draw_list);
+            self.render_window(
+                window,
+                self.input.mouse_position - orig,
+                draw_list,
+                &atlas,
+            );
         }
     }
 
-    fn render_window(&self, window: &Window, offset: Vec2, draw_list: &mut Vec<DrawList>) {
+    fn render_window(
+        &self,
+        window: &Window,
+        offset: Vec2,
+        draw_list: &mut Vec<DrawList>,
+        atlas: &Atlas,
+    ) {
         for cmd in &window.painter.commands {
-            crate::ui::render::render_command(draw_list, cmd.offset(offset));
+            crate::ui::render::render_command(draw_list, cmd.offset(offset), atlas);
         }
 
         for child in &window.childs {
             let child_window = &self.windows[child];
             if window.content_rect().overlaps(&child_window.full_rect()) {
-                self.render_window(child_window, offset, draw_list);
+                self.render_window(child_window, offset, draw_list, atlas);
             }
         }
     }

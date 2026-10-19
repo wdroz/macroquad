@@ -785,8 +785,16 @@ Growing a font atlas, or dropping the last `Font` handle, keeps the texture
 already captured by text queued for this frame. Those textures are collected
 after the frame is submitted, on the same boundary as other unused textures.
 No extra font clone or manual flush is required for that case. Atlas packing,
-glyph rasterization, and the public `Font` methods are unchanged. Text
-positions stay in logical pixels, including when the display density is not 1.
+glyph rasterization, and the public `Font` methods are unchanged. `draw_text_ex`
+stores each glyph's texture id and pixel rect, so an atlas that grows
+mid-string keeps the earlier glyphs on the previous texture.
+
+UI widgets share one atlas and one texture bind for the frame. Their commands
+store sprite keys, and UVs (including nine-slice margins) are taken from the
+CPU image when the frame is rasterized, after every widget has cached glyphs.
+A larger font later in the same frame can grow that image; earlier labels
+still sample the repacked rects. Text positions stay in logical pixels,
+including when the display density is not 1.
 `examples/font_atlas_lifetime.rs` forces several atlas replacements and drops
 the font before flush. `cargo test --test font_atlas_lifetime` is the same
 GPU check.

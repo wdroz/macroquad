@@ -3,6 +3,7 @@
 use crate::{
     color::Color,
     math::{vec2, vec3, Rect, RectOffset, Vec2},
+    text::atlas::{Atlas, SpriteKey},
     texture::Texture2D,
     ui::render::DrawCommand,
 };
@@ -257,7 +258,24 @@ fn get_active_draw_list<'a, 'b>(
     draw_lists.last_mut().unwrap()
 }
 
-pub(crate) fn render_command(draw_lists: &mut Vec<DrawList>, command: DrawCommand) {
+fn sprite_uv(atlas: &Atlas, sprite: SpriteKey) -> Rect {
+    atlas
+        .get_uv_rect(sprite)
+        .unwrap_or(Rect::new(0.0, 0.0, 0.0, 0.0))
+}
+
+fn margin_uv(atlas: &Atlas, margin: RectOffset) -> RectOffset {
+    let w = f32::from(atlas.width());
+    let h = f32::from(atlas.height());
+    RectOffset {
+        left: margin.left / w,
+        right: margin.right / w,
+        top: margin.top / h,
+        bottom: margin.bottom / h,
+    }
+}
+
+pub(crate) fn render_command(draw_lists: &mut Vec<DrawList>, command: DrawCommand, atlas: &Atlas) {
     let active_draw_list = get_active_draw_list(draw_lists, &command);
 
     match command {
@@ -266,10 +284,11 @@ pub(crate) fn render_command(draw_lists: &mut Vec<DrawList>, command: DrawComman
         }
         DrawCommand::DrawRect {
             rect,
-            source,
+            sprite,
             stroke,
             fill,
         } => {
+            let source = sprite_uv(atlas, sprite);
             if let Some(fill) = fill {
                 active_draw_list.draw_rectangle(rect, source, fill);
             }
@@ -279,11 +298,12 @@ pub(crate) fn render_command(draw_lists: &mut Vec<DrawList>, command: DrawComman
         }
         DrawCommand::DrawSprite {
             rect,
-            source,
+            sprite,
             color,
             offsets,
-            offsets_uv,
         } => {
+            let source = sprite_uv(atlas, sprite);
+            let offsets_uv = offsets.map(|margin| margin_uv(atlas, margin));
             active_draw_list.draw_sprite(
                 rect,
                 source,
@@ -295,17 +315,18 @@ pub(crate) fn render_command(draw_lists: &mut Vec<DrawList>, command: DrawComman
         DrawCommand::DrawLine {
             start,
             end,
-            source,
+            sprite,
             color,
         } => {
+            let source = sprite_uv(atlas, sprite);
             active_draw_list.draw_line(start.x, start.y, end.x, end.y, 1., source, color);
         }
         DrawCommand::DrawCharacter {
             dest,
-            source,
+            sprite,
             color,
         } => {
-            active_draw_list.draw_rectangle(dest, source, color);
+            active_draw_list.draw_rectangle(dest, sprite_uv(atlas, sprite), color);
         }
         DrawCommand::DrawRawTexture { rect, .. } => {
             active_draw_list.draw_rectangle(
@@ -318,10 +339,10 @@ pub(crate) fn render_command(draw_lists: &mut Vec<DrawList>, command: DrawComman
             p0,
             p1,
             p2,
-            source,
+            sprite,
             color,
         } => {
-            active_draw_list.draw_triangle(p0, p1, p2, source, color);
+            active_draw_list.draw_triangle(p0, p1, p2, sprite_uv(atlas, sprite), color);
         }
     }
 }
