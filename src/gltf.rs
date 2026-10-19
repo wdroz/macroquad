@@ -34,6 +34,11 @@
 //! A buffer longer than its declared `byteLength` is truncated. Only triangle
 //! primitives are loaded, and a node index used more than once is an error.
 //!
+//! [`GltfMorphData`] separately loads mesh-local POSITION/NORMAL morph deltas
+//! and default weights. Its CPU evaluator applies caller weights and computes
+//! deformed bounds without decoding images or opening a window. Draw models do
+//! not apply these morphs yet; evaluate before the node's world/up-axis transform.
+//!
 //! [`GltfPrimitive::base_color_texture`] indexes [`GltfScene::images`]. Those
 //! images are the base-color textures the loaded primitives sample, decoded
 //! to 8-bit RGBA. An image no loaded primitive samples is left out, including
@@ -112,9 +117,14 @@ use crate::math::{Aabb, Capsule, Obb, Sphere};
 
 pub(crate) mod image_limits;
 pub(crate) mod material_maps;
+mod morph;
 pub use image_limits::GltfImageLimits;
 pub use material_maps::{
     GltfMaterialMap, GltfMaterialMaps, GltfPrimitiveMaterialMaps, GltfUvTransform,
+};
+pub use morph::{
+    GltfMorphData, GltfMorphEvaluation, GltfMorphMesh, GltfMorphNode, GltfMorphPrimitive,
+    GltfMorphTarget,
 };
 
 /// A parsed glTF scene: the default scene's nodes, the meshes they use, and

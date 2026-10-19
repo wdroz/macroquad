@@ -347,7 +347,8 @@ load counts, not measured memory or per-frame GPU costs. `textures` counts
 base-color and emissive uploads only. Normal and metallic-roughness images,
 their UV selection and transforms, and tangents are retained by
 `GltfModel::from_bytes_with_material_maps` and `GltfMaterialMaps`.
-`submit_shaded` samples those maps. Skinning, animation, morph weights,
+`submit_shaded` samples those maps. CPU morph evaluation is described below;
+GPU morph drawing, skinning, animation,
 environment lighting, shadows and transmission remain roadmap work.
 
 ## Opt-in glTF material passes
@@ -664,6 +665,41 @@ updates are included. Singular rest geometry retains the selected-pose limitatio
 described above. The self-contained `gltf_pose_check` fixture exercises parented
 objects, independent instances, reset, nonuniform scale, bounds/culling and global
 transparent ordering on native OpenGL and browser WebGL.
+
+## CPU morph data and evaluation
+
+With `gltf`, `GltfMorphData::from_bytes` loads mesh-local base positions,
+normals, POSITION/NORMAL target deltas and default weights without a window,
+image decoding or GPU allocation. This additive sidecar leaves `GltfScene`
+and draw-model struct literals unchanged. Its selected-scene node and mesh
+indices match a `GltfScene` loaded from the same bytes.
+
+```rust,no_run
+use macroquad::gltf::GltfMorphData;
+use macroquad::math::Mat4;
+# fn evaluate_face(bytes: &[u8], face_node: usize) -> Result<(), macroquad::gltf::GltfError> {
+let morphs = GltfMorphData::from_bytes(bytes)?;
+let face = morphs.evaluate(face_node, 0, Some(&[0.5]))?;
+let bounds = face.transformed_bounds(Mat4::IDENTITY)?;
+println!("{} deformed vertices, {bounds:?}", face.positions.len());
+# Ok(()) }
+```
+
+Pass `None` for authored defaults: a node's weights override its mesh's
+weights, and missing defaults mean zero. Supply exactly one finite weight per
+target. Weights may be negative or greater than one; they are not clamped or
+normalized. Evaluation produces independent arrays and bounds, leaving shared
+rest data and other instances unchanged. Missing normal deltas contribute zero;
+missing base normals remain absent. A contributing normal delta causes the
+resulting nonzero normals to be normalized; zero vectors stay zero. Without
+one, authored normals are preserved.
+
+Positions and deltas stay in mesh-local coordinates. Apply the matching scene
+node's world matrix after evaluation, including any `with_up_axis` rotation.
+`transformed_bounds` encloses the evaluated vertices under a
+finite affine matrix, including reflection, nonuniform scale and shear. It does
+not update scene colliders or draw-model bounds. GPU morph instance drawing,
+tangent deltas, weight clips and skinning remain separate work.
 
 ## Logical and physical input
 

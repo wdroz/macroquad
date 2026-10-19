@@ -83,6 +83,11 @@ clamp sampling; use WebGL 2 for full NPOT sampler behavior.
 `Texture2D::from_rgba8_mipmapped` also exposes managed mipmapped texture creation
 with preallocated mip levels for Metal.
 
+The separate CPU-only `macroquad::gltf::GltfMorphData` sidecar imports
+POSITION/NORMAL morph deltas and default weights and evaluates explicit weights
+with deformed bounds. It does not change these draw methods; see the
+[morph evaluation guide](docs/3d-guide.md#cpu-morph-data-and-evaluation).
+
 For static geometry, `RetainedGltfModel::from_model(model, false)` consumes the
 finished CPU model, uploads each chunk once, and releases its CPU geometry.
 Pass `true` to keep a shared CPU model for inspection. Clones share GPU buffers
