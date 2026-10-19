@@ -867,7 +867,7 @@ fn append_node(
     Ok(index)
 }
 
-fn local_transform(node: &gltf::Node<'_>) -> (Vec3, Quat, Vec3, Mat4) {
+pub(crate) fn local_transform(node: &gltf::Node<'_>) -> (Vec3, Quat, Vec3, Mat4) {
     match node.transform() {
         gltf::scene::Transform::Decomposed {
             translation,

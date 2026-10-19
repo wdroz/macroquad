@@ -75,8 +75,12 @@
 //! [`GltfModelLoader::take_pose`] or [`GltfModel::from_bytes_with_pose`]. Create a
 //! [`GltfNodePose`] for a selected node and replace its world matrix; posed part
 //! drawing/submission removes the baked rest transform, reuses geometry and
-//! retains the authored origin as the pivot. These edits do not propagate to
-//! descendants or scene markers. Apply matching model/sidecar up-axis conversion.
+//! retains the authored origin as the pivot. Standalone node edits affect only
+//! selected chunks. [`GltfModelPose::hierarchy`] creates an independent
+//! [`GltfHierarchyPose`] with stable node handles and local TRS/matrix edits
+//! that recompute descendant worlds. Reuse each current node pose for bounds,
+//! culling and transparent submissions. Scene markers and colliders remain
+//! unchanged. Apply matching model/sidecar up-axis conversion.
 //!
 //! [`GltfModelLoader`] and [`RetainedGltfModelLoader`] split the same
 //! construction into pollable units. Synchronous constructors remain.

@@ -407,7 +407,7 @@ impl<'a> Prepared<'a> {
     }
 
     fn finish(mut self) -> (GltfModel, GltfModelMaterialMaps, GltfModelPose) {
-        let pose = GltfModelPose::from_scene(&self.scene);
+        let pose = GltfModelPose::from_document(&self.scene, &self.document);
         if self.model.parts.is_empty() {
             self.model.bounds_min = Vec3::ZERO;
             self.model.bounds_max = Vec3::ZERO;

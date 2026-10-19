@@ -5,6 +5,6 @@ mod fixture;
 
 // One windowed test per binary: miniquad keeps a process-wide native display.
 #[macroquad::test]
-async fn moved_gltf_part_replaces_rest_pivot_without_reuploading_geometry() {
+async fn moved_gltf_parts_and_hierarchy_instances_reuse_geometry() {
     fixture::run().await;
 }

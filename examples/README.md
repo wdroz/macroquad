@@ -243,7 +243,11 @@ Requires `--features gltf`. It runs the same generated GLB pixel assertions as
 to a spawn's position and yaw through a replacement node pose. The checks
 cover CPU and retained draws, reflected rest/replacement/parent transforms,
 inverse-transpose lighting, posed bounds, and repeated retained draws without
-new geometry uploads. A passing native or browser run prints
+new geometry uploads. A second generated scene edits a parented blind and prop
+through independent hierarchy instances. It checks child rotation under
+nonuniform parent scale, exact rest reset, bounds-based culling and globally
+sorted transparent descendants after parent depth changes. A passing run prints
+`GLTF_HIERARCHY_FIXTURE_PASS` and then
 `GLTF_POSE_FIXTURE_PASS` and stays green. Without `gltf`, it prints a feature
 reminder and exits.
 

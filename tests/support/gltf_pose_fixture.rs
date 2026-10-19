@@ -1,11 +1,11 @@
-//! A small imported-part regression shared by native OpenGL and browser WebGL.
+//! Small imported-part/hierarchy regressions shared by OpenGL and WebGL.
 //! Positions and lighting expectations are calculated from the authored local
 //! quad and replacement matrix, independently of the pose's additional matrix.
 
 use macroquad::prelude::*;
 use macroquad::telemetry;
 
-fn glb(reflected_rest: bool) -> Vec<u8> {
+fn document(reflected_rest: bool) -> (serde_json::Value, Vec<u8>) {
     let mut bin = Vec::new();
     for point in [
         [-0.3_f32, -0.3, 0.],
@@ -61,6 +61,10 @@ fn glb(reflected_rest: bool) -> Vec<u8> {
             {"bufferView": 2, "componentType": 5123, "count": 6, "type": "SCALAR"}
         ]
     });
+    (document, bin)
+}
+
+fn encode_glb(document: serde_json::Value, bin: Vec<u8>) -> Vec<u8> {
     let mut json = serde_json::to_vec(&document).unwrap();
     json.resize((json.len() + 3) & !3, b' ');
     let mut bytes = Vec::new();
@@ -74,6 +78,32 @@ fn glb(reflected_rest: bool) -> Vec<u8> {
     bytes.extend(b"BIN\0");
     bytes.extend(bin);
     bytes
+}
+
+fn glb(reflected_rest: bool) -> Vec<u8> {
+    let (document, bin) = document(reflected_rest);
+    encode_glb(document, bin)
+}
+
+fn hierarchy_glb() -> Vec<u8> {
+    let (mut document, bin) = document(false);
+    document["scenes"] = serde_json::json!([{ "nodes": [0] }]);
+    document["nodes"] = serde_json::json!([
+        { "name": "nonuniform_parent", "translation": [3., 1., 0.1],
+          "scale": [2., 0.5, 1.], "children": [1, 2] },
+        { "name": "blind", "mesh": 0, "translation": [0.25, 0., 0.] },
+        { "name": "prop", "mesh": 1, "translation": [-0.25, 0., 0.] }
+    ]);
+    let mut blue = document["meshes"][0].clone();
+    blue["primitives"][0]["material"] = serde_json::json!(1);
+    document["meshes"].as_array_mut().unwrap().push(blue);
+    document["materials"] = serde_json::json!([
+        { "name": "red blind", "alphaMode": "BLEND",
+          "pbrMetallicRoughness": { "baseColorFactor": [1., 0., 0., 0.5] } },
+        { "name": "blue prop", "alphaMode": "BLEND",
+          "pbrMetallicRoughness": { "baseColorFactor": [0., 0., 1., 0.5] } }
+    ]);
+    encode_glb(document, bin)
 }
 
 fn read(target: &RenderTarget) -> Image {
@@ -120,6 +150,235 @@ fn assert_no_uploads(retained: bool) {
         assert_eq!(counters.streaming_buffer_uploads, 0);
         assert_eq!(counters.streaming_buffer_upload_bytes, 0);
     }
+}
+
+fn hierarchy(renderer: &mut GltfMaterialRenderer, camera: &Camera3D, target: &RenderTarget) {
+    let (cpu, rest) = GltfModel::from_bytes_with_pose(&hierarchy_glb()).unwrap();
+    assert_eq!(cpu.parts.len(), 2);
+    let retained = RetainedGltfModel::from_model(cpu.clone(), false).unwrap();
+    assert!(retained.cpu_model().is_none());
+    let parent = rest.handle(0).unwrap();
+    let blind = rest.handle(1).unwrap();
+    let prop = rest.handle(2).unwrap();
+    assert_eq!(cpu.parts[0].node, blind.index());
+    assert_eq!(cpu.parts[1].node, prop.index());
+    let frustum = camera.frustum().unwrap();
+    let mut left = rest.hierarchy().unwrap();
+    let mut right = left.clone();
+    assert_eq!(left.parent(blind).unwrap(), Some(parent));
+    assert_eq!(left.parent(prop).unwrap(), Some(parent));
+    for part in &cpu.parts {
+        let handle = rest.handle(part.node).unwrap();
+        let pose = left.node_pose(handle).unwrap();
+        assert_eq!(pose.transform(), Mat4::IDENTITY);
+        assert!(!frustum.intersects_aabb(&part.posed_bounds(&pose, Mat4::IDENTITY).unwrap()));
+    }
+
+    let scale = vec3(0.75, 0.5, 1.);
+    left.set_local(
+        parent,
+        GltfLocalTransform {
+            translation: vec3(-0.6875, 0., 0.),
+            rotation: Quat::IDENTITY,
+            scale,
+        },
+    )
+    .unwrap();
+    // A local blind turn under nonuniform parent scale creates a sheared
+    // world matrix. Its pivot follows the parent, without recentering bounds.
+    let mut blind_local = left.local_trs(blind).unwrap();
+    blind_local.rotation = Quat::from_rotation_z(std::f32::consts::FRAC_PI_4);
+    left.set_local(blind, blind_local).unwrap();
+    close(
+        left.world(blind).unwrap().w_axis.truncate(),
+        vec3(-0.5, 0., 0.),
+    );
+    close(
+        left.world(prop).unwrap().w_axis.truncate(),
+        vec3(-0.875, 0., 0.),
+    );
+    assert_eq!(
+        right.world(blind).unwrap(),
+        rest.rest_world(blind.index()).unwrap()
+    );
+    assert_eq!(
+        right.local(blind).unwrap(),
+        rest.rest_local(blind.index()).unwrap()
+    );
+    right
+        .set_local(
+            parent,
+            GltfLocalTransform {
+                translation: vec3(0.6875, 0., 0.),
+                rotation: Quat::IDENTITY,
+                scale,
+            },
+        )
+        .unwrap();
+    close(
+        right.world(prop).unwrap().w_axis.truncate(),
+        vec3(0.5, 0., 0.),
+    );
+
+    let left_pose = left.node_pose(blind).unwrap();
+    let right_pose = right.node_pose(prop).unwrap();
+    // These exact extents come from the authored quad, local 45-degree
+    // rotation and parent scale, independently of the pose implementation.
+    let left_extent = vec3(0.225 * 2_f32.sqrt(), 0.15 * 2_f32.sqrt(), 0.);
+    for (index, pose, center, extent) in [
+        (0, left_pose, vec3(-0.5, 0., 0.), left_extent),
+        (1, right_pose, vec3(0.5, 0., 0.), vec3(0.225, 0.15, 0.)),
+    ] {
+        for bounds in [
+            cpu.parts[index]
+                .posed_bounds(&pose, Mat4::IDENTITY)
+                .unwrap(),
+            retained.parts[index]
+                .posed_bounds(&pose, Mat4::IDENTITY)
+                .unwrap(),
+        ] {
+            close(bounds.min, center - extent);
+            close(bounds.max, center + extent);
+            assert!(frustum.intersects_aabb(&bounds));
+        }
+    }
+    for retained_geometry in [false, true] {
+        for _ in 0..2 {
+            clear_background(BLACK);
+            telemetry::reset_renderer_diagnostics();
+            let mut frame = renderer.begin(camera.position, -Vec3::Z).unwrap();
+            frame.set_output(GltfColorOutput::Linear);
+            if retained_geometry {
+                frame
+                    .submit_retained_part_posed(&retained.parts[0], &left_pose)
+                    .unwrap();
+                frame
+                    .submit_retained_part_posed(&retained.parts[1], &right_pose)
+                    .unwrap();
+            } else {
+                frame.submit_part_posed(&cpu.parts[0], &left_pose).unwrap();
+                frame.submit_part_posed(&cpu.parts[1], &right_pose).unwrap();
+            }
+            assert_eq!(frame.draw().blend_draws, 2);
+            let image = read(target);
+            pixel(
+                &image,
+                16,
+                [128, 0, 0, 255],
+                "parented blind follows left instance",
+            );
+            pixel(
+                &image,
+                32,
+                [0, 0, 0, 255],
+                "independent instances leave center clear",
+            );
+            pixel(
+                &image,
+                48,
+                [0, 0, 128, 255],
+                "parented prop follows right instance",
+            );
+            assert_no_uploads(retained_geometry);
+        }
+    }
+
+    left.reset_local(blind).unwrap();
+    let reset_blind = left.node_pose(blind).unwrap();
+    let bounds = cpu.parts[0]
+        .posed_bounds(&reset_blind, Mat4::IDENTITY)
+        .unwrap();
+    close(bounds.min, vec3(-0.725, -0.15, 0.));
+    close(bounds.max, vec3(-0.275, 0.15, 0.));
+    left.reset();
+    assert_eq!(left.node_pose(blind).unwrap().transform(), Mat4::IDENTITY);
+    assert_eq!(left.node_pose(prop).unwrap().transform(), Mat4::IDENTITY);
+    assert_eq!(right.node_pose(prop).unwrap().world(), right_pose.world());
+    assert_eq!(
+        rest.rest_world(blind.index()).unwrap().w_axis.truncate(),
+        vec3(3.5, 1., 0.1)
+    );
+    // The reset blind is offscreen again. Use its updated bounds for the
+    // same application-level culling query as the visible instance above.
+    clear_background(BLACK);
+    telemetry::reset_renderer_diagnostics();
+    let mut frame = renderer.begin(camera.position, -Vec3::Z).unwrap();
+    let mut submitted = 0;
+    for part in &retained.parts {
+        let pose = left.node_pose(rest.handle(part.node).unwrap()).unwrap();
+        if frustum.intersects_aabb(&part.posed_bounds(&pose, Mat4::IDENTITY).unwrap()) {
+            frame.submit_retained_part_posed(part, &pose).unwrap();
+            submitted += 1;
+        }
+    }
+    assert_eq!(submitted, 0);
+    assert_eq!(frame.draw().blend_draws, 0);
+    pixel(
+        &read(target),
+        16,
+        [0, 0, 0, 255],
+        "rest reset agrees with culling",
+    );
+    assert_no_uploads(true);
+
+    // Two independently edited instances share one geometry model. Changing
+    // parent depth swaps the front layer. Both source orders must produce the
+    // analytic global source-over result, using updated descendant centers.
+    left.set_local(blind, blind_local).unwrap();
+    for red_front in [false, true] {
+        let red_z = if red_front { 0.25 } else { -0.25 };
+        for (instance, x, z) in [(&mut left, -0.1875, red_z), (&mut right, 0.1875, -red_z)] {
+            instance
+                .set_local(
+                    parent,
+                    GltfLocalTransform {
+                        translation: vec3(x, 0., z),
+                        rotation: Quat::IDENTITY,
+                        scale,
+                    },
+                )
+                .unwrap();
+        }
+        let red = left.node_pose(blind).unwrap();
+        let blue = right.node_pose(prop).unwrap();
+        for (part, pose) in [(&retained.parts[0], red), (&retained.parts[1], blue)] {
+            assert!(frustum.intersects_aabb(&part.posed_bounds(&pose, Mat4::IDENTITY).unwrap()));
+        }
+        for retained_geometry in [false, true] {
+            for reverse_submission in [false, true] {
+                clear_background(BLACK);
+                telemetry::reset_renderer_diagnostics();
+                let mut frame = renderer.begin(camera.position, -Vec3::Z).unwrap();
+                frame.set_output(GltfColorOutput::Linear);
+                let mut order = [(0, red), (1, blue)];
+                if reverse_submission {
+                    order.reverse();
+                }
+                for (index, pose) in order {
+                    if retained_geometry {
+                        frame
+                            .submit_retained_part_posed(&retained.parts[index], &pose)
+                            .unwrap();
+                    } else {
+                        frame.submit_part_posed(&cpu.parts[index], &pose).unwrap();
+                    }
+                }
+                assert_eq!(frame.draw().blend_draws, 2);
+                pixel(
+                    &read(target),
+                    32,
+                    if red_front {
+                        [128, 0, 64, 255]
+                    } else {
+                        [64, 0, 128, 255]
+                    },
+                    "hierarchy parent depths sort globally",
+                );
+                assert_no_uploads(retained_geometry);
+            }
+        }
+    }
+    macroquad::logging::info!("GLTF_HIERARCHY_FIXTURE_PASS");
 }
 
 pub async fn run() {
@@ -296,6 +555,7 @@ pub async fn run() {
             unsafe { get_internal_gl().quad_gl.pop_model_matrix() };
         }
     }
+    hierarchy(&mut renderer, &camera, &target);
     telemetry::set_renderer_diagnostics_enabled(false);
     set_default_camera();
     macroquad::logging::info!("GLTF_POSE_FIXTURE_PASS");

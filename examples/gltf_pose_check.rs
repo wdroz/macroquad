@@ -1,4 +1,4 @@
-//! The tiny imported-part GPU fixture from `tests/gltf_pose.rs`, also runnable
+//! The tiny imported-part/hierarchy fixture from `tests/gltf_pose.rs`, runnable
 //! in a browser. A passing run prints GLTF_POSE_FIXTURE_PASS and stays green.
 
 #[path = "../tests/support/gltf_pose_fixture.rs"]
@@ -11,7 +11,7 @@ use macroquad::prelude::*;
 #[cfg(feature = "gltf")]
 fn window_conf() -> Conf {
     Conf {
-        window_title: "glTF replacement-pose GPU fixture".to_owned(),
+        window_title: "glTF pose and hierarchy GPU fixture".to_owned(),
         window_width: 256,
         window_height: 128,
         high_dpi: true,

@@ -82,9 +82,9 @@ These transforms are relative to the already baked scene geometry. Rotating
 one chunk around its imported bounds center uses a pivot transform such as
 `Mat4::from_translation(new_center) * Mat4::from_quat(rotation) *
 Mat4::from_translation(-part.center)`. For an object split across chunks, use
-one shared pivot for all its parts. A retained part can be drawn this way,
-but it has no editable node pose or automatic collider update. Keep gameplay
-colliders and transparency sorting consistent with the transform you submit.
+one shared pivot for all its parts. The pose sidecar described below retains
+authored pivots and editable hierarchy state for this purpose. Keep gameplay
+colliders consistent with the transform you submit; they are not updated automatically.
 
 Custom vertex shaders apply `Model` to positions. For lighting, obtain the
 inverse-transpose `normal_matrix` from `GltfModelTransform::new(transform)` and
@@ -594,9 +594,76 @@ and unlit drawing; ordinary lit draws skip them. Invalid updates leave the
 previous pose intact.
 
 When reorienting the source model, apply the same `with_up_axis(up)` to the
-original pose sidecar before creating editable poses. Selected node edits do
-not update descendants, colliders, triggers, spawn markers, animations or morph
-targets. Those remain separate application work.
+original pose sidecar before creating editable poses. A standalone
+`GltfNodePose::set_world` changes just that selected node. Use a hierarchy
+instance to propagate local edits to descendants.
+
+## Editing an imported hierarchy
+
+`GltfModelPose::hierarchy()` creates an independent `GltfHierarchyPose` using
+the authored local matrices and parent relationships. The source/rest metadata
+is shared, while each instance owns its current local and world matrices.
+Cloning an instance copies its editable state and continues to share that
+metadata; it does not clone mesh vertices or retained GPU buffers.
+Loader sidecars preserve exact authored local matrices. A sidecar built later
+with `from_scene` may need a parent's inverse to reconstruct a sheared child;
+that reconstruction can introduce roundoff or fail under a singular parent.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn edit(bytes: &[u8], renderer: &mut GltfMaterialRenderer, camera: &Camera3D) -> Result<(), String> {
+let (cpu, rest) = GltfModel::from_bytes_with_pose(bytes)?;
+let model = RetainedGltfModel::from_model(cpu, false).map_err(|e| e.to_string())?;
+let mut instance = rest.hierarchy()?;
+// Obtain a handle once from the source node index (for example, after a name lookup).
+let handle = rest.handle(model.parts[0].node).ok_or("missing node")?;
+let mut local = instance.local_trs(handle)?;
+local.rotation = Quat::from_rotation_y(0.7);
+instance.set_local(handle, local)?;
+// The same edit updates every descendant; draw all chunks using their node pose.
+let frustum = camera.frustum().ok_or("invalid camera")?;
+let mut frame = renderer.begin(camera.position, camera.target - camera.position)?;
+for part in &model.parts {
+    let node = rest.handle(part.node).ok_or("missing chunk node")?;
+    let pose = instance.node_pose(node)?;
+    let bounds = part.posed_bounds(&pose, Mat4::IDENTITY)?;
+    if frustum.intersects_aabb(&bounds) {
+        frame.submit_retained_part_posed(part, &pose)?;
+    }
+}
+frame.draw();
+instance.reset_local(handle)?; // restore only this node's authored local matrix
+instance.reset();              // restore the whole instance exactly
+# Ok(()) }
+```
+
+`GltfNodeHandle` is stable across edits and clones of the same source metadata;
+its `index()` matches the source node ID on draw chunks. Keep it with that source
+model: a handle's numeric index does not identify a node in a different file.
+Parents and empty nodes can be edited through the same API. A parent local edit
+recomputes descendant world matrices, and `node_pose(handle)` supplies the selected draw pose
+for any chunk of that node. Each edit validates the full affected hierarchy before
+committing it, so a failed edit leaves the previous instance unchanged.
+
+`GltfLocalTransform` stores translation, a unit quaternion and scale. Read it with
+`local_trs(handle)` and replace it with `set_local`; nonuniform parent scales and
+child rotations compose as matrices, preserving resulting world shear. Authored
+local matrices that contain shear must use `local` and `set_local_matrix` instead
+of TRS decomposition. `reset_local` restores the exact authored matrix and updates
+its descendants. `reset` restores all authored local/world matrices and exact
+identity draw transforms.
+
+Bounds remain explicit, conservative queries on each chunk's stored box: obtain
+the current `node_pose`, then call `posed_bounds` for culling. Fetch it again after
+an edit; an already returned pose is a snapshot. Material-frame posed submissions
+use that same additional matrix for normals, reflected winding and global
+transparent sorting, and capture it when submitted. For custom drawing, use
+`draw_posed` or the snapshot's `transform()` with the existing shaded submission
+methods. No automatic collider, trigger, spawn-marker, morph, skinning or clip
+updates are included. Singular rest geometry retains the selected-pose limitations
+described above. The self-contained `gltf_pose_check` fixture exercises parented
+objects, independent instances, reset, nonuniform scale, bounds/culling and global
+transparent ordering on native OpenGL and browser WebGL.
 
 ## Logical and physical input
 
