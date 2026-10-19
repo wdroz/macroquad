@@ -270,6 +270,18 @@ bundle, browser-supported codecs, and an explicit user interaction for audible
 playback. See [video setup and limitations](../docs/video.md) before running or
 hosting the sample.
 
+## `canvas_host`
+
+A self-contained browser host fixture with optional density, framebuffer pixel/
+edge budgets and a 30 FPS cap, using the supported host API. The Rust example
+draws a mouse/touch target and measured text bounds and reports current logical/
+physical coordinates. Build for `wasm32-unknown-unknown`, copy `canvas_host.wasm`
+beside `canvas_host.html`, and serve the repository root over HTTP. Inspect
+`window.macroquadHost.getReport()` and `window.canvasHostFixture`; no sizing or
+scheduler overrides are needed. The native example uses ordinary `Conf`.
+See [browser host configuration](../docs/browser-host.md) for runtime settings,
+requested/effective reporting, rounding and pacing limitations.
+
 ## Assets
 
 | Path | Role |

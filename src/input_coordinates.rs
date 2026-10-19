@@ -75,7 +75,7 @@ mod tests {
     #[test]
     fn mouse_and_touch_targets_round_trip_at_current_density() {
         let target = Vec2::new(140.25, 91.5);
-        for density in [1.0, 1.25, 2.0, 3.0] {
+        for density in [0.25, 0.5, 1.0, 1.25, 2.0, 3.0] {
             let physical = to_physical(target, density);
             assert_eq!(to_logical(physical, density), target);
             assert_eq!(physical, target * density);
@@ -122,5 +122,25 @@ mod tests {
         assert_eq!(state.delta(position + Vec2::X), Vec2::X);
         state.reset();
         assert_eq!(state.delta(position + Vec2::X), Vec2::ZERO);
+    }
+
+    #[test]
+    fn capped_framebuffer_keeps_logical_pointer_and_density_only_rebaseline() {
+        let size = Vec2::new(400.0, 300.0);
+        let logical = Vec2::new(123.0, 87.0);
+        let mut pointer = PointerCoordinates::new(size, 2.0);
+        let physical = to_physical(logical, 2.0);
+        pointer.finish_frame(physical);
+        // A budget can reduce density below one without changing the integer
+        // framebuffer (for example when CSS size changes at the same time).
+        let ratio = pointer.sync(size, 0.5);
+        let physical = physical * ratio;
+        assert_eq!(to_logical(physical, 0.5), logical);
+        assert_eq!(pointer.delta(physical), Vec2::ZERO);
+        pointer.finish_frame(physical);
+        assert_eq!(
+            to_logical(pointer.delta(physical + Vec2::ONE), 0.5),
+            Vec2::splat(2.0)
+        );
     }
 }

@@ -42,7 +42,19 @@ logging stubs:
 node js/mq_js_bundle.test.cjs path/to/game.wasm
 ```
 
-Include `mq_input_coordinates.js` immediately before the pointer-capture source.
+Include `mq_canvas.js`, then `mq_input_coordinates.js`, immediately before the pointer-capture source.
+The loader's `resize`, `dpi_scale`, `animation`, `canvas_width`/`canvas_height`,
+`setup_canvas_size`, `run_animation_loop` and `sapp_schedule_update` bindings
+delegate directly to the canvas helper. Preserve those delegations when
+regenerating the miniquad portion; the helper is built in, not a plugin that
+overrides globals or imports. [Browser host configuration](../docs/browser-host.md)
+documents optional density/framebuffer budgets and pacing, runtime updates,
+requested/effective reports, rounding and browser limitations. Check it with:
+
+```sh
+node js/mq_canvas.test.cjs
+```
+
 When regenerating the miniquad portion, keep `mouse_relative_position`
 delegating to `macroquad_input_position`, and forward browser movement through
 `macroquad_input_raw_motion` instead of flooring each event. The helper maps

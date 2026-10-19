@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Canvas host configuration fixture</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #222; }
+#glcanvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+</style>
+<canvas id="glcanvas" tabindex="1"></canvas>
+<!-- Place canvas_host.wasm beside this file and serve the repository root. -->
+<script>
+window.macroquadConfig = {
+    maxDevicePixelRatio: 2,
+    maxFramebufferPixels: 960 * 540,
+    maxFramebufferEdge: 1280,
+    targetFps: 30,
+};
+</script>
+<script src="../js/mq_js_bundle.js"></script>
+<script>
+window.canvasHostFrames = [];
+miniquad_add_plugin({
+    name: "canvas_host_fixture", version: 1,
+    register_plugin(imports) {
+        imports.env.canvas_host_report = (pointer, length) => {
+            const state = JSON.parse(new TextDecoder().decode(new Uint8Array(wasm_memory.buffer, pointer, length)));
+            state.time = performance.now();
+            window.canvasHostFixture = state;
+            window.canvasHostFrames.push(state);
+            if (window.canvasHostFrames.length > 600) window.canvasHostFrames.shift();
+        };
+    },
+});
+// Runtime changes are supported too: macroquadHost.configure({ targetFps: 15 }).
+// This replaces the complete configuration. Inspect macroquadHost.getReport().
+load("canvas_host.wasm");
+</script>
+</html>

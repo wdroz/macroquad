@@ -5,8 +5,8 @@ function macroquad_input_scale() {
     const density = dpi_scale();
     return {
         rect,
-        x: rect.width > 0 ? canvas.width / rect.width : density,
-        y: rect.height > 0 ? canvas.height / rect.height : density,
+        x: rect.width > 0 ? macroquad_canvas_width(canvas) / rect.width : density,
+        y: rect.height > 0 ? macroquad_canvas_height(canvas) / rect.height : density,
         density,
     };
 }
@@ -24,7 +24,7 @@ function macroquad_input_position(clientX, clientY) {
 const macroquad_raw_motion = { x: 0, y: 0, signature: null };
 function macroquad_input_raw_motion(movementX, movementY) {
     const scale = macroquad_input_scale();
-    const signature = [canvas.width, canvas.height, scale.rect.width,
+    const signature = [macroquad_canvas_width(canvas), macroquad_canvas_height(canvas), scale.rect.width,
         scale.rect.height, scale.density, document.pointerLockElement,
         document.mozPointerLockElement];
     if (!macroquad_raw_motion.signature || signature.some(
