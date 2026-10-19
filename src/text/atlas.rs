@@ -29,8 +29,9 @@ pub struct Atlas {
 
 impl Drop for Atlas {
     fn drop(&mut self) {
-        let ctx = &mut get_context().quad_context;
-        ctx.delete_texture(self.texture);
+        get_context()
+            .textures
+            .schedule_unmanaged_removed(self.texture);
     }
 }
 
@@ -87,14 +88,18 @@ impl Atlas {
     }
 
     pub fn texture(&mut self) -> miniquad::TextureId {
-        let ctx = get_quad_context();
+        let context = get_context();
+        let ctx = &mut context.quad_context;
         if self.dirty {
             self.dirty = false;
             let (texture_width, texture_height) = ctx.texture_size(self.texture);
             if texture_width != u32::from(self.image.width)
                 || texture_height != u32::from(self.image.height)
             {
-                ctx.delete_texture(self.texture);
+                // Earlier glyphs in this frame still reference the old texture
+                // and its original UV coordinates. Retire it after rendering;
+                // replacing or resizing its storage here corrupts those draws.
+                context.textures.schedule_unmanaged_removed(self.texture);
 
                 self.texture = ctx.new_texture_from_rgba8(
                     self.image.width,

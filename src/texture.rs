@@ -28,6 +28,7 @@ pub(crate) enum TextureHandle {
 pub(crate) struct TexturesContext {
     textures: TextureIdSlotMap,
     removed: Vec<TextureSlotId>,
+    removed_unmanaged: Vec<miniquad::TextureId>,
     removed_render_passes: Vec<miniquad::RenderPass>,
 }
 impl TexturesContext {
@@ -35,11 +36,17 @@ impl TexturesContext {
         TexturesContext {
             textures: TextureIdSlotMap::new(),
             removed: Vec::with_capacity(200),
+            removed_unmanaged: Vec::new(),
             removed_render_passes: Vec::with_capacity(10),
         }
     }
     fn schedule_removed(&mut self, texture: TextureSlotId) {
         self.removed.push(texture);
+    }
+    pub(crate) fn schedule_unmanaged_removed(&mut self, texture: miniquad::TextureId) {
+        // Atlas draws snapshot raw texture IDs and UVs. Keep retired atlas
+        // storage alive until the queued frame has been submitted.
+        self.removed_unmanaged.push(texture);
     }
     fn schedule_render_pass_removed(&mut self, pass: miniquad::RenderPass) {
         self.removed_render_passes.push(pass);
@@ -67,6 +74,9 @@ impl TexturesContext {
                 ctx.delete_texture(texture);
             }
             self.textures.remove(texture);
+        }
+        for texture in self.removed_unmanaged.drain(..) {
+            ctx.delete_texture(texture);
         }
     }
 }

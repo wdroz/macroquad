@@ -12,7 +12,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
 | Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, the selected-part pixel fixture, and shaded normal/roughness maps |
-| Renderer behavior | `retained_mesh`, `material_depth_check` | Immutable buffers and draw order, independent depth writes/testing, queued samplers |
+| Renderer behavior | `retained_mesh`, `material_depth_check`, `font_atlas_lifetime` | Immutable buffers and draw order, independent depth writes/testing, queued samplers, queued text across atlas growth and font drop |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 | Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
 
@@ -36,6 +36,7 @@ cargo run --example input_coordinates
 cargo run --features gltf --example gltf_textured
 cargo run --example material_depth_check
 cargo run --example retained_mesh
+cargo run --example font_atlas_lifetime
 cargo run --features gltf --example gltf_retained
 cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials
@@ -48,6 +49,19 @@ These commands run from the fork root and open a window. To compile a sample
 without opening a window, use `cargo build --example <name>` with the same
 feature flags and omit runtime arguments after `--`. Pure collision and scene-loader tests can run without graphics;
 rendering and texture uploads need a graphics context.
+
+## `font_atlas_lifetime`
+
+Runs a self-contained GPU pixel check for text queued across multiple font-atlas
+replacements and a font dropped before flushing. It also checks a surviving font
+after resource collection and canceled draws. The example requests high-DPI
+rendering; run its WASM build at browser densities 1 and 2 to exercise real
+density-scaled glyphs. It uses only the bundled ProggyClean font. The native
+integration test shares the same fixture.
+
+```sh
+cargo build --target wasm32-unknown-unknown --example font_atlas_lifetime
+```
 
 ## `input_coordinates`
 

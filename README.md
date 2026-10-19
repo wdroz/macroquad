@@ -25,6 +25,17 @@ still accumulate coverage correctly. Custom materials continue to use exactly
 the `PipelineParams` supplied to `load_material`; their blend settings are not
 overridden. The GPU regression is `cargo test --test default_alpha_blending`.
 
+## Queued text atlas lifetime (fork fix)
+
+Growing a font atlas or dropping its last font handle preserves the texture
+and UVs already captured by pending text draws. Replaced atlas textures are
+retired after frame submission, using the existing texture collection boundary.
+No application flush or extra font clone is required for this lifetime case.
+This does not change atlas packing, glyph rasterization, or public texture
+ownership rules. Run `cargo test --test font_atlas_lifetime` or the
+`font_atlas_lifetime` example for a GPU pixel regression; the example also runs
+in WebAssembly with actual high-DPI text.
+
 ## Textured glTF scenes (fork feature)
 
 Enable `features = ["gltf"]` to use the CPU-only `GltfScene` parser and the

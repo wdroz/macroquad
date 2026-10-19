@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Font atlas lifetime GPU fixture</title>
+<style>
+html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #222; }
+#glcanvas { display: block; width: 100%; height: 100%; outline: none; }
+</style>
+<canvas id="glcanvas" tabindex="1"></canvas>
+<!-- Place the built font_atlas_lifetime.wasm next to this file and serve the
+     repository root over HTTP. Try browser deviceScaleFactor 1 and 2. -->
+<script src="../js/mq_js_bundle.js"></script>
+<script>load("font_atlas_lifetime.wasm");</script>
+</html>
