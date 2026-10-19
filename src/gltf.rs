@@ -37,11 +37,12 @@
 //! [`GltfPrimitive::base_color_texture`] indexes [`GltfScene::images`]. Those
 //! images are the base-color textures the loaded primitives sample, decoded
 //! to 8-bit RGBA. An image no loaded primitive samples is left out, including
-//! one named only by an external URI. Other texture slots (normal,
-//! metallic-roughness, occlusion, emissive) are not loaded. An external image
-//! URI is an error when a loaded primitive does sample it. Sampler wrap and
-//! filter are not stored. [`crate::gltf_draw::GltfModel`] still uploads its
-//! own GPU textures.
+//! one named only by an external URI. Normal and metallic-roughness images,
+//! their UV transforms, and tangents are retained by [`GltfMaterialMaps`]
+//! instead of fields on this scene. Occlusion and emissive images are not in
+//! either CPU list. An external image URI is an error when a loaded primitive
+//! does sample it. Sampler wrap and filter are not stored.
+//! [`crate::gltf_draw::GltfModel`] still uploads its own GPU textures.
 //!
 //! CPU images are decoded at their source resolution. The draw loader's
 //! [`crate::gltf_draw::GltfLoadOptions::max_texture_size`] does not limit this
@@ -110,7 +111,11 @@ use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 use crate::math::{Aabb, Capsule, Obb, Sphere};
 
 pub(crate) mod image_limits;
+pub(crate) mod material_maps;
 pub use image_limits::GltfImageLimits;
+pub use material_maps::{
+    GltfMaterialMap, GltfMaterialMaps, GltfPrimitiveMaterialMaps, GltfUvTransform,
+};
 
 /// A parsed glTF scene: the default scene's nodes, the meshes they use, and
 /// the base-color images those meshes sample.

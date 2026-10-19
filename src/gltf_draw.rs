@@ -59,7 +59,9 @@
 //! alpha masks, globally sorted transparent instances and material sidedness.
 //! It uses exact material factors instead of the baked vertex colors and offers
 //! optional [`GltfLighting`] for hemisphere/directional diffuse lighting
-//! with imported normals. PBR and refraction are not included.
+//! with imported normals. Normal and metallic-roughness images are retained by
+//! [`GltfModel::from_bytes_with_material_maps`] for a later shading pass.
+//! PBR and refraction are not included.
 //! [`GltfColorOutput`] makes the destination
 //! color-space policy explicit; the existing draw methods stay unchanged.
 //! [`GltfMaterialFrame::submit`] and [`GltfMaterialFrame::submit_retained`]
@@ -90,11 +92,13 @@ pub use retained::*;
 mod diagnostics;
 mod loading;
 mod material;
+mod material_maps;
 mod material_warnings;
 pub use crate::gltf::GltfImageLimits;
 pub use diagnostics::*;
 pub use loading::*;
 pub use material::*;
+pub use material_maps::*;
 pub use material_warnings::*;
 
 /// CPU-side material values, retained for a custom shader.
@@ -390,6 +394,7 @@ pub struct GltfModelStats {
     /// Triangles across every chunk.
     pub triangles: usize,
     /// Embedded base-color and emissive texture objects uploaded to the GPU.
+    /// Shading-only normal and metallic-roughness textures are not included.
     pub textures: usize,
 }
 
@@ -522,9 +527,12 @@ impl GltfModel {
 
     /// Load with optional limits on each source image before RGBA decoding.
     ///
-    /// Preflights all base-color and emissive images sampled by the selected
-    /// scene before decoding or uploading any image. Errors identify the image
-    /// and material. Unused images and unsupported texture slots are ignored.
+    /// Preflights all base-color, emissive, normal, and metallic-roughness
+    /// images sampled by the selected scene before decoding or uploading any
+    /// image. Errors identify the image and material. Unused images and
+    /// occlusion maps are ignored. Normal and metallic-roughness handles are
+    /// returned by [`Self::from_bytes_with_material_maps`]; this method drops
+    /// them after validation.
     /// Limits estimate RGBA8 output; decoder scratch and total process memory
     /// are not bounded. Prepare oversized images offline: upload resizing
     /// still happens after full-resolution decoding.
@@ -547,9 +555,38 @@ impl GltfModel {
         bytes: &[u8],
         settings: GltfLoadSettings,
     ) -> Result<Self, String> {
+        Ok(Self::from_bytes_with_material_maps(bytes, settings)?.model)
+    }
+
+    /// [`Self::from_bytes_with_settings`] plus the retained normal and
+    /// metallic-roughness maps.
+    ///
+    /// Those images use the same source limits and upload cap as base-color and
+    /// emissive images. A missing UV set or a malformed `KHR_texture_transform`
+    /// is an error that names the material. Occlusion maps stay unloaded.
+    /// [`Self::from_bytes`] validates the same maps and then drops the handles.
+    /// The material renderer does not sample them yet.
+    ///
+    /// ```no_run
+    /// use macroquad::gltf_draw::{GltfLoadSettings, GltfModel};
+    /// # fn load(bytes: &[u8]) -> Result<(), String> {
+    /// let assets = GltfModel::from_bytes_with_material_maps(
+    ///     bytes,
+    ///     GltfLoadSettings::default(),
+    /// )?;
+    /// assert_eq!(assets.material_maps.parts.len(), assets.model.parts.len());
+    /// # Ok(()) }
+    /// ```
+    pub fn from_bytes_with_material_maps(
+        bytes: &[u8],
+        settings: GltfLoadSettings,
+    ) -> Result<GltfModelAssets, String> {
         let mut loader = GltfModelLoader::new(bytes, settings)?;
         while loader.poll()?.stage != GltfLoadStage::Complete {}
-        Ok(loader.take_model().unwrap())
+        Ok(GltfModelAssets {
+            model: loader.take_model().unwrap(),
+            material_maps: loader.take_material_maps().unwrap(),
+        })
     }
 
     /// Rotates baked vertices so glTF +Y points along `up`.
@@ -1055,19 +1092,24 @@ fn release_mesh_after_instance(mesh: &mut GltfMesh, remaining: &mut usize) {
     }
 }
 
-fn packed_chunk(mut vertices: Vec<Vertex>, mut indices: Vec<u16>) -> (Vec<Vertex>, Vec<u16>) {
+fn packed_chunk(
+    mut vertices: Vec<Vertex>,
+    mut indices: Vec<u16>,
+    mut sources: Vec<u32>,
+) -> (Vec<Vertex>, Vec<u16>, Vec<u32>) {
     // Final chunks live for the model's lifetime. Geometric growth slack is
     // useful while building them, but can waste nearly another mesh afterward.
     vertices.shrink_to_fit();
     indices.shrink_to_fit();
-    (vertices, indices)
+    sources.shrink_to_fit();
+    (vertices, indices, sources)
 }
 
 fn split_triangles(
     vertices: &[Vertex],
     indices: &[u32],
     limits: GltfMeshLimits,
-) -> Result<Vec<(Vec<Vertex>, Vec<u16>)>, String> {
+) -> Result<Vec<(Vec<Vertex>, Vec<u16>, Vec<u32>)>, String> {
     validate_limits(limits)?;
     if indices.len() % 3 != 0 {
         return Err("triangle index count is not a multiple of three".into());
@@ -1075,6 +1117,7 @@ fn split_triangles(
     let mut result = Vec::new();
     let mut chunk_vertices = Vec::new();
     let mut chunk_indices = Vec::new();
+    let mut chunk_sources = Vec::new();
     let mut remap: HashMap<u32, u16> = HashMap::new();
     for triangle in indices.chunks_exact(3) {
         if triangle
@@ -1094,6 +1137,7 @@ fn split_triangles(
             result.push(packed_chunk(
                 std::mem::take(&mut chunk_vertices),
                 std::mem::take(&mut chunk_indices),
+                std::mem::take(&mut chunk_sources),
             ));
             remap.clear();
         }
@@ -1101,13 +1145,14 @@ fn split_triangles(
             let mapped = *remap.entry(index).or_insert_with(|| {
                 let mapped = chunk_vertices.len() as u16;
                 chunk_vertices.push(vertices[index as usize]);
+                chunk_sources.push(index);
                 mapped
             });
             chunk_indices.push(mapped);
         }
     }
     if !chunk_indices.is_empty() {
-        result.push(packed_chunk(chunk_vertices, chunk_indices));
+        result.push(packed_chunk(chunk_vertices, chunk_indices, chunk_sources));
     }
     Ok(result)
 }
@@ -1409,18 +1454,20 @@ mod tests {
         )
         .unwrap();
         assert_eq!(chunks.len(), 2);
-        assert!(chunks
-            .iter()
-            .all(|(vertices, indices)| vertices.capacity() == vertices.len()
-                && indices.capacity() == indices.len()));
+        assert!(chunks.iter().all(|(vertices, indices, sources)| {
+            vertices.capacity() == vertices.len()
+                && indices.capacity() == indices.len()
+                && sources.capacity() == sources.len()
+        }));
         let restored: Vec<_> = chunks
             .iter()
-            .flat_map(|(v, i)| i.iter().map(|&index| v[index as usize].position.x as u32))
+            .flat_map(|(v, i, _)| i.iter().map(|&index| v[index as usize].position.x as u32))
             .collect();
         assert_eq!(restored, indices);
-        assert!(chunks
-            .iter()
-            .all(|(v, i)| v.len() <= 60_000 && i.len() <= 60_000 && i.len() % 3 == 0));
+        assert!(chunks.iter().all(|(v, i, sources)| v.len() <= 60_000
+            && i.len() <= 60_000
+            && i.len() % 3 == 0
+            && sources.len() == v.len()));
     }
 
     #[test]

@@ -88,8 +88,11 @@ an extra affine transform, so hiding or moving one object does not clone the
 model. Opaque and masked chunks draw before one back-to-front blend pass.
 `set_lighting(Some(GltfLighting { .. }))` adds hemisphere and directional
 diffuse light from imported normals. Unlit materials ignore it, and the
-existing `draw` methods stay available. Metallic/roughness maps, refraction,
-and shadows are not part of this renderer. `examples/gltf_materials.rs` toggles
+existing `draw` methods stay available. Normal and metallic-roughness images,
+UV transforms, and tangents are retained by
+`GltfModel::from_bytes_with_material_maps` (and on the CPU by
+`GltfMaterialMaps`); this renderer does not sample them. Refraction and
+shadows are not part of this renderer. `examples/gltf_materials.rs` toggles
 the light; `examples/gltf_material_check.rs` also checks selected parts.
 
 `GltfModelLoader` and `RetainedGltfModelLoader` perform the same construction

@@ -169,8 +169,9 @@ It enables optional hemisphere/directional diffuse lighting and exposes its
 world-space direction and linear light colors as `GltfLighting` values. L toggles
 lighting to compare with the base/emissive preview. The second instance has a
 reflected, nonuniform scale. Imported normals use the composed inverse transpose,
-and textured emission remains independent of lighting. Metallic/roughness PBR,
-highlights, refraction and shadows are absent. `KHR_materials_unlit` uses base
+and textured emission remains independent of lighting. Normal and
+metallic-roughness images are retained by the loader and are not sampled here.
+Metallic/roughness PBR, highlights, refraction and shadows are absent. `KHR_materials_unlit` uses base
 color only in both modes. Escape exits.
 
 The default output encodes RGB before destination-space blending. Use linear

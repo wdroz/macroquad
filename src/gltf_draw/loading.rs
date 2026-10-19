@@ -1,4 +1,9 @@
-use std::{collections::HashSet, marker::PhantomData, rc::Rc, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    marker::PhantomData,
+    rc::Rc,
+    sync::Arc,
+};
 
 use super::*;
 use crate::{math::Aabb, models::validate_retained_mesh};
@@ -68,8 +73,11 @@ impl GltfLoadProgress {
 struct TextureJob {
     texture: usize,
     context: String,
+    /// Base-color or emissive. Shading-only textures stay out of model stats.
+    model_texture: bool,
 }
 
+#[derive(Clone, Copy)]
 struct PrimitiveJob {
     node: usize,
     mesh: usize,
@@ -88,6 +96,7 @@ struct Prepared<'a> {
     names: Vec<String>,
     paths: Vec<String>,
     textures: HashMap<usize, Texture2D>,
+    material_parts: Vec<GltfPartMaterialMaps>,
     model: GltfModel,
 }
 
@@ -95,31 +104,56 @@ impl<'a> Prepared<'a> {
     fn new(bytes: &'a [u8]) -> Result<Self, String> {
         let (scene, document, binary) = prepare_glb(bytes)?;
         let source_meshes = crate::gltf::used_meshes(&document);
-        let mut texture_jobs = Vec::new();
+        let mut texture_jobs: Vec<TextureJob> = Vec::new();
         let mut image_jobs = Vec::new();
-        let mut seen_textures = HashSet::new();
+        let mut seen_textures = HashMap::<usize, usize>::new();
         let mut seen_images = HashSet::new();
         for mesh in &source_meshes {
             for primitive in mesh.primitives() {
                 let material = primitive.material();
-                let base = material.pbr_metallic_roughness().base_color_texture();
-                for (slot, info) in [
-                    ("base-color", base),
-                    ("emissive", material.emissive_texture()),
-                ] {
-                    if let Some(info) = info {
-                        let texture = info.texture();
-                        if seen_textures.insert(texture.index()) {
-                            let image = texture.source();
-                            if seen_images.insert(image.index()) {
-                                image_jobs.push(texture_jobs.len());
-                            }
-                            texture_jobs.push(TextureJob {
-                                texture: texture.index(),
-                                context: crate::gltf::image_context(&image, &material, slot),
-                            });
+                let pbr = material.pbr_metallic_roughness();
+                let slots = [
+                    (
+                        "base-color",
+                        pbr.base_color_texture().map(|info| info.texture()),
+                        true,
+                    ),
+                    (
+                        "emissive",
+                        material.emissive_texture().map(|info| info.texture()),
+                        true,
+                    ),
+                    (
+                        "normal",
+                        material.normal_texture().map(|info| info.texture()),
+                        false,
+                    ),
+                    (
+                        "metallic-roughness",
+                        pbr.metallic_roughness_texture().map(|info| info.texture()),
+                        false,
+                    ),
+                ];
+                for (slot, texture, model_texture) in slots {
+                    let Some(texture) = texture else {
+                        continue;
+                    };
+                    if let Some(job) = seen_textures.get(&texture.index()).copied() {
+                        if model_texture {
+                            texture_jobs[job].model_texture = true;
                         }
+                        continue;
                     }
+                    let image = texture.source();
+                    if seen_images.insert(image.index()) {
+                        image_jobs.push(texture_jobs.len());
+                    }
+                    seen_textures.insert(texture.index(), texture_jobs.len());
+                    texture_jobs.push(TextureJob {
+                        texture: texture.index(),
+                        context: crate::gltf::image_context(&image, &material, slot),
+                        model_texture,
+                    });
                 }
             }
         }
@@ -182,6 +216,7 @@ impl<'a> Prepared<'a> {
             names,
             paths,
             textures: HashMap::new(),
+            material_parts: Vec::new(),
             model,
         })
     }
@@ -208,8 +243,35 @@ impl<'a> Prepared<'a> {
     }
 
     fn primitive(&mut self, index: usize, limits: GltfMeshLimits) -> Result<(), String> {
-        let job = &self.primitive_jobs[index];
-        let node = &self.scene.nodes[job.node];
+        let job = self.primitive_jobs[index];
+        let world = self.scene.nodes[job.node].world;
+        let map_data = {
+            let source = self
+                .document
+                .meshes()
+                .nth(self.source_meshes[job.mesh])
+                .unwrap()
+                .primitives()
+                .nth(job.primitive)
+                .unwrap();
+            let binary = self.binary.as_ref();
+            crate::gltf::material_maps::resolve_primitive_maps(&source, &|index| {
+                if index == 0 {
+                    Some(binary)
+                } else {
+                    None
+                }
+            })?
+        };
+        let tangent_frame = crate::gltf::material_maps::world_tangents(&map_data.tangents, world);
+        let normal_texture = map_data
+            .normal
+            .as_ref()
+            .map(|map| self.textures[&map.texture_index].clone());
+        let metallic_texture = map_data
+            .metallic_roughness
+            .as_ref()
+            .map(|map| self.textures[&map.texture_index].clone());
         let primitive = &self.scene.meshes[job.mesh].primitives[job.primitive];
         let source = self
             .document
@@ -256,7 +318,7 @@ impl<'a> Prepared<'a> {
             double_sided: material.double_sided(),
             unlit: material.extension_value("KHR_materials_unlit").is_some(),
         };
-        let mut vertices = world_vertices(primitive, node.world);
+        let mut vertices = world_vertices(primitive, world);
         if let Some(info) = pbr.base_color_texture() {
             apply_material_uvs(&mut vertices, &source, &self.binary, &info)?;
         }
@@ -269,8 +331,8 @@ impl<'a> Prepared<'a> {
                 vertices = emissive_vertices;
             }
         }
-        let indices = winding_indices(&primitive.indices, node.world);
-        for (vertices, indices) in split_triangles(&vertices, &indices, limits)? {
+        let indices = winding_indices(&primitive.indices, world);
+        for (vertices, indices, sources) in split_triangles(&vertices, &indices, limits)? {
             let mut min = Vec3::splat(f32::INFINITY);
             let mut max = Vec3::splat(f32::NEG_INFINITY);
             for vertex in &vertices {
@@ -280,6 +342,45 @@ impl<'a> Prepared<'a> {
             self.model.bounds_min = self.model.bounds_min.min(min);
             self.model.bounds_max = self.model.bounds_max.max(max);
             self.model.stats.triangles += indices.len() / 3;
+            let chunk_uvs = |uvs: &[Vec2]| {
+                sources
+                    .iter()
+                    .map(|index| uvs[*index as usize])
+                    .collect::<Vec<_>>()
+            };
+            let normal = map_data.normal.as_ref().map(|map| GltfDrawMaterialMap {
+                texture: normal_texture.clone().unwrap(),
+                tex_coord: map.tex_coord,
+                transform: map.transform,
+                strength: map.strength,
+                uvs: chunk_uvs(&map.uvs),
+            });
+            let metallic_roughness =
+                map_data
+                    .metallic_roughness
+                    .as_ref()
+                    .map(|map| GltfDrawMaterialMap {
+                        texture: metallic_texture.clone().unwrap(),
+                        tex_coord: map.tex_coord,
+                        transform: map.transform,
+                        strength: map.strength,
+                        uvs: chunk_uvs(&map.uvs),
+                    });
+            let tangents = if tangent_frame.is_empty() {
+                Vec::new()
+            } else {
+                sources
+                    .iter()
+                    .map(|index| tangent_frame[*index as usize])
+                    .collect()
+            };
+            self.material_parts.push(GltfPartMaterialMaps {
+                normal,
+                metallic_roughness,
+                tangents,
+                material_index: map_data.material_index,
+                material_name: map_data.material_name.clone(),
+            });
             self.model.parts.push(GltfDrawMesh {
                 mesh: Mesh {
                     vertices,
@@ -305,14 +406,21 @@ impl<'a> Prepared<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> GltfModel {
+    fn finish(mut self) -> (GltfModel, GltfModelMaterialMaps) {
         if self.model.parts.is_empty() {
             self.model.bounds_min = Vec3::ZERO;
             self.model.bounds_max = Vec3::ZERO;
         }
         self.model.stats.draw_calls = self.model.parts.len();
-        self.model.stats.textures = self.textures.len();
-        self.model
+        self.model.stats.textures = self
+            .texture_jobs
+            .iter()
+            .filter(|job| job.model_texture)
+            .count();
+        let material_maps = GltfModelMaterialMaps {
+            parts: self.material_parts,
+        };
+        (self.model, material_maps)
     }
 }
 
@@ -359,6 +467,7 @@ pub struct GltfModelLoader<'a> {
     progress: GltfLoadProgress,
     prepared: Option<Prepared<'a>>,
     result: Option<GltfModel>,
+    material_maps: Option<GltfModelMaterialMaps>,
     error: Option<String>,
     _render_thread: PhantomData<Rc<()>>,
 }
@@ -383,6 +492,7 @@ impl<'a> GltfModelLoader<'a> {
             progress: GltfLoadProgress::new(GltfLoadStage::Parse, 1),
             prepared: None,
             result: None,
+            material_maps: None,
             error: None,
             _render_thread: PhantomData,
         })
@@ -416,6 +526,7 @@ impl<'a> GltfModelLoader<'a> {
         if let Err(error) = self.step() {
             self.prepared = None;
             self.result = None;
+            self.material_maps = None;
             self.progress = GltfLoadProgress::new(GltfLoadStage::Failed, 0);
             self.error = Some(error.clone());
             return Err(error);
@@ -440,7 +551,9 @@ impl<'a> GltfModelLoader<'a> {
                 PreflightImages => GltfLoadProgress::new(LoadTextures, prepared.texture_jobs.len()),
                 LoadTextures => GltfLoadProgress::new(ConvertMeshes, prepared.primitive_jobs.len()),
                 ConvertMeshes => {
-                    self.result = Some(self.prepared.take().unwrap().finish());
+                    let (model, maps) = self.prepared.take().unwrap().finish();
+                    self.result = Some(model);
+                    self.material_maps = Some(maps);
                     GltfLoadProgress::new(Complete, 0)
                 }
                 _ => unreachable!(),
@@ -483,6 +596,7 @@ impl<'a> GltfModelLoader<'a> {
         }
         self.prepared = None;
         self.result = None;
+        self.material_maps = None;
         self.error = Some("glTF loading cancelled".into());
         self.progress = GltfLoadProgress::new(GltfLoadStage::Cancelled, 0);
     }
@@ -495,6 +609,22 @@ impl<'a> GltfModelLoader<'a> {
     /// ```
     pub fn take_model(&mut self) -> Option<GltfModel> {
         self.result.take()
+    }
+
+    /// Takes the normal and metallic-roughness maps once loading has finished.
+    ///
+    /// [`Self::take_model`] leaves these in place. Dropping the loader releases
+    /// an untaken set, including shading textures that are not also stored on
+    /// the model. Pending, cancelled, and failed loads return [`None`]. The
+    /// material renderer does not sample this data yet.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let mut load = GltfModelLoader::new(&[], GltfLoadSettings::default()).unwrap();
+    /// assert!(load.take_material_maps().is_none());
+    /// ```
+    pub fn take_material_maps(&mut self) -> Option<GltfModelMaterialMaps> {
+        self.material_maps.take()
     }
 }
 

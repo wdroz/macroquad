@@ -325,13 +325,16 @@ let model = GltfModel::from_bytes_with_settings(bytes, settings)?;
 ```
 
 The limits check source width × height and its checked RGBA8 byte estimate
-(four bytes per pixel). They apply to each sampled base-color/emissive image,
-not their sum. The loader preflights consumed images before decoding or
-uploading any of them; errors identify the source image and material. Unused
-images are skipped. Existing constructors and default limits remain uncapped.
+(four bytes per pixel). They apply to each sampled base-color, emissive,
+normal, and metallic-roughness image, not their sum. The loader preflights
+consumed images before decoding or uploading any of them; errors identify the
+source image and material. Unused images and occlusion maps are skipped.
+Existing constructors and default limits remain uncapped.
 For the separate CPU scene path, use
 `GltfScene::from_bytes_with_image_limits(bytes, limits)`; this checks its sampled
 base-color images and does not resize them.
+`GltfMaterialMaps::from_bytes_with_image_limits` checks sampled normal and
+metallic-roughness images the same way and does not upload them.
 
 These are rejection limits, not a decoder-memory sandbox. Decoder scratch
 buffers, higher-bit-depth intermediates, resizing, encoded inputs, geometry
@@ -340,8 +343,12 @@ images offline and load the prepared GLB. Lowering `max_texture_size` alone
 still cannot remove full-resolution decode peaks.
 
 `GltfModelStats` contains
-load counts, not measured memory or per-frame GPU costs. Skinning, animation,
-morph weights, normal/roughness maps, and PBR remain roadmap work.
+load counts, not measured memory or per-frame GPU costs. `textures` counts
+base-color and emissive uploads only. Normal and metallic-roughness images,
+their UV selection and transforms, and tangents are retained by
+`GltfModel::from_bytes_with_material_maps` and `GltfMaterialMaps`; the lit
+renderer does not sample them yet. Skinning, animation, morph weights, and
+PBR remain roadmap work.
 
 ## Opt-in glTF material passes
 

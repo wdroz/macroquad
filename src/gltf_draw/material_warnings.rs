@@ -19,9 +19,9 @@ pub enum GltfUnsupportedMaterialFeature {
     /// [`super::GltfLighting`] adds diffuse hemisphere/directional lighting,
     /// but still omits metallic/roughness response, reflections and shadows.
     Lighting,
-    /// A normal map is not loaded or sampled by this renderer.
+    /// A normal map is retained by the loader but not sampled by this renderer.
     NormalTexture,
-    /// A metallic-roughness map is not loaded or sampled by this renderer.
+    /// A metallic-roughness map is retained by the loader but not sampled by this renderer.
     MetallicRoughnessTexture,
     /// An occlusion map is not loaded or sampled by this renderer.
     OcclusionTexture,
