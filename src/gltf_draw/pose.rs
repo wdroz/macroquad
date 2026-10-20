@@ -5,7 +5,11 @@ use std::sync::Arc;
 use glam::{Mat4, Quat, Vec3};
 
 use super::{retained::transformed_bounds, GltfDrawMesh, GltfModelTransform, RetainedGltfDrawMesh};
-use crate::{gltf::GltfScene, math::Aabb, models::draw_mesh};
+use crate::{
+    gltf::{transform_collider_shape, GltfCollider, GltfColliderShape, GltfScene},
+    math::Aabb,
+    models::draw_mesh,
+};
 
 /// Rest world matrices indexed by the same scene-local node IDs as draw chunks.
 ///
@@ -342,7 +346,8 @@ impl GltfLocalTransform {
 /// metadata, and copy only pose state, never draw geometry. Edits recompute
 /// descendant worlds immediately. Pass each part's [`Self::node_pose`] to the
 /// existing posed bounds/draw/material APIs so bounds, culling and transparent
-/// sorting use the same transform. Colliders, markers and animation are unchanged.
+/// sorting use the same transform. Spawn markers and animation stay on the
+/// source scene. [`Self::collider_shape`] reads a collider in these worlds.
 /// ```
 /// use macroquad::prelude::*;
 /// # let scene = GltfScene::from_bytes(br#"{"asset":{"version":"2.0"}}"#).unwrap();
@@ -440,6 +445,80 @@ impl GltfHierarchyPose {
     /// ```
     pub fn world(&self, node: GltfNodeHandle) -> Result<Mat4, String> {
         Ok(self.world[self.checked(node)?])
+    }
+
+    /// Returns `collider` in this hierarchy's current worlds.
+    ///
+    /// The stored [`GltfScene::colliders`] entry stays at the imported rest
+    /// pose. The result is that shape transformed by
+    /// `posed_world * inverse(rest_world)` for `collider.node`. A box whose
+    /// faces stay on the world axes, including a quarter turn, remains an
+    /// [`Aabb`](crate::math::Aabb). Any other rotation is an
+    /// [`Obb`](crate::math::Obb). A sphere's radius and a capsule's segment
+    /// and radius follow the same delta, including its scale.
+    ///
+    /// [`Obb::from_world_matrix`](crate::math::Obb::from_world_matrix) reads the
+    /// node scale as the full size. A default Blender cube has vertices at ±1,
+    /// so that rebuild is half the size already stored on the collider. This
+    /// method transforms the stored size instead.
+    ///
+    /// `scene` is the document this hierarchy was built from, with the same
+    /// [`GltfScene::with_up_axis`](GltfScene::with_up_axis) conversion the
+    /// collider was imported from. [`None`] means `collider.node` is missing
+    /// from `scene` or from this hierarchy, or the node's rest world is not
+    /// invertible. `collider.trigger` is left on the stored value; pass only
+    /// the solids a slide should block on.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let scene = GltfScene::from_bytes(
+    ///     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[
+    ///         {"name":"crate_collider","translation":[1.0,2.0,3.0],"scale":[2.0,1.0,1.0],
+    ///          "extras":{"mq_shape":"box","mq_role":"collider"}}
+    ///     ]}"#,
+    /// )
+    /// .unwrap();
+    /// let mut pose = GltfModelPose::from_scene(&scene).hierarchy().unwrap();
+    /// let stored = scene.colliders[0].shape;
+    /// let GltfColliderShape::Aabb(rest) = pose.collider_shape(&scene, &scene.colliders[0]).unwrap()
+    /// else {
+    ///     panic!("box");
+    /// };
+    /// assert_eq!(rest.center(), vec3(1.0, 2.0, 3.0));
+    /// let node = pose.handle(scene.colliders[0].node).unwrap();
+    /// pose.set_local(
+    ///     node,
+    ///     GltfLocalTransform {
+    ///         translation: Vec3::ZERO,
+    ///         scale: vec3(2.0, 1.0, 1.0),
+    ///         ..Default::default()
+    ///     },
+    /// )
+    /// .unwrap();
+    /// let GltfColliderShape::Aabb(moved) = pose.collider_shape(&scene, &scene.colliders[0]).unwrap()
+    /// else {
+    ///     panic!("box");
+    /// };
+    /// assert_eq!(moved.center(), Vec3::ZERO);
+    /// assert_eq!(moved.size(), vec3(2.0, 1.0, 1.0));
+    /// assert_eq!(scene.colliders[0].shape, stored);
+    /// ```
+    pub fn collider_shape(
+        &self,
+        scene: &GltfScene,
+        collider: &GltfCollider,
+    ) -> Option<GltfColliderShape> {
+        let rest = scene.nodes.get(collider.node)?.world;
+        let posed = *self.world.get(collider.node)?;
+        let inverse = affine_inverse(rest)?;
+        if posed == rest {
+            return Some(collider.shape);
+        }
+        let delta = posed * inverse;
+        if !super::retained::is_affine(delta) {
+            return None;
+        }
+        transform_collider_shape(delta, collider.shape)
     }
 
     /// Parent handle, or `None` for a scene root. Edits preserve these links.
@@ -887,7 +966,7 @@ fn posed_bounds(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::math::Frustum;
+    use crate::math::{Frustum, Obb};
     use glam::{vec3, Quat};
 
     fn near(a: Vec3, b: Vec3) {
@@ -1433,5 +1512,310 @@ mod tests {
             assert!(turned.node(1).is_err());
         }
         assert!(original.node(2).unwrap_err().contains("node 2"));
+    }
+
+    #[test]
+    fn posed_collider_swings_a_hinge_and_keeps_a_blender_cube() {
+        let (scene, pose) = hinge_level();
+        let mut pose = pose.hierarchy().unwrap();
+        let empty = &scene.colliders[0];
+        let bar = &scene.colliders[1];
+        assert_eq!(empty.name.as_deref(), Some("gate_collider"));
+        assert_eq!(bar.name.as_deref(), Some("gate_bar"));
+        let stored_empty = empty.shape;
+        let stored_bar = bar.shape;
+
+        let GltfColliderShape::Aabb(closed) = pose.collider_shape(&scene, empty).unwrap() else {
+            panic!("closed empty stays an AABB");
+        };
+        near(closed.center(), vec3(4.0, 0.65, -0.1));
+        near(closed.size(), vec3(0.28, 1.3, 5.0));
+        let GltfColliderShape::Aabb(closed_bar) = pose.collider_shape(&scene, bar).unwrap() else {
+            panic!("closed bar stays an AABB");
+        };
+        near(closed_bar.center(), vec3(4.0, 0.65, -0.1));
+        near(closed_bar.size(), vec3(0.28, 1.3, 5.0));
+        let matrix_size = Obb::from_world_matrix(scene.nodes[bar.node].world).half_extents * 2.0;
+        assert!(
+            (matrix_size.abs().max_element() - 2.5).abs() < 1e-4,
+            "node matrix rebuild is {matrix_size:?}"
+        );
+
+        let gate = pose.handle(0).unwrap();
+        let mut local = pose.local_trs(gate).unwrap();
+        local.rotation = Quat::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        pose.set_local(gate, local).unwrap();
+
+        let GltfColliderShape::Aabb(open) = pose.collider_shape(&scene, empty).unwrap() else {
+            panic!("quarter turn stays an AABB");
+        };
+        near(open.center(), vec3(6.5, 0.65, -2.6));
+        near(open.size(), vec3(5.0, 1.3, 0.28));
+        let GltfColliderShape::Aabb(open_bar) = pose.collider_shape(&scene, bar).unwrap() else {
+            panic!("posed cube stays an AABB");
+        };
+        near(open_bar.center(), vec3(6.5, 0.65, -2.6));
+        near(open_bar.size(), vec3(5.0, 1.3, 0.28));
+        assert!((open_bar.size().max_element() - 5.0).abs() < 1e-4);
+        let posed_matrix =
+            Obb::from_world_matrix(pose.world(pose.handle(bar.node).unwrap()).unwrap())
+                .half_extents
+                * 2.0;
+        assert!(
+            (posed_matrix.abs().max_element() - 2.5).abs() < 1e-4,
+            "posed matrix rebuild is {posed_matrix:?}"
+        );
+        assert_eq!(scene.colliders[0].shape, stored_empty);
+        assert_eq!(scene.colliders[1].shape, stored_bar);
+
+        pose.reset();
+        let GltfColliderShape::Aabb(reset) = pose.collider_shape(&scene, empty).unwrap() else {
+            panic!("reset");
+        };
+        assert_eq!(reset.center(), closed.center());
+        assert_eq!(reset.size(), closed.size());
+    }
+
+    #[test]
+    fn posed_collider_scales_rounds_and_shears_imported_shapes() {
+        let scene = GltfScene::from_bytes(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1,2]}],"nodes":[
+                {"name":"orb_collider","translation":[1,2,3],"scale":[1,2,0.5],"extras":{"mq_shape":"sphere","mq_role":"collider"}},
+                {"name":"pill_collider","translation":[1,2,3],"scale":[0.4,1.5,0.25],"extras":{"mq_shape":"capsule","mq_role":"collider"}},
+                {"name":"yaw_collider","scale":[2,1,4],"extras":{"mq_shape":"box","mq_role":"collider"}}
+            ]}"#,
+        )
+        .unwrap();
+        let mut pose = GltfModelPose::from_scene(&scene).hierarchy().unwrap();
+
+        let orb = pose.handle(0).unwrap();
+        pose.set_local(
+            orb,
+            GltfLocalTransform {
+                translation: vec3(1.0, 2.0, 3.0),
+                scale: vec3(2.0, 4.0, 1.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let GltfColliderShape::Sphere(sphere) =
+            pose.collider_shape(&scene, &scene.colliders[0]).unwrap()
+        else {
+            panic!("sphere");
+        };
+        near(sphere.center, vec3(1.0, 2.0, 3.0));
+        assert!((sphere.radius - 4.0).abs() < 1e-4);
+
+        let pill = pose.handle(1).unwrap();
+        pose.set_local(
+            pill,
+            GltfLocalTransform {
+                translation: vec3(1.0, 2.0, 3.0),
+                scale: vec3(0.4, 3.0, 0.25),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let GltfColliderShape::Capsule(longer) =
+            pose.collider_shape(&scene, &scene.colliders[1]).unwrap()
+        else {
+            panic!("capsule");
+        };
+        near(longer.a, vec3(1.0, -1.0, 3.0));
+        near(longer.b, vec3(1.0, 5.0, 3.0));
+        assert!((longer.radius - 0.4).abs() < 1e-4);
+
+        pose.set_local(
+            pill,
+            GltfLocalTransform {
+                translation: vec3(5.0, 2.0, 3.0),
+                rotation: Quat::from_rotation_z(std::f32::consts::FRAC_PI_2),
+                scale: vec3(0.8, 3.0, 0.5),
+            },
+        )
+        .unwrap();
+        let GltfColliderShape::Capsule(turned) =
+            pose.collider_shape(&scene, &scene.colliders[1]).unwrap()
+        else {
+            panic!("turned capsule");
+        };
+        // Rest segment is world +Y. A 90° roll about Z sends it along -X, and
+        // doubling every scale doubles the radius.
+        near(turned.a, vec3(8.0, 2.0, 3.0));
+        near(turned.b, vec3(2.0, 2.0, 3.0));
+        assert!((turned.radius - 0.8).abs() < 1e-4);
+
+        let yaw = pose.handle(2).unwrap();
+        pose.set_local(
+            yaw,
+            GltfLocalTransform {
+                rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_4),
+                scale: vec3(2.0, 1.0, 4.0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let turned_box = pose.collider_shape(&scene, &scene.colliders[2]).unwrap();
+        let GltfColliderShape::Obb(obb) = turned_box else {
+            panic!("45° is an Obb, got {turned_box:?}");
+        };
+        near(obb.center, Vec3::ZERO);
+        let rest_box = Aabb::from_center_size(Vec3::ZERO, vec3(2.0, 1.0, 4.0));
+        let delta = pose.world(yaw).unwrap() * scene.nodes[2].world.inverse();
+        for index in 0..8 {
+            let corner = Vec3::new(
+                if index & 1 == 0 {
+                    rest_box.min.x
+                } else {
+                    rest_box.max.x
+                },
+                if index & 2 == 0 {
+                    rest_box.min.y
+                } else {
+                    rest_box.max.y
+                },
+                if index & 4 == 0 {
+                    rest_box.min.z
+                } else {
+                    rest_box.max.z
+                },
+            );
+            let point = delta.transform_point3(corner);
+            assert!(
+                point.distance(obb.closest_point(point)) <= 1e-4,
+                "{point:?} is outside {obb:?}"
+            );
+        }
+        assert!(!obb.contains(vec3(0.0, 2.0, 0.0)));
+
+        let flat = GltfScene::from_bytes(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[
+                {"name":"pad_collider","scale":[2,1,1],"extras":{"mq_shape":"box","mq_role":"collider"}}
+            ]}"#,
+        )
+        .unwrap();
+        let mut flat_pose = GltfModelPose::from_scene(&flat).hierarchy().unwrap();
+        let pad = flat_pose.handle(0).unwrap();
+        flat_pose
+            .set_local(
+                pad,
+                GltfLocalTransform {
+                    scale: vec3(0.0, 1.0, 1.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let GltfColliderShape::Aabb(squashed) =
+            flat_pose.collider_shape(&flat, &flat.colliders[0]).unwrap()
+        else {
+            panic!("flat posed box");
+        };
+        near(squashed.size(), vec3(0.0, 1.0, 1.0));
+    }
+
+    #[test]
+    fn posed_collider_rejects_a_missing_or_singular_rest_and_keeps_shear_inside() {
+        let scene = GltfScene::from_bytes(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"nodes":[
+                {"name":"box_collider","extras":{"mq_shape":"box","mq_role":"collider"}},
+                {"name":"flat_collider","scale":[0,1,1],"extras":{"mq_shape":"box","mq_role":"collider"}}
+            ]}"#,
+        )
+        .unwrap();
+        let mut pose = GltfModelPose::from_scene(&scene).hierarchy().unwrap();
+        let mut missing = scene.colliders[0].clone();
+        missing.node = 50;
+        assert!(pose.collider_shape(&scene, &missing).is_none());
+        let other = GltfScene::from_bytes(br#"{"asset":{"version":"2.0"}}"#).unwrap();
+        let empty = GltfModelPose::from_scene(&other).hierarchy().unwrap();
+        assert!(empty.collider_shape(&scene, &scene.colliders[0]).is_none());
+        assert!(pose.collider_shape(&scene, &scene.colliders[1]).is_none());
+
+        let node = pose.handle(0).unwrap();
+        let shear = Mat4::from_cols(
+            glam::Vec4::X,
+            glam::Vec4::new(0.5, 1.0, 0.0, 0.0),
+            glam::Vec4::Z,
+            glam::Vec4::W,
+        );
+        pose.set_local_matrix(node, shear).unwrap();
+        let shape = pose.collider_shape(&scene, &scene.colliders[0]).unwrap();
+        let rest = Aabb::from_center_size(Vec3::ZERO, Vec3::ONE);
+        for index in 0..8 {
+            let corner = Vec3::new(
+                if index & 1 == 0 {
+                    rest.min.x
+                } else {
+                    rest.max.x
+                },
+                if index & 2 == 0 {
+                    rest.min.y
+                } else {
+                    rest.max.y
+                },
+                if index & 4 == 0 {
+                    rest.min.z
+                } else {
+                    rest.max.z
+                },
+            );
+            let point = shear.transform_point3(corner);
+            let gap = match shape {
+                GltfColliderShape::Aabb(aabb) => point.distance(aabb.closest_point(point)),
+                GltfColliderShape::Obb(obb) => point.distance(obb.closest_point(point)),
+                other => panic!("box, got {other:?}"),
+            };
+            assert!(gap <= 1e-4, "{point:?} gap {gap} outside {shape:?}");
+        }
+    }
+
+    fn hinge_level() -> (GltfScene, GltfModelPose) {
+        let positions = [
+            vec3(-1.0, -1.0, -1.0),
+            vec3(1.0, 1.0, 1.0),
+            vec3(1.0, -1.0, 1.0),
+        ];
+        let mut bin = Vec::new();
+        for position in positions {
+            for value in [position.x, position.y, position.z] {
+                bin.extend(value.to_le_bytes());
+            }
+        }
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],"nodes":[
+                {{"name":"gate","translation":[4,0,-2.6],"children":[1,2]}},
+                {{"name":"gate_collider","translation":[0,0.65,2.5],"scale":[0.28,1.3,5],"extras":{{"mq_shape":"box","mq_role":"collider"}}}},
+                {{"name":"gate_bar","translation":[0,0.65,2.5],"scale":[0.14,0.65,2.5],"mesh":0,"extras":{{"mq_shape":"box","mq_role":"collider"}}}}
+            ],"meshes":[{{"primitives":[{{"attributes":{{"POSITION":0}}}}]}}],"accessors":[{{"bufferView":0,"componentType":5126,"count":3,"type":"VEC3","min":[-1,-1,-1],"max":[1,1,1]}}],"bufferViews":[{{"buffer":0,"byteLength":{}}}],"buffers":[{{"byteLength":{}}}]}}"#,
+            bin.len(),
+            bin.len()
+        );
+        let bytes = glb_bytes(&json, &bin);
+        let scene = GltfScene::from_bytes(&bytes).unwrap();
+        let rest = GltfModelPose::from_scene(&scene);
+        (scene, rest)
+    }
+
+    fn glb_bytes(json: &str, bin: &[u8]) -> Vec<u8> {
+        fn pad(mut data: Vec<u8>, byte: u8) -> Vec<u8> {
+            while !data.len().is_multiple_of(4) {
+                data.push(byte);
+            }
+            data
+        }
+        let json_chunk = pad(json.as_bytes().to_vec(), b' ');
+        let bin_chunk = pad(bin.to_vec(), 0);
+        let total = 12 + 8 + json_chunk.len() + 8 + bin_chunk.len();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json_chunk.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json_chunk);
+        out.extend_from_slice(&(bin_chunk.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"BIN\0");
+        out.extend_from_slice(&bin_chunk);
+        out
     }
 }

@@ -105,6 +105,10 @@
 //! around the mesh positions after the node's world matrix, even when that
 //! node is rotated. An empty node with a role but no `mq_shape` and no mesh
 //! is not a collider.
+//!
+//! Those shapes stay at the imported rest pose on [`GltfScene::colliders`].
+//! [`crate::gltf_draw::GltfHierarchyPose::collider_shape`] returns one shape
+//! in a hierarchy's current worlds.
 
 use std::{
     borrow::Cow,
@@ -1412,6 +1416,183 @@ pub(crate) fn up_axis_rotation(up: Vec3) -> Option<Quat> {
         return None;
     }
     Some(rotation)
+}
+
+/// Moves an imported collider by `posed_world * inverse(rest_world)`.
+///
+/// An axis-aligned box, including a quarter turn, stays an [`Aabb`]. Any other
+/// rotation is an [`Obb`]. A sphere's radius grows by the delta's largest
+/// stretch, and a capsule's endpoints follow the delta while its radius uses
+/// the largest stretch perpendicular to the original segment. The node's own
+/// matrix is not decomposed, so a mesh box keeps the size already stored on
+/// `shape`.
+pub(crate) fn transform_collider_shape(
+    delta: Mat4,
+    shape: GltfColliderShape,
+) -> Option<GltfColliderShape> {
+    if !matrix_is_affine(delta) {
+        return None;
+    }
+    let posed = match shape {
+        GltfColliderShape::Sphere(sphere) => transform_sphere(delta, sphere)?,
+        GltfColliderShape::Capsule(capsule) => transform_capsule(delta, capsule)?,
+        GltfColliderShape::Aabb(aabb) => {
+            transform_box(delta, aabb.center(), aabb.half_extents(), Quat::IDENTITY)?
+        }
+        GltfColliderShape::Obb(obb) => {
+            transform_box(delta, obb.center, obb.half_extents, obb.rotation)?
+        }
+    };
+    shape_is_finite(posed).then_some(posed)
+}
+
+fn matrix_is_affine(matrix: Mat4) -> bool {
+    matrix.is_finite()
+        && matrix.x_axis.w == 0.0
+        && matrix.y_axis.w == 0.0
+        && matrix.z_axis.w == 0.0
+        && matrix.w_axis.w == 1.0
+}
+
+fn shape_is_finite(shape: GltfColliderShape) -> bool {
+    match shape {
+        GltfColliderShape::Aabb(aabb) => aabb.min.is_finite() && aabb.max.is_finite(),
+        GltfColliderShape::Sphere(sphere) => sphere.center.is_finite() && sphere.radius.is_finite(),
+        GltfColliderShape::Obb(obb) => {
+            obb.center.is_finite() && obb.half_extents.is_finite() && obb.rotation.is_finite()
+        }
+        GltfColliderShape::Capsule(capsule) => {
+            capsule.a.is_finite() && capsule.b.is_finite() && capsule.radius.is_finite()
+        }
+    }
+}
+
+fn linear_part(delta: Mat4) -> Mat3 {
+    Mat3::from_cols(
+        delta.x_axis.truncate(),
+        delta.y_axis.truncate(),
+        delta.z_axis.truncate(),
+    )
+}
+
+/// Largest stretch of a linear map. Column lengths are exact when the columns
+/// are orthogonal, which covers translation, rotation, and scale.
+fn max_stretch(linear: Mat3) -> f32 {
+    let cols = [linear.x_axis, linear.y_axis, linear.z_axis];
+    let lengths = [cols[0].length(), cols[1].length(), cols[2].length()];
+    let max_len = lengths[0].max(lengths[1]).max(lengths[2]);
+    if !max_len.is_finite() {
+        return max_len;
+    }
+    let limit = 1.0e-4 * (max_len * max_len + 1.0);
+    let orthogonal = cols[0].dot(cols[1]).abs() <= limit
+        && cols[0].dot(cols[2]).abs() <= limit
+        && cols[1].dot(cols[2]).abs() <= limit;
+    if orthogonal {
+        return max_len;
+    }
+    let mut direction = Vec3::new(1.0, 1.0, 1.0).normalize();
+    for _ in 0..12 {
+        let next = linear.transpose() * (linear * direction);
+        let len = next.length();
+        if len <= f32::EPSILON {
+            return 0.0;
+        }
+        direction = next / len;
+    }
+    (linear * direction).length().max(max_len)
+}
+
+fn perpendicular_stretch(linear: Mat3, axis: Vec3) -> f32 {
+    let len = axis.length();
+    if !len.is_finite() || len <= f32::EPSILON {
+        return max_stretch(linear);
+    }
+    let axis = axis / len;
+    let helper = if axis.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let tangent = axis.cross(helper).normalize();
+    let bitangent = axis.cross(tangent);
+    let along = linear * tangent;
+    let across = linear * bitangent;
+    let a = along.dot(along);
+    let b = along.dot(across);
+    let c = across.dot(across);
+    let discriminant = (a - c) * (a - c) + 4.0 * b * b;
+    if !a.is_finite() || !b.is_finite() || !c.is_finite() || !discriminant.is_finite() {
+        return f32::NAN;
+    }
+    (0.5 * (a + c + discriminant.max(0.0).sqrt()))
+        .max(0.0)
+        .sqrt()
+}
+
+fn transform_sphere(delta: Mat4, sphere: Sphere) -> Option<GltfColliderShape> {
+    let center = delta.transform_point3(sphere.center);
+    let radius = sphere.radius * max_stretch(linear_part(delta));
+    if !center.is_finite() || !radius.is_finite() {
+        return None;
+    }
+    Some(GltfColliderShape::Sphere(Sphere::new(center, radius)))
+}
+
+fn transform_capsule(delta: Mat4, capsule: Capsule) -> Option<GltfColliderShape> {
+    let a = delta.transform_point3(capsule.a);
+    let b = delta.transform_point3(capsule.b);
+    let radius = capsule.radius * perpendicular_stretch(linear_part(delta), capsule.b - capsule.a);
+    if !a.is_finite() || !b.is_finite() || !radius.is_finite() {
+        return None;
+    }
+    Some(GltfColliderShape::Capsule(Capsule::new(a, b, radius)))
+}
+
+fn transform_box(
+    delta: Mat4,
+    center: Vec3,
+    half_extents: Vec3,
+    rotation: Quat,
+) -> Option<GltfColliderShape> {
+    if !center.is_finite() || !half_extents.is_finite() || !rotation.is_finite() {
+        return None;
+    }
+    let rotation = if rotation.length_squared() > f32::EPSILON {
+        rotation.normalize()
+    } else {
+        Quat::IDENTITY
+    };
+    // `from_world_matrix` treats the matrix scale as the full size. Passing the
+    // stored full size keeps a Blender cube (vertices at ±1) from being halved.
+    let posed = delta * Mat4::from_scale_rotation_translation(half_extents * 2.0, rotation, center);
+    let shape = shape_from_box_matrix(posed)?;
+    let mut corners = [Vec3::ZERO; 8];
+    for (index, corner) in corners.iter_mut().enumerate() {
+        let local = Vec3::new(
+            if index & 1 == 0 {
+                -half_extents.x
+            } else {
+                half_extents.x
+            },
+            if index & 2 == 0 {
+                -half_extents.y
+            } else {
+                half_extents.y
+            },
+            if index & 4 == 0 {
+                -half_extents.z
+            } else {
+                half_extents.z
+            },
+        );
+        let point = delta.transform_point3(center + rotation * local);
+        if !point.is_finite() {
+            return None;
+        }
+        *corner = point;
+    }
+    if shape_covers_points(&shape, &corners) {
+        Some(shape)
+    } else {
+        Some(fit_box_to_points(&shape, &corners))
+    }
 }
 
 fn rotate_shape(rotation: Quat, shape: GltfColliderShape) -> GltfColliderShape {

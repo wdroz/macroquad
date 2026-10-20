@@ -83,8 +83,10 @@
 //! selected chunks. [`GltfModelPose::hierarchy`] creates an independent
 //! [`GltfHierarchyPose`] with stable node handles and local TRS/matrix edits
 //! that recompute descendant worlds. Reuse each current node pose for bounds,
-//! culling and transparent submissions. Scene markers and colliders remain
-//! unchanged. Apply matching model/sidecar up-axis conversion.
+//! culling and transparent submissions. Spawn markers stay on the source scene.
+//! [`GltfHierarchyPose::collider_shape`] reads a collider in the current worlds
+//! without writing [`crate::gltf::GltfScene::colliders`]. Apply matching
+//! model/sidecar up-axis conversion.
 //!
 //! [`GltfModelLoader`] and [`RetainedGltfModelLoader`] split the same
 //! construction into pollable units. Synchronous constructors remain.

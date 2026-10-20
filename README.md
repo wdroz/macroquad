@@ -93,8 +93,9 @@ with deformed bounds. It does not change these draw methods; see the
 `GltfModel::from_bytes_with_pose` (or `GltfModelLoader::take_pose`) keeps the
 authored node matrices. `GltfNodePose::set_world` replaces one node's world
 matrix and draws around that node's origin. `GltfModelPose::hierarchy` edits
-local translation, rotation, and scale and updates descendants. Those poses
-do not move colliders or spawn markers. See
+local translation, rotation, and scale and updates descendants. Spawn markers
+and the stored collider list stay at rest. `GltfHierarchyPose::collider_shape`
+returns one collider in the current worlds. See
 [docs/3d-guide.md](docs/3d-guide.md#replacing-an-imported-node-pose).
 
 For static geometry, `RetainedGltfModel::from_model(model, false)` consumes the
