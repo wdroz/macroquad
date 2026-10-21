@@ -101,9 +101,8 @@ Size menus against current logical `screen_width()`/`screen_height()` and leave
 room for controls and scrollbars. Set `.movable(false)` on a window whose
 position must follow your layout each frame; movable windows remember their
 user-controlled position after appearing. Built-in groups/windows clip their
-own UI commands. This does not expose a general nested clipping scope for
-ordinary `draw_text`/`draw_texture_ex` calls. That scope, explicit padding/gap
-helpers are still roadmap items. Test compact menus
+own UI commands. Use `with_clip_rect` below for ordinary `draw_text` and
+`draw_texture_ex` calls. Explicit padding/gap helpers remain roadmap items. Test compact menus
 at 390 x 400 as well as desktop sizes; the existing showcase is not a guarantee
 of responsive application layout.
 
@@ -136,6 +135,55 @@ transparency. `rounded_panels_check` shares the native pixel regression and
 can also run on WebGL through its accompanying HTML host. The fixture checks
 transparent and opaque target coverage, square/clamped radii, invalid inputs
 and ordered textured/shape drawing.
+
+## Clip custom document content
+
+`with_clip_rect(rect, || { ... })` clips ordinary immediate shapes, images and
+text, intersects nested rectangles and restores the previous clip on return.
+The synchronous closure can return a value. A native panic unwind also restores
+the previous clip. Empty, disjoint, nonpositive-size and nonfinite rectangles
+draw no content; a deeper scope cannot reopen an empty parent.
+
+```rust,no_run
+use macroquad::prelude::*;
+
+set_default_camera();
+let viewport = Rect::new(20., 60., 280., 180.);
+with_clip_rect(viewport, || {
+    draw_rectangle(0., 0., 600., 600., WHITE);
+    draw_text("Document scrolled above its viewport", 28., 50., 24., BLACK);
+    with_clip_rect(Rect::new(40., 80., 80., 40.), || {
+        draw_rectangle(0., 0., 600., 600., BLUE);
+    });
+});
+draw_text("Unclipped HUD", 20., 30., 24., WHITE);
+```
+
+The clip is an absolute rectangle measured from the whole surface's top-left;
+X points right and Y points down. It is independent of the active camera's
+world transform. On the window, its units are logical pixels and the current
+`screen_dpi_scale()` converts them to physical pixels. On a camera's render
+target, its units are texture pixels and window DPI has no effect. The active
+camera viewport still uses physical GL coordinates with a bottom-left origin;
+the helper converts and intersects that viewport and the surface bounds.
+Nested intersections retain precise bounds, then round minima down and maxima
+up to physical edges. Thus edge pixels may extend less than one physical pixel
+beyond a fractional clip, but logically disjoint nested rectangles stay empty.
+
+Select the camera, render target and viewport before entering the scope and
+keep them unchanged until the closure returns. Do not advance a frame inside
+the closure. Only immediate drawing is scoped: built-in UI commands render
+later with their own clips, while `clear_background` and raw backend calls are
+unaffected. Scope entry/exit does not flush geometry; each queued draw retains
+its clip, sampler ownership and normal ordering. No `get_internal_gl` call is
+needed for a custom document viewport. Zoom, pan and hit testing remain the
+application's responsibility.
+
+Run `cargo run --example scoped_clipping` for a scrolling document with nested
+image/text clipping and a HUD. `scoped_clipping_check` shares the native GPU
+regression; its HTML host runs the same checks on WebGL, including actual
+window DPI, an asymmetrical offscreen target/viewport, fractional disjoint
+clips, queued texture lifetime, clipped text and deferred built-in UI.
 
 ## Wrap and draw text explicitly
 

@@ -25,6 +25,89 @@ pub fn clear_background(color: Color) {
     context.gl.clear(get_quad_context(), color);
 }
 
+/// Draw immediate shapes, images and text inside a nested rectangular clip.
+///
+/// The rectangle has its origin at the **top-left of the whole drawing surface**,
+/// X right and Y down. On the window its units are logical window pixels, using
+/// the current [`screen_dpi_scale`]. On a camera's render target they are target
+/// texture pixels, independent of window DPI. The camera's world transform does
+/// not transform the clip. Select the camera, render target and viewport before
+/// entering the scope, and keep them unchanged until the closure returns.
+///
+/// Clips intersect the surface, the active camera's physical GL viewport and
+/// all enclosing clips. Nested intersections happen before rounding: minima
+/// round down and maxima round up to physical pixel edges. A disjoint, empty,
+/// nonpositive-size or nonfinite rectangle clips everything, including in
+/// deeper scopes. Nothing is flushed just to change a clip; queued draws retain
+/// their individual clips. The previous clip is restored when the closure
+/// returns (also during native panic unwinding). The closure's result is returned.
+///
+/// Use synchronous drawing only: do not advance a frame inside the closure.
+/// Deferred built-in UI widgets retain their own clipping and are drawn later,
+/// outside this scope. Background clears and raw backend calls are not clipped.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// set_default_camera();
+/// let value = with_clip_rect(Rect::new(20., 60., 280., 160.), || {
+///     draw_rectangle(0., 0., 600., 400., WHITE);
+///     draw_text("A scrolling document", 28., 90., 24., BLACK);
+///     with_clip_rect(Rect::new(40., 80., 80., 40.), || {
+///         draw_rectangle(0., 0., 600., 400., BLUE);
+///     });
+///     42
+/// });
+/// assert_eq!(value, 42);
+/// draw_text("Unclipped HUD", 20., 30., 24., WHITE);
+/// ```
+pub fn with_clip_rect<R>(rect: crate::math::Rect, draw: impl FnOnce() -> R) -> R {
+    use crate::clip_rect::{surface_clip, ClipRect, Scissor};
+
+    struct RestoreClip {
+        scissor: Option<Scissor>,
+        scope: Option<ClipRect>,
+    }
+    impl Drop for RestoreClip {
+        fn drop(&mut self) {
+            let gl = &mut get_context().gl;
+            gl.scissor(self.scissor);
+            gl.set_clip_scope(self.scope);
+        }
+    }
+
+    let context = get_context();
+    let gl = &mut context.gl;
+    let restore = RestoreClip {
+        scissor: gl.scissor_state(),
+        scope: gl.clip_scope(),
+    };
+    let (width, height, scale) = if let Some(pass) = gl.get_active_render_pass() {
+        let backend = get_quad_context();
+        let texture = backend.render_pass_texture(pass);
+        let (width, height) = backend.texture_size(texture);
+        (width, height, 1.)
+    } else {
+        let (width, height) = miniquad::window::screen_size();
+        (width as u32, height as u32, screen_dpi_scale())
+    };
+    let mut clip = ClipRect::from_rect(rect, scale).intersect(surface_clip(
+        width,
+        height,
+        gl.viewport_state(),
+    ));
+    if let Some(parent) = restore.scope {
+        clip = clip.intersect(parent);
+    }
+    if let Some(previous) = restore.scissor {
+        clip = clip.intersect(ClipRect::from_scissor(previous));
+    }
+    gl.set_clip_scope(Some(clip));
+    gl.scissor(Some(clip.scissor()));
+    let result = draw();
+    drop(restore);
+    result
+}
+
 #[doc(hidden)]
 pub fn gl_set_drawcall_buffer_capacity(max_vertices: usize, max_indices: usize) {
     let context = get_context();

@@ -18,6 +18,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
 | Browser host | `canvas_host` | Density, framebuffer budgets, and a requested frame-rate cap |
 | Rounded panels | `rounded_panels`, `rounded_panels_check` | Filled radius-clamped panels and shared native/WebGL single-alpha-coverage regression; see the [UI and 2D guide](../docs/ui-2d-guide.md#draw-a-rounded-panel) |
+| Custom clipping | `scoped_clipping`, `scoped_clipping_check` | Nested document/image/text clips, precise empty intersections, DPI/target/viewport coordinates and restored HUD/UI state; see the [UI and 2D guide](../docs/ui-2d-guide.md#clip-custom-document-content) |
 | Existing UI/2D samples | `camera`, `camera_transformations`, `texture`, `ui`, `ui_skins`, `platformer` | World/HUD cameras, texture drawing, widgets/skins, tile maps and platformer collisions; see the [UI and 2D guide](../docs/ui-2d-guide.md) for current limitations |
 
 Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).

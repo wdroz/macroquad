@@ -85,6 +85,7 @@ use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 
 mod cursor_capture;
+mod clip_rect;
 mod exec;
 mod input_coordinates;
 mod quad_gl;

@@ -332,6 +332,7 @@ struct GlState {
     texture: Option<miniquad::TextureId>,
     draw_mode: DrawMode,
     clip: Option<(i32, i32, i32, i32)>,
+    clip_scope: Option<crate::clip_rect::ClipRect>,
     viewport: Option<(i32, i32, i32, i32)>,
     model_stack: Vec<glam::Mat4>,
     pipeline: Option<GlPipeline>,
@@ -711,6 +712,7 @@ impl QuadGl {
             pipelines: PipelinesStorage::new(ctx),
             state: GlState {
                 clip: None,
+                clip_scope: None,
                 viewport: None,
                 texture: None,
                 model_stack: vec![glam::Mat4::IDENTITY],
@@ -863,6 +865,7 @@ impl QuadGl {
     /// Reset internal state to known default
     pub fn reset(&mut self) {
         self.state.clip = None;
+        self.state.clip_scope = None;
         self.state.texture = None;
         self.state.model_stack = vec![glam::Mat4::IDENTITY];
 
@@ -1223,6 +1226,22 @@ impl QuadGl {
 
     pub fn scissor(&mut self, clip: Option<(i32, i32, i32, i32)>) {
         self.state.clip = clip;
+    }
+
+    pub(crate) fn scissor_state(&self) -> Option<crate::clip_rect::Scissor> {
+        self.state.clip
+    }
+
+    pub(crate) fn clip_scope(&self) -> Option<crate::clip_rect::ClipRect> {
+        self.state.clip_scope
+    }
+
+    pub(crate) fn set_clip_scope(&mut self, clip: Option<crate::clip_rect::ClipRect>) {
+        self.state.clip_scope = clip;
+    }
+
+    pub(crate) fn viewport_state(&self) -> Option<crate::clip_rect::Scissor> {
+        self.state.viewport
     }
 
     pub fn viewport(&mut self, viewport: Option<(i32, i32, i32, i32)>) {

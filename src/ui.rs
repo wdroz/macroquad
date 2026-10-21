@@ -1348,6 +1348,10 @@ pub(crate) mod ui_context {
 
             gl_use_material(material);
 
+            // UI commands already carry physical clips. They are deferred, so
+            // they neither inherit nor leave behind an immediate drawing scope.
+            let previous_clip = quad_gl.scissor_state();
+
             for draw_command in &ui_draw_list {
                 if let Some(ref texture) = draw_command.texture {
                     quad_gl.texture(Some(texture));
@@ -1364,6 +1368,7 @@ pub(crate) mod ui_context {
                 quad_gl.geometry(&draw_command.vertices[..], &draw_command.indices);
             }
             quad_gl.texture(None);
+            quad_gl.scissor(previous_clip);
 
             gl_use_default_material();
 
