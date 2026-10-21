@@ -7,6 +7,9 @@
 
 `macroquad` is a simple and easy to use game library for Rust programming language, heavily inspired by [raylib](https://github.com/raysan5/raylib).
 
+The [fork roadmap](ROADMAP_3D.md) covers 3D, UI and 2D work in one ordered queue.
+Completed milestones and round evidence are in [roadmap history](docs/roadmap-history.md).
+
 ## Features
 
 * Same code for all supported platforms, no platform dependent defines required.
