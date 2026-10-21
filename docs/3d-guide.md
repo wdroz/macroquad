@@ -1247,7 +1247,7 @@ assert_eq!(contact.normal, Vec3::Y);
 
 ## Sweep
 
-`SweepHit` is the first time a moving box or sphere meets one static box along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static box. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point` where that query exists, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box and return the point and normal in world space.
+`SweepHit` is the first time a moving box or sphere meets one static solid along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static solid. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point` where that query exists, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box; `Aabb::sweep_sphere` takes a sphere. The point and normal are in world space.
 
 `Aabb::sweep` moves a box. `Sphere::sweep_aabb` moves a sphere, including hits on an edge or a corner. A start that only touches, and a delta that does not move further in, returns `None`, so a shape resting on a floor can still sweep sideways. An overlap deeper than about `1e-4` is already inside and returns `t == 0`. A discrete `overlaps` test can jump a thin wall; the sweep still reports the crossing.
 
@@ -1280,6 +1280,19 @@ let hit = body.sweep_obb(delta, &wall).unwrap();
 let at_impact = body.offset(delta * hit.t);
 assert!(hit.normal.x < 0.0);
 assert!(at_impact.center().x < 0.0);
+```
+
+`Aabb::sweep_sphere` tests the full box against a static sphere, including an edge or corner graze. It reuses `Sphere::sweep_aabb` with the opposite movement, then negates the normal and translates the contact point by `delta * t` into the caller's frame. The returned normal points from the sphere toward the moving box. For an initially separated pair, the point lies where the sphere meets the box at impact. For an initial overlap, it keeps the box point from `Sphere::contact_aabb`, which may lie inside or outside the sphere. The existing sphere sweep's tolerances and finite-precision behavior also apply.
+
+```rust
+use macroquad::math::{Aabb, Sphere, Vec3, vec3};
+
+let body = Aabb::from_center_size(vec3(-3.0, 0.0, 0.0), vec3(0.2, 2.0, 0.5));
+let rock = Sphere::new(Vec3::ZERO, 0.5);
+let hit = body.sweep_sphere(vec3(6.0, 0.0, 0.0), &rock).unwrap();
+assert!((hit.t - 0.4).abs() < 1e-4);
+assert_eq!(hit.normal, -Vec3::X);
+assert!((hit.point - vec3(-0.5, 0.0, 0.0)).length() < 1e-4);
 ```
 
 ## Sphere slide
@@ -1336,7 +1349,7 @@ Rejecting a whole step with `overlaps` sticks a sphere that is only touching a f
 
 ## Character movement
 
-There is no character controller. `on_ground`, slope limits, and step offsets are not library fields. `Capsule` is a possible body shape, but no current sweep or slide moves a capsule. `slide_sphere_solids` moves a sphere against a static capsule. The moving-shape sweep queries are `Aabb::sweep`, `Aabb::sweep_obb`, `Sphere::sweep_aabb`, and `Sphere::sweep_obb`. Moving AABB queries against spheres and capsules remain separate prerequisites for the controller.
+There is no character controller. `on_ground`, slope limits, and step offsets are not library fields. `Capsule` is a possible body shape, but no current sweep or slide moves a capsule. `slide_sphere_solids` moves a sphere against a static capsule. The moving-shape sweep queries are `Aabb::sweep`, `Aabb::sweep_obb`, `Aabb::sweep_sphere`, `Sphere::sweep_aabb`, and `Sphere::sweep_obb`. A moving AABB query against a capsule remains a separate prerequisite for the controller.
 
 A capsule standing on a floor is a `Contact` with an upward normal and a penetration of `0`. That is the ground test. A wall's normal fails the upward check, so the same query does not treat a wall as a floor. A slope limit is the cutoff on `normal.y` in this function; the library does not store one.
 

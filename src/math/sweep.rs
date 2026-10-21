@@ -1,4 +1,4 @@
-//! Continuous overlap of a moving box or sphere against a static box.
+//! Continuous overlap of a moving box or sphere against a static solid.
 //!
 //! [`Aabb`] and [`Sphere`] overlap tests are inclusive, so a shape sitting on
 //! a floor already counts as touching. A sweep along a delta that does not
@@ -17,19 +17,20 @@ const TOUCH_SLOP: f32 = 1e-4;
 /// Motion into a surface below this is numeric noise, not a new impact.
 const INTO_SLOP: f32 = 1e-5;
 
-/// First impact of a shape moving in a straight line against a static box.
+/// First impact of a shape moving in a straight line against a static solid.
 ///
 /// `t` is the fraction of `delta` at which the shapes meet, in `0..=1`.
-/// `normal` is a unit vector pointing out of the static box, toward the moving
+/// `normal` is a unit vector pointing out of the static solid, toward the moving
 /// shape. `point` is the center of the shared region for two axis-aligned
 /// boxes, a representative point in that region for [`Aabb::sweep_obb`], and a
-/// surface point on the box for a sphere. An initial overlap uses the
-/// corresponding [`Contact::point`] where that contact query exists. The
-/// static box is an [`Aabb`] or an [`Obb`].
+/// surface point on the box for a moving sphere. [`Aabb::sweep_sphere`] returns
+/// a shared surface point on the static sphere at a new impact. An initial
+/// overlap uses the corresponding [`Contact::point`] where that query exists.
+/// The static solid is an [`Aabb`], an [`Obb`], or a [`Sphere`].
 ///
 /// A pair that is already overlapping by more than `1e-4` reports `t == 0`.
 /// A pair that only touches, or overlaps by less than that, reports `t == 0`
-/// only when `delta` moves further into the static box. Otherwise the sweep
+/// only when `delta` moves further into the static solid. Otherwise the sweep
 /// misses, so a sphere resting on a floor can still move sideways.
 ///
 /// # Example
@@ -48,13 +49,61 @@ const INTO_SLOP: f32 = 1e-5;
 pub struct SweepHit {
     /// Fraction of the delta where the shapes first meet, in `0..=1`.
     pub t: f32,
-    /// Unit normal pointing out of the static box.
+    /// Unit normal pointing out of the static solid.
     pub normal: Vec3,
     /// Representative contact position at impact; see [`SweepHit`].
     pub point: Vec3,
 }
 
 impl Aabb {
+    /// Sweeps this axis-aligned box along `delta` against the static `sphere`.
+    ///
+    /// The complete box is tested, including its faces, edges and corners.
+    /// `t` is in `0..=1`, and `normal` points out of the sphere toward this box.
+    /// At a new impact, `point` is on both shapes in the caller's world frame.
+    /// An initial overlap uses [`Sphere::contact_aabb`]'s point on this box,
+    /// which may lie inside or outside the sphere when one contains the other.
+    ///
+    /// This uses [`Sphere::sweep_aabb`] with opposite relative motion, then
+    /// reverses the normal and translates the point back at the impact time.
+    /// It shares that query's feature tests and tolerances: an overlap deeper
+    /// than `1e-4` reports `t == 0` even with no motion or motion away. A touch
+    /// or shallower overlap reports `t == 0` only when moving into the solid
+    /// by more than `1e-5`; tangential and outward motion miss.
+    ///
+    /// Flat or point boxes and zero-radius spheres are allowed. Inverted or
+    /// non-finite boxes, negative or non-finite radii, non-finite centers or
+    /// deltas miss. Finite inputs retain the reused query's floating-point
+    /// limits; a non-finite translated contact point also misses.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, Sphere, Vec3, vec3};
+    ///
+    /// let body = Aabb::from_center_size(vec3(-3.0, 0.0, 0.0), Vec3::ONE);
+    /// let rock = Sphere::new(Vec3::ZERO, 1.0);
+    /// let hit = body.sweep_sphere(vec3(6.0, 0.0, 0.0), &rock).unwrap();
+    /// assert_eq!(hit.t, 0.25);
+    /// assert_eq!(hit.normal, -Vec3::X);
+    /// assert_eq!(hit.point, -Vec3::X);
+    /// ```
+    pub fn sweep_sphere(&self, delta: Vec3, sphere: &Sphere) -> Option<SweepHit> {
+        let hit = sphere.sweep_aabb(-delta, self)?;
+        // Reversing relative motion leaves the original box stationary.
+        // Move its contact point into the caller's frame at impact. f64
+        // avoids overflow in the translation when the final point is finite.
+        let point = (hit.point.as_dvec3() + delta.as_dvec3() * hit.t as f64).as_vec3();
+        if !point.is_finite() {
+            return None;
+        }
+        Some(SweepHit {
+            t: hit.t,
+            normal: -hit.normal,
+            point,
+        })
+    }
+
     /// Sweeps this box along `delta` against the static `other`.
     ///
     /// `t` is in `0..=1`. The normal points out of `other`. A path that misses
