@@ -61,6 +61,9 @@ use crate::{
     time::get_frame_time,
 };
 
+mod sprite_region;
+pub use sprite_region::{SpriteRegion, SpriteRegionDrawParams, SpriteRegionError};
+
 /// Specification of animation
 #[derive(Clone, Debug)]
 pub struct Animation {

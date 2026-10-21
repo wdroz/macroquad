@@ -405,8 +405,56 @@ one source rectangle. Source rectangles use original texture pixels, while
 An explicit `pivot` is an absolute point in that same drawing space, not an
 offset inside the source frame. `flip_x` and `flip_y` mirror the drawn region.
 The default pivot is the drawn rectangle's center. Texture batching/atlases
-reuse this path; callers still validate sheet dimensions and trimmed-frame
-anchors. A checked sprite-region type is not available yet.
+reuse this path.
+
+For validated frame metadata, use `SpriteRegion` from
+`experimental::animation`. `new` checks an explicit source rectangle;
+`from_grid` selects a zero-based column and row from equal-sized cells.
+`trimmed` also records the original untrimmed frame size and the visible
+rectangle's offset inside it. Dimensions and offsets use original source
+pixels, with X right and Y down. Empty, nonfinite, out-of-sheet regions and
+inconsistent trimmed bounds return `SpriteRegionError`.
+
+```rust,no_run
+use macroquad::experimental::animation::{SpriteRegion, SpriteRegionDrawParams};
+use macroquad::prelude::*;
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let sheet = load_texture("character.png").await?;
+let frame = SpriteRegion::trimmed(
+    sheet.size(),
+    Rect::new(0., 0., 12., 16.), // stored visible pixels
+    vec2(24., 24.),             // original frame before trimming
+    vec2(6., 8.),               // visible pixels' original offset
+)?.with_pivot(vec2(12., 24.))?; // feet anchor, in original frame pixels
+frame.draw(&sheet, vec2(100., 160.), WHITE, SpriteRegionDrawParams {
+    dest_size: Some(vec2(48., 48.)), // size of the whole untrimmed frame
+    flip_x: true,
+    ..Default::default()
+})?;
+# Ok(())
+# }
+```
+
+`with_pivot` chooses the source point placed at the drawing-space anchor;
+the default is the untrimmed frame's top-left. It may lie outside the frame.
+Flips reflect the image around that fixed anchor, including the trimmed
+offset; rotation then turns the result around the same anchor. This differs
+from flipping a raw `DrawTextureParams` rectangle in place. Positive
+`dest_size` scales the whole untrimmed frame, so differently trimmed frames
+keep the same scale. A non-centered pivot therefore needs no special-case
+translation when changing frames or flips.
+
+Regions are GPU-free metadata and do not own a texture. `draw` borrows a
+`Texture2D`, checks its original dimensions against the sheet size, and uses
+`draw_texture_ex`, retaining existing texture ownership, atlas batching,
+clipping and material behavior. `draw_params` provides the same checked
+position/parameters without a GPU; callers using that lower-level path must
+check the supplied texture dimensions themselves. Neither path changes
+animation timing or imports a packed-atlas format.
+
+Run `cargo run --example sprite_regions` to inspect the tiny generated sheet.
+`sprite_regions_check` and its HTML host share the native/WebGL regression.
 
 [`experimental::animation`](../src/experimental/animation.rs) provides
 `Animation`, `AnimatedSprite` and `AnimationFrame` for equal-sized cells with
