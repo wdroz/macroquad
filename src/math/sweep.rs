@@ -21,10 +21,11 @@ const INTO_SLOP: f32 = 1e-5;
 ///
 /// `t` is the fraction of `delta` at which the shapes meet, in `0..=1`.
 /// `normal` is a unit vector pointing out of the static box, toward the moving
-/// shape. `point` is the center of the shared region for two boxes, and a
+/// shape. `point` is the center of the shared region for two axis-aligned
+/// boxes, a representative point in that region for [`Aabb::sweep_obb`], and a
 /// surface point on the box for a sphere. An initial overlap uses the
-/// corresponding [`Contact::point`]. The static box is
-/// an [`Aabb`], or an [`Obb`] for [`Sphere::sweep_obb`].
+/// corresponding [`Contact::point`] where that contact query exists. The
+/// static box is an [`Aabb`] or an [`Obb`].
 ///
 /// A pair that is already overlapping by more than `1e-4` reports `t == 0`.
 /// A pair that only touches, or overlaps by less than that, reports `t == 0`
