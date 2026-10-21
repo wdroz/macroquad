@@ -518,8 +518,13 @@ impl GltfHierarchyPose {
     /// `posed_world * inverse(rest_world)` for `collider.node`. A box whose
     /// faces stay on the world axes, including a quarter turn, remains an
     /// [`Aabb`](crate::math::Aabb). Any other rotation is an
-    /// [`Obb`](crate::math::Obb). A sphere's radius and a capsule's segment
-    /// and radius follow the same delta, including its scale.
+    /// [`Obb`](crate::math::Obb). A sphere's radius uses the delta's largest
+    /// stretch, including shear, so it encloses the transformed sphere rather
+    /// than testing only the three transformed coordinate axes. A capsule's
+    /// endpoints follow the delta; its radius uses the largest stretch in the
+    /// plane perpendicular to its original segment (all directions when the
+    /// endpoints coincide). These remain sphere/capsule approximations, not
+    /// ellipsoid or arbitrary convex-shape colliders.
     ///
     /// [`Obb::from_world_matrix`](crate::math::Obb::from_world_matrix) reads the
     /// node scale as the full size. A default Blender cube has vertices at ±1,
@@ -530,8 +535,8 @@ impl GltfHierarchyPose {
     /// [`GltfScene::with_up_axis`](GltfScene::with_up_axis) conversion the
     /// collider was imported from. [`None`] means `collider.node` is missing
     /// from `scene` or from this hierarchy, or the node's rest world is not
-    /// invertible. `collider.trigger` is left on the stored value; pass only
-    /// the solids a slide should block on.
+    /// invertible, or the transformed shape is non-finite. `collider.trigger`
+    /// is left on the stored value; pass only the solids a slide should block on.
     ///
     /// ```
     /// use macroquad::prelude::*;

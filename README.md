@@ -9,6 +9,8 @@
 
 The [fork roadmap](ROADMAP_3D.md) covers 3D, UI and 2D work in one ordered queue.
 Completed milestones and round evidence are in [roadmap history](docs/roadmap-history.md).
+The [UI and 2D guide](docs/ui-2d-guide.md) covers the current widgets, logical
+coordinates, `Camera2D`, sprite regions and experimental animation limitations.
 
 ## Features
 
@@ -163,7 +165,8 @@ is the fixture.
 
 `Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, `Obb`, and `Frustum` live in
 `macroquad::math` and the prelude. `Contact` describes an overlapping pair,
-`SweepHit` describes a moving box against an AABB or a sphere against an AABB/OBB,
+`SweepHit` describes an AABB moving against a static AABB, OBB, sphere or
+capsule, or a sphere moving against either box type,
 `slide_sphere` keeps the leftover motion along a face, and
 `slide_sphere_solids` does the same against spheres and capsules. There is no rigid-body
 world and no character controller. [docs/3d-guide.md](docs/3d-guide.md) covers

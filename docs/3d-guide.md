@@ -10,6 +10,11 @@ There is no rigid-body world and no character controller in the library yet. `Co
 
 Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission, [optional basic lighting](#optional-basic-lighting), and shaded normal/roughness maps. [Replacing an imported node pose](#replacing-an-imported-node-pose), [Editing an imported hierarchy](#editing-an-imported-hierarchy), [CPU morph data and evaluation](#cpu-morph-data-and-evaluation), and [Drawing independent morph instances](#drawing-independent-morph-instances) cover moving a baked node and drawing shape keys. Collision queries start at [Ray hits](#ray-hits). Gravity and a capsule standing on a floor are the application samples in [Physics](#physics) and [Character movement](#character-movement). Mouse look uses [Logical and physical input](#logical-and-physical-input) and [Pointer capture](#pointer-capture). Browser density and frame-rate caps are in [Browser canvas budgets](#browser-canvas-budgets).
 
+For animated levels, continue with [Playing glTF clips](#playing-gltf-clips)
+and the [per-frame update order](#update-order-for-an-animated-level). The
+[UI and 2D guide](ui-2d-guide.md) covers the existing menu, camera and sprite
+building blocks alongside these 3D paths.
+
 ## Retained geometry
 
 `Mesh` and `draw_mesh` remain the immediate path. For unchanged geometry,
@@ -881,7 +886,44 @@ drawing does not read the hierarchy automatically. Morph samples reuse the
 existing synchronous CPU evaluation and immutable replacement buffers, with
 no upload for unchanged weights; choose the update frequency in the application.
 The self-contained `gltf_animation_check` fixture drives a child transform and
-morph weight together on native and WebGL.
+morph weight together on native and WebGL. The `GltfAnimationPlayer` rustdoc
+also contains a complete CPU-only one-second translation clip, including its
+embedded buffer, pause, seek and loop assertions.
+
+### Update order for an animated level
+
+Keep the source model, CPU scene, rest pose and clips from the same document,
+with the same up-axis conversion. These APIs deliberately have separate owners:
+
+| State | API that changes it | Reset behavior |
+| --- | --- | --- |
+| Playback clock | `GltfAnimationPlayer::advance` or `seek` | `reset` rewinds to time zero, preserving pause and loop settings |
+| Current node locals/worlds | `GltfHierarchyPose::set_local` or a sample's `apply_pose`/`apply` | `reset` restores exact authored matrices |
+| Current deformed geometry | `GltfMorphInstance::set_weights` or a sample's `apply_morph`/`apply` | `reset_weights(node)` restores that node's authored weights |
+| Stored scene markers | `GltfScene` import | Pose and morph updates leave this list at rest |
+
+In each application frame:
+
+1. Advance the player with the application's elapsed seconds and apply the
+   sample to the matching hierarchy and, when needed, morph instance. A
+   transform-only sample can use `apply_pose` without loading a morph model.
+2. Query `hierarchy.collider_shape(scene, collider)` for solid and trigger
+   markers that should follow the hierarchy. Keep the stored `trigger` flag
+   when selecting solid responses. Morph deformation does not reshape these
+   imported marker primitives.
+3. Borrow the current morph model (or the ordinary retained model for a
+   transform-only animation), obtain each chunk's current `node_pose`, and use
+   `posed_bounds` for culling. Submit those same posed chunks to one material
+   frame so transparency can sort across instances.
+
+`sample.apply` returns whether **morph weights** changed; `false` can still mean
+that transforms changed successfully. It commits pose and morph state together
+after validation, but it does not rewind a player already advanced by the
+caller if applying fails. A cloned player can preserve a clock checkpoint when
+the application needs to retry. Already captured node poses and retained-model
+clones remain snapshots; fetch them again after an update for current drawing
+and collision queries. Unchanged morph weights avoid geometry uploads, while
+changed weights still evaluate and upload synchronously.
 
 ## Logical and physical input
 
@@ -1248,6 +1290,18 @@ assert_eq!(contact.normal, Vec3::Y);
 ## Sweep
 
 `SweepHit` is the first time a moving box or sphere meets one static solid along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static solid. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point` where that query exists, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box; `Aabb::sweep_sphere` takes a sphere; `Aabb::sweep_capsule` takes a capsule. The point and normal are in world space.
+
+| Moving body | Static AABB | Static OBB | Static sphere | Static capsule |
+| --- | --- | --- | --- | --- |
+| AABB | `Aabb::sweep` | `Aabb::sweep_obb` | `Aabb::sweep_sphere` | `Aabb::sweep_capsule` |
+| Sphere | `Sphere::sweep_aabb` | `Sphere::sweep_obb` | No public sweep | No public sweep |
+| Capsule | No public sweep | No public sweep | No public sweep | No public sweep |
+
+All deltas translate a whole body in world coordinates; none of these queries
+rotates that body or integrates velocity/gravity. The static shape is a snapshot
+for the whole delta. The Blender tutorial's
+[marked-level example](blender-to-macroquad.md#4-upload-once-move-and-draw)
+shows dispatching an AABB sweep across imported solid marker shapes.
 
 `Aabb::sweep` moves a box. `Sphere::sweep_aabb` moves a sphere, including hits on an edge or a corner. A start that only touches, and a delta that does not move further in, returns `None`, so a shape resting on a floor can still sweep sideways. An overlap deeper than about `1e-4` is already inside and returns `t == 0`. A discrete `overlaps` test can jump a thin wall; the sweep still reports the crossing.
 

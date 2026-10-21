@@ -8,14 +8,15 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Area | Examples | What to inspect |
 | --- | --- | --- |
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
-| Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Continuous box/sphere hits, oriented cover, slide against all four solid shapes |
+| Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, sphere slide against all four solid shapes; additional full-AABB body sweep fixtures are in the CPU tests |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
-| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading`, `gltf_pose_check` | Immediate GLB draw, retained geometry, staged loading, opt-in material passes/lighting, selected-part and replacement-pose pixel fixtures, and shaded normal/roughness maps |
+| Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading`, `gltf_pose_check`, `gltf_morph_check`, `gltf_animation_check` | Immediate/retained GLB draw, staged loading, opt-in shading, pose/morph instances and caller-timed transform/weight clip pixel fixtures |
 | Renderer behavior | `retained_mesh`, `material_depth_check`, `font_atlas_lifetime` | Immutable buffers and draw order, independent depth writes/testing, queued samplers, queued text across atlas growth and font drop |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 | Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
 | Browser host | `canvas_host` | Density, framebuffer budgets, and a requested frame-rate cap |
+| Existing UI/2D samples | `camera`, `camera_transformations`, `texture`, `ui`, `ui_skins`, `platformer` | World/HUD cameras, texture drawing, widgets/skins, tile maps and platformer collisions; see the [UI and 2D guide](../docs/ui-2d-guide.md) for current limitations |
 
 Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).
 
@@ -44,6 +45,8 @@ cargo run --features gltf --example gltf_materials
 cargo run --features gltf --example gltf_material_check
 cargo run --features gltf --example gltf_shading
 cargo run --features gltf --example gltf_pose_check
+cargo run --features gltf --example gltf_morph_check
+cargo run --features gltf --example gltf_animation_check
 cargo run --features video --example video_texture -- path/to/clip.mp4
 cargo run --example cursor_capture
 cargo run --example canvas_host
@@ -116,6 +119,12 @@ Moves a box and a sphere with the arrow keys into one wall. `Aabb::sweep` and `S
 ## `sweep_obb`
 
 Moves a sphere with the arrow keys into a yawed cover. `Sphere::sweep_obb` stops it at `SweepHit::t` and the example keeps the leftover motion along `normal`. The cover's thin half-extent is 0.225, so a discrete overlap test can jump it; the sweep still reports the face. A pure touch is not an impact. Escape quits.
+
+This example moves a sphere, not an AABB player body. The additive
+`Aabb::sweep_obb`, `sweep_sphere` and `sweep_capsule` methods sweep the full body;
+their synthetic headless fixtures live in `tests/aabb_obb_sweep.rs`,
+`tests/aabb_sphere_sweep.rs` and `tests/aabb_capsule_sweep.rs`. See the
+[motion guide](../docs/3d-guide.md) for query semantics and caller-owned response.
 
 ## `slide_solids`
 
@@ -334,4 +343,4 @@ Both generators use Python and do not require Blender. Historical game-round
 prototypes, including Marble Maze and Cinder Court, and their level assets are
 not checked in. The `room.glb` in the Blender tutorial is an export you create.
 
-The guides are [`docs/3d-guide.md`](../docs/3d-guide.md), [`docs/blender-to-macroquad.md`](../docs/blender-to-macroquad.md), and [`docs/browser-host.md`](../docs/browser-host.md). The 3D guide also covers pointer capture, queued font-atlas lifetime, and the logical coordinates `Camera3D::screen_to_ray` expects.
+The guides are [`docs/3d-guide.md`](../docs/3d-guide.md), [`docs/blender-to-macroquad.md`](../docs/blender-to-macroquad.md), [`docs/ui-2d-guide.md`](../docs/ui-2d-guide.md), and [`docs/browser-host.md`](../docs/browser-host.md). The 3D guide also covers pointer capture, queued font-atlas lifetime, and the logical coordinates `Camera3D::screen_to_ray` expects.

@@ -34,6 +34,17 @@ const INTO_SLOP: f32 = 1e-5;
 /// A pair that only touches, or overlaps by less than that, reports `t == 0`
 /// only when `delta` moves further into the static solid. Otherwise the sweep
 /// misses, so a sphere resting on a floor can still move sideways.
+/// These queries report an impact without applying motion or resolving an
+/// initial overlap. Convert caller-owned velocity to a displacement first;
+/// `delta * t` is the permitted translation to that impact, and `point` is
+/// not a replacement center. After changing direction along a contact plane,
+/// query the remaining motion again against all solids.
+///
+/// The overlap-depth threshold uses world units. The inward-motion threshold
+/// is applied to the supplied displacement, rather than velocity or seconds.
+/// A later touch with no inward component is also a miss; exact future
+/// tangencies do not act as blocking impacts. See the individual methods for
+/// degenerate-shape and finite-precision limits.
 ///
 /// # Example
 ///

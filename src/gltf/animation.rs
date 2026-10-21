@@ -419,12 +419,32 @@ impl GltfAnimationClip {
 /// zero-duration clips stay at zero. Reset rewinds without changing pause/loop.
 /// Applying a returned sample to instances is a separate explicit operation.
 ///
+/// This complete CPU-only example moves one node from X=0 to X=2 in one second.
+/// The embedded buffer contains two times followed by two VEC3 translations.
+///
 /// ```
-/// # fn play(clip: macroquad::gltf::GltfAnimationClip) {
-/// let mut player = macroquad::gltf::GltfAnimationPlayer::new(clip);
-/// player.set_looping(true);
-/// let frame = player.advance(1. / 60.).unwrap();
-/// # }
+/// use macroquad::gltf::{GltfAnimationData, GltfAnimationPlayer};
+/// let bytes = br#"{
+///   "asset":{"version":"2.0"}, "scenes":[{"nodes":[0]}], "nodes":[{}],
+///   "buffers":[{"byteLength":32,"uri":"data:application/octet-stream;base64,AAAAAAAAgD8AAAAAAAAAAAAAAAAAAABAAAAAAAAAAAA="}],
+///   "bufferViews":[{"buffer":0,"byteLength":8},{"buffer":0,"byteOffset":8,"byteLength":24}],
+///   "accessors":[
+///     {"bufferView":0,"componentType":5126,"count":2,"type":"SCALAR","min":[0],"max":[1]},
+///     {"bufferView":1,"componentType":5126,"count":2,"type":"VEC3"}
+///   ],
+///   "animations":[{"samplers":[{"input":0,"output":1}],
+///     "channels":[{"sampler":0,"target":{"node":0,"path":"translation"}}]}]
+/// }"#;
+/// let clip = GltfAnimationData::from_bytes(bytes).unwrap().clips.remove(0);
+/// let mut player = GltfAnimationPlayer::new(clip);
+/// let sample = player.advance(0.5).unwrap();
+/// assert_eq!(sample.transforms[0].1.translation.x, 1.0);
+/// player.set_paused(true);
+/// assert_eq!(player.advance(10.0).unwrap(), sample);
+/// assert_eq!(player.seek(1.0).unwrap().transforms[0].1.translation.x, 2.0);
+/// player.set_looping(true); // The exact end wraps to zero.
+/// player.set_paused(false);
+/// assert_eq!(player.advance(2.25).unwrap().transforms[0].1.translation.x, 0.5);
 /// ```
 #[derive(Clone, Debug)]
 pub struct GltfAnimationPlayer {

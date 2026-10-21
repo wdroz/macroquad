@@ -29,6 +29,45 @@
 //! let shot = Ray::new(vec3(0.0, 0.0, 5.0), vec3(0.0, 0.0, -1.0));
 //! assert!(shot.closest_aabb(&[wall]).is_some());
 //! ```
+//!
+//! # Translating a complete box
+//!
+//! All four AABB sweeps use a world-space displacement, for example
+//! `velocity * dt`, rather than velocity or a ray direction. They keep the
+//! moving box axis-aligned and leave both arguments unchanged. Choose the
+//! method by the **static** solid's shape:
+//!
+//! | Static solid | Moving [`Aabb`] query |
+//! | --- | --- |
+//! | Axis-aligned box | [`Aabb::sweep`] |
+//! | Oriented box | [`Aabb::sweep_obb`] |
+//! | Sphere | [`Aabb::sweep_sphere`] |
+//! | Capsule | [`Aabb::sweep_capsule`] |
+//!
+//! These are single-pair queries, not a character controller. Test solid
+//! candidates with the same starting body and delta, select the earliest
+//! hit, and apply `delta * hit.t`. [`SweepHit::point`] is a contact position,
+//! not the moving body's new center. Keep trigger overlap checks separate.
+//! Repeated sliding, initial-overlap recovery, gravity, ground detection,
+//! slope limits and stair stepping remain the caller's responsibility.
+//!
+//! ```
+//! use macroquad::math::{Aabb, Capsule, Obb, Quat, Sphere, Vec3, vec3};
+//!
+//! let body = Aabb::from_center_size(vec3(-3.0, 0.0, 0.0), Vec3::ONE);
+//! let delta = vec3(6.0, 0.0, 0.0);
+//! let wall = Obb::new(vec3(2.0, 0.0, 0.0), Vec3::ONE, Quat::IDENTITY);
+//! let rock = Sphere::new(Vec3::ZERO, 1.0);
+//! let post = Capsule::new(vec3(0.0, -2.0, 4.0), vec3(0.0, 2.0, 4.0), 0.5);
+//! let first = [
+//!     body.sweep_obb(delta, &wall),
+//!     body.sweep_sphere(delta, &rock),
+//!     body.sweep_capsule(delta, &post),
+//! ].into_iter().flatten().min_by(|a, b| a.t.total_cmp(&b.t));
+//! let displacement = delta * first.map_or(1.0, |hit| hit.t);
+//! let stopped = Aabb::from_min_max(body.min + displacement, body.max + displacement);
+//! assert_eq!(stopped.center(), vec3(-1.5, 0.0, 0.0));
+//! ```
 
 pub use glam::*;
 

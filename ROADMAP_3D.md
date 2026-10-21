@@ -2,7 +2,7 @@
 
 Enhancements since last fixer round: 2
 Fixer rounds since last game round: 1
-Rounds since last documentation round: 10
+Rounds since last documentation round: 0
 
 Next round: normal
 
@@ -12,7 +12,7 @@ The filename stays `ROADMAP_3D.md` so existing prompts and automation keep worki
 
 ## Current state
 
-- **Next scheduled round: documentation**, because D is 10. Refresh the completed sweep/animation APIs and document the current UI/2D baseline; pending items below remain proposals. The next enhancement after that is **Character controller**.
+- **Next scheduled round: enhancement — Character controller**. The documentation round refreshed the completed sweep/animation APIs and the current UI/2D baseline; pending items below remain proposals.
 - **3D foundations already available:** collision primitives, contacts, sphere sliding, body sweeps against AABBs/OBBs/spheres/capsules, retained geometry, resource diagnostics, glTF materials/lighting, editable poses, morph instances and transform/weight clips. See the [3D guide](docs/3d-guide.md).
 - **UI/2D foundations already available:** immediate-mode widgets, skins and nine-slice backgrounds, groups/scrolling/popups, text wrapping and multiline text, `Camera2D`, texture atlases, source-rectangle/pivot/flip drawing and experimental sprite animation. The `macroquad-tiled` and `macroquad-platformer` companion crates already exist. Extend these paths instead of introducing competing frameworks.
 - **Experiment needs:** Coffee Break still owns its movement, menu sizing, rounded-panel drawing and document viewport glue. These motivate the near-term queue; use small public fixtures rather than the experiment's private assets.
@@ -92,3 +92,5 @@ Keep full PBR/environment lighting, shadows/refraction, skinning, CUBICSPLINE/bl
 Earlier rounds and completed specifications are in [roadmap history](docs/roadmap-history.md#log). Append future round entries here; include evidence, limitations and the resulting N/M/D counters.
 
 - 2026-10-21 — Maintenance (not a round): moved completed specifications, dated pain points, original Blender conventions and prior round evidence into the linked history. Replaced stale overview text with the current baseline and one ordered queue; added four UI and four 2D milestones with bounded scope and verification criteria. Preserved the twelve existing unfinished items in relative order. Broadened documentation/game-round coverage to UI and 2D. No engine/game behavior changed. Counters remain N=2, M=1, D=10; `Next round` remains `normal`, selecting documentation before the character controller.
+
+- 2026-10-21 — Documentation: refreshed full-body sweep selection and contact/displacement semantics, caller-timed glTF animation with an executable embedded clip, pose/morph update ordering and snapshot ownership, and posed marker stretch limits. Added a focused UI/2D guide covering logical/physical/world/source coordinates, existing widgets and layout, text wrapping, camera picking and experimental sprite timing; pending helpers remain proposals. Updated the example index and Blender solid-marker sweep dispatch. All six changed Rust files contain documentation edits only; all 20 priorities remain unchecked. Clean WSL VM default/glTF+video builds, tests (228/391 passed), all-target Clippy, all example builds, rustdoc, doctests (149/364 passed) and 58 Rust Markdown snippets pass. Existing ignored tests and three `one_screenshot` rustdoc warnings remain; no new rustdoc warnings. Coffee Break's 40 tests, WASM release build, loader checks and guarded packaged gameplay replay pass; no game adaptation is needed. The 95 checked game source/asset/config files and 204 main-game files stay unchanged. No new native Coffee Break, Metal or physical-phone run is claimed. Round and deployment evidence: `experiments/macroquad-coffee-break/artifacts/documentation-oct21-round/`. Counters: N=2, M=1, D=0; the next normal round is Character controller.

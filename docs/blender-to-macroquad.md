@@ -267,6 +267,35 @@ block the player. `slide_sphere_solids` does not provide grounding, stairs,
 slope limits, or a contact list. See the [3D guide](3d-guide.md) for the current
 contact, sweep, and slide contracts.
 
+For an axis-aligned player body, the completed body queries cover every imported
+solid shape directly. Select the smallest time of impact; using a center ray or
+turning an authored sphere/capsule into a box changes which obstacles it hits.
+This helper queries one translation and excludes triggers:
+
+```rust
+use macroquad::prelude::*;
+
+fn first_solid_hit(scene: &GltfScene, body: Aabb, delta: Vec3) -> Option<SweepHit> {
+    scene.colliders.iter().filter(|collider| !collider.trigger)
+        .filter_map(|collider| match collider.shape {
+            GltfColliderShape::Aabb(shape) => body.sweep(delta, &shape),
+            GltfColliderShape::Obb(shape) => body.sweep_obb(delta, &shape),
+            GltfColliderShape::Sphere(shape) => body.sweep_sphere(delta, &shape),
+            GltfColliderShape::Capsule(shape) => body.sweep_capsule(delta, &shape),
+        })
+        .min_by(|a, b| a.t.total_cmp(&b.t))
+}
+```
+
+`hit.t` is a fraction of `delta`, and `hit.normal` points out of the static
+solid toward the moving body. A resting touch permits sideways movement; an
+initial penetration can report time zero and needs a separate contact/push-out
+policy. The helper does not provide sliding, gravity, grounding or stair
+stepping. The moving body stays axis-aligned throughout the query. A moving
+gate can supply its current `hierarchy.collider_shape(&scene, collider)` in
+place of the stored `collider.shape`; that is still one query against a static
+snapshot, not a moving-platform solver.
+
 ## Move one imported object
 
 `model.draw` and `draw_culled` submit every chunk with the current material.
@@ -352,6 +381,15 @@ poses. The [hierarchy guide](3d-guide.md#editing-an-imported-hierarchy) shows
 culling and transparent sorting with those poses. `examples/gltf_pose_check.rs`
 is the pixel fixture.
 
+Use the imported collider size for this query. Rebuilding a default Blender
+cube with `Obb::from_world_matrix(node.world)` treats scale as full size and
+loses the cube's ±1 vertex bounds. Posed spheres use the delta transform's
+largest stretch, including shear, for an enclosing radius. Posed capsules
+transform the segment and use the largest transverse stretch for their radius.
+These remain primitive approximations; the helper does not turn them into
+ellipsoids or evaluate shape-key collisions. Singular rest matrices and
+unrepresentable transformed shapes return `None`.
+
 Shape keys are separate from that transform. `GltfMorphData::from_bytes` loads
 mesh-local POSITION/NORMAL deltas and the node's default weights. It does not
 open a window or upload a mesh. Pass `None` to use the file's weights, or one
@@ -411,6 +449,12 @@ hierarchy and morph resets restore authored rest data. Apply the same
 interpolation rules. `gltf_animation_check` is a tiny fixture independent of
 Blender and game assets. Animation import does not require image decoding or
 a window; applying changed morph weights does require the render context.
+Apply the sample before reading the current chunk bounds or posed markers.
+`sample.apply` reports whether morph weights changed; a `false` result can
+still include a successful node transform update. Its atomic pose/morph update
+does not roll back a caller's already advanced player clock on failure. The
+[animated-level update order](3d-guide.md#update-order-for-an-animated-level)
+shows the ownership, reset and collision/draw ordering together.
 
 ## CPU images and draw materials
 

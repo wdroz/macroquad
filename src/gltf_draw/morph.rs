@@ -259,6 +259,9 @@ impl GltfMorphInstance {
     /// Its ordinary part, pose, culling and material-frame APIs are reusable.
     /// Immutable access prevents editing its geometry without matching bounds.
     /// Cloning it captures a stable snapshot, without CPU geometry retention.
+    /// That snapshot also captures bounds: after changing weights, fetch this
+    /// model again for current culling. A hierarchy pose is applied separately
+    /// through the returned parts' posed draw and bounds methods.
     ///
     /// ```no_run
     /// use macroquad::prelude::*;

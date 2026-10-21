@@ -56,6 +56,10 @@ impl GltfAnimationSample {
     /// preserve both caller instances. Uploads remain synchronous and temporary
     /// buffers on a failed staged update follow [`Self::apply_morph`]'s rules.
     /// Playback time belongs to the player and is separate from this commit.
+    /// Returns whether morph weights changed, not whether a transform changed;
+    /// a successful transform-only sample returns `false`.
+    /// If applying fails, a caller's preceding player `advance`/`seek` is not
+    /// rolled back; keep a player clone when a clock checkpoint is needed.
     ///
     /// ```no_run
     /// use macroquad::prelude::*;
