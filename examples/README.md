@@ -12,6 +12,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Character movement | `character_controller` | Caller-owned AABB, solid-only sweeps, jumping, ceiling/wall sliding, ground snap, slope limits and optional stair stepping with diagnostics |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
+| Target picking | `camera_target`, `camera_target_check` | Physical Camera2D surface coordinates, GL viewport origin, rotated offscreen sprites, display flips and letterboxed picking after resize; see the [UI and 2D guide](../docs/ui-2d-guide.md#pick-a-displayed-render-target) |
 | Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading`, `gltf_pose_check`, `gltf_morph_check`, `gltf_animation_check` | Immediate/retained GLB draw, staged loading, opt-in shading, pose/morph instances and caller-timed transform/weight clip pixel fixtures |
 | Renderer behavior | `retained_mesh`, `material_depth_check`, `font_atlas_lifetime` | Immutable buffers and draw order, independent depth writes/testing, queued samplers, queued text across atlas growth and font drop |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
@@ -41,6 +42,8 @@ cargo run --example picking_ray
 cargo run --example frustum_cull
 cargo run --example debug_draw
 cargo run --example input_coordinates
+cargo run --example camera_target
+cargo run --example camera_target_check
 cargo run --features gltf --example gltf_textured
 cargo run --example material_depth_check
 cargo run --example retained_mesh
@@ -61,6 +64,18 @@ cargo run --example rounded_panels_check
 cargo run --example keyboard_buttons
 cargo run --example keyboard_buttons_check
 ```
+
+`camera_target` draws a generated asymmetric sprite through a rotated camera
+into a 320 x 180 target with a nonzero physical viewport. Resize the window and
+click the cyan sprite; Space flips display Y, X flips X, and R changes rotation.
+The shared [scene](support/camera_target_scene.rs) contains the public conversion
+calls. `camera_target_check` first checks actual native/WebGL marker pixels on
+the target and window, then leaves the same scene for real input. Build its
+WASM, copy `camera_target_check.wasm` beside its HTML host and serve the fork
+root. Exports `camera_target_status` (0 pending, 1 passed, 2 panic),
+`camera_target_checks`, `camera_target_hits`, `camera_target_misses`,
+`camera_target_sprite`, `camera_target_frames` and `camera_target_dpi_milli`
+support actual browser pointer/resize checks at DPR 1/2.
 
 `keyboard_buttons_check` runs the same public-input fixture as the native
 `keyboard_buttons` integration test, then leaves a live menu for real input.

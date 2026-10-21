@@ -12,7 +12,8 @@ companion support for tile maps and 2D platformer collisions.
 | --- | --- | --- |
 | Window/UI | Logical window units, top-left origin, X right and Y down | `screen_width`, `screen_height`, `mouse_position_logical`, `touches_logical`, `root_ui` |
 | Framebuffer | Physical pixels, top-left origin for the position helpers | `mouse_position_physical`, `touches_physical`, `logical_to_physical`, `physical_to_logical` |
-| Camera world | Application-defined world units transformed by the active camera | `Camera2D`, `set_camera`, window-space `screen_to_world`/`world_to_screen` |
+| Drawing target | Physical framebuffer or render-texture pixels, top-left origin, Y down | `Camera2D::world_to_target` / `target_to_world` |
+| Camera world | Application-defined world units transformed by the active camera | `Camera2D`, `set_camera`, legacy window-space `screen_to_world`/`world_to_screen` |
 | Sprite source | Pixels in the original texture | `DrawTextureParams::source` |
 
 Use logical input for HUD hitboxes and ordinary window-space picking. Do not
@@ -61,16 +62,77 @@ async fn main() {
 }
 ```
 
-The legacy `Camera2D::world_to_screen` and `screen_to_world` methods use window
-dimensions even when `render_target` is set. Their viewport mapping also uses
-window height to convert the viewport origin. They are not target-pixel
-conversion helpers. A camera viewport does not automatically change zoom or
-aspect, and the rendering matrix changes Y orientation for render targets.
-For an offscreen target displayed in a letterboxed window rectangle, the
-application must map input through that display rectangle and the target's
-dimensions/orientation before unprojecting. A supported target-aware helper
-and resize/picking fixture remain queued work. The example above uses the
-whole window and no render target or viewport.
+The legacy `Camera2D::world_to_screen` and `screen_to_world` methods retain
+their window-space behavior, including window dimensions when `render_target`
+is set. The example above uses the whole window and no render target or viewport.
+
+## Pick a displayed render target
+
+`Camera2D::world_to_target` and `target_to_world` use physical pixels of the
+camera's selected drawing surface: the render texture's dimensions, or the
+window framebuffer. The origin is the entire surface's top left and Y points
+down. Both use the camera's actual matrix, including its different Y orientation
+when a render target is selected. A viewport is a physical GL rectangle with a
+bottom-left origin; these helpers convert its origin to the surface's top-left
+space. A viewport changes where the image is drawn, not the camera zoom.
+Window DPI does not scale render-texture pixels.
+
+For direct window picking, pass `mouse_position_physical()` to
+`target_to_world`; convert `world_to_target` results with `physical_to_logical`
+when placing a logical HUD. The `_with_size(point, target_size)` alternatives
+accept an explicit physical surface size and need no live window. They still
+use the camera's selected render-target orientation. Camera conversion
+extrapolates outside the surface/viewport. Invalid dimensions, viewports,
+nonfinite values or singular camera transforms return `None`.
+
+For an offscreen target drawn into a logical window rectangle, use
+`window_to_render_target` before camera unprojection. Its inverse,
+`render_target_to_window`, positions overlays on the displayed image. Supply
+the entire texture's physical size and the same logical display rectangle and
+`flip_x`/`flip_y` flags used by `draw_texture_ex`. For a render-target texture,
+`flip_y: true` displays top-left framebuffer Y directly; `false` reverses Y.
+The helpers reject points in letterbox bars and outside the full texture.
+They support axis-aligned full-texture display; cropped sources and rotated
+display quads need a caller-owned mapping.
+
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::camera::window_to_render_target;
+
+let target = render_target(320, 180);
+let camera = Camera2D {
+    render_target: Some(target.clone()),
+    rotation: 27.,
+    viewport: Some((17, 11, 280, 145)),
+    ..Camera2D::from_display_rect(Rect::new(0., 0., 320., 180.))
+};
+// Recompute this rectangle whenever the logical window size changes.
+let scale = (screen_width() / 320.).min(screen_height() / 180.);
+let size = vec2(320., 180.) * scale;
+let display = Rect::new((screen_width() - size.x) * 0.5,
+                        (screen_height() - size.y) * 0.5, size.x, size.y);
+let picked = window_to_render_target(mouse_position_logical(), vec2(320., 180.),
+                                     display, false, true)
+    .and_then(|point| camera.target_to_world(point));
+set_camera(&camera);
+clear_background(BLACK);
+draw_rectangle(196., 52., 28., 20., SKYBLUE);
+if let Some(point) = picked {
+    draw_circle(point.x, point.y, 3., YELLOW);
+}
+set_default_camera();
+draw_texture_ex(&target.texture, display.x, display.y, WHITE,
+    DrawTextureParams { dest_size: Some(size), flip_y: true, ..Default::default() });
+```
+
+Run `cargo run --example camera_target` and click the cyan sprite after resizing
+between 390 x 400 and desktop dimensions. Space flips the displayed Y axis,
+X flips X, and R changes camera rotation. The shared
+[`scene`](../examples/support/camera_target_scene.rs) shows the complete mapping.
+`camera_target_check` checks actual target/window pixel colors for off-center
+markers, rotation, nonzero viewports and all display flip combinations, then
+leaves the same live scene available for native or real browser pointer input.
+Its HTML host supports DPR 1/2 and resize checks without external assets.
 
 ## Build menus with the existing UI
 

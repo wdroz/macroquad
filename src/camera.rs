@@ -36,9 +36,10 @@ pub struct Camera2D {
     /// Otherwise to the screen.
     pub render_target: Option<RenderTarget>,
 
-    /// Part of the screen to render to.
+    /// Physical GL viewport `(x, y, width, height)`, with a bottom-left origin.
     ///
-    /// None means the whole screen.
+    /// None means the whole framebuffer or render-target texture. Window DPI
+    /// does not scale these values; convert logical viewport dimensions first.
     ///
     /// Viewport do not affect camera space, just the render position on the screen.
     ///
@@ -79,6 +80,24 @@ impl Default for Camera2D {
 
 impl Camera for Camera2D {
     fn matrix(&self) -> Mat4 {
+        self.matrix_for_target(self.render_target.is_some())
+    }
+
+    fn depth_enabled(&self) -> bool {
+        false
+    }
+
+    fn render_pass(&self) -> Option<RenderPass> {
+        self.render_target.as_ref().map(|rt| rt.render_pass.clone())
+    }
+
+    fn viewport(&self) -> Option<(i32, i32, i32, i32)> {
+        self.viewport
+    }
+}
+
+impl Camera2D {
+    fn matrix_for_target(&self, render_to_texture: bool) -> Mat4 {
         // gleaned from https://github.com/raysan5/raylib/blob/master/src/core.c#L1528
 
         // The camera in world-space is set by
@@ -97,35 +116,20 @@ impl Camera for Camera2D {
         //   3. Move by -target
         let mat_origin = Mat4::from_translation(vec3(-self.target.x, -self.target.y, 0.0));
         let mat_rotation = Mat4::from_axis_angle(vec3(0.0, 0.0, 1.0), self.rotation.to_radians());
-        let invert_y = if self.render_target.is_some() {
-            1.0
-        } else {
-            -1.0
-        };
+        let invert_y = if render_to_texture { 1.0 } else { -1.0 };
         let mat_scale = Mat4::from_scale(vec3(self.zoom.x, self.zoom.y * invert_y, 1.0));
         let mat_translation = Mat4::from_translation(vec3(self.offset.x, self.offset.y, 0.0));
 
         mat_translation * ((mat_scale * mat_rotation) * mat_origin)
     }
 
-    fn depth_enabled(&self) -> bool {
-        false
-    }
-
-    fn render_pass(&self) -> Option<RenderPass> {
-        self.render_target.as_ref().map(|rt| rt.render_pass.clone())
-    }
-
-    fn viewport(&self) -> Option<(i32, i32, i32, i32)> {
-        self.viewport
-    }
-}
-
-impl Camera2D {
     /// Returns the screen space position for a 2d camera world space position.
     ///
     /// Screen position in window space - from (0, 0) to (screen_width, screen_height()).
     /// When a viewport is set, returns coordinates within that viewport's screen region.
+    ///
+    /// This legacy method uses window dimensions even with a render target.
+    /// Use [`Self::world_to_target`] for physical target pixels and a physical viewport.
     pub fn world_to_screen(&self, point: Vec2) -> Vec2 {
         let dims = self
             .viewport()
@@ -154,6 +158,9 @@ impl Camera2D {
     /// Returns the world space position for a 2d camera screen space position.
     ///
     /// Point is a screen space position, often mouse x and y.
+    ///
+    /// This legacy method uses window dimensions even with a render target.
+    /// Use [`Self::target_to_world`] for physical target pixels and a physical viewport.
     pub fn screen_to_world(&self, point: Vec2) -> Vec2 {
         let dims = self
             .viewport()
@@ -179,6 +186,244 @@ impl Camera2D {
 
         vec2(transform.x, transform.y)
     }
+
+    /// Projects a world point into physical pixels of this camera's drawing surface.
+    ///
+    /// Coordinates start at the **top left**, with x right and y down. A selected
+    /// [`Self::render_target`] supplies its texture dimensions; otherwise the live
+    /// window's physical framebuffer dimensions are used. The camera need not be
+    /// active. [`Self::viewport`] is always the physical GL viewport, with a
+    /// **bottom-left** origin; it affects pixel placement, not the camera matrix.
+    ///
+    /// These are framebuffer coordinates, not texture UV/source coordinates and
+    /// not logical window pixels. On the window, use
+    /// [`physical_to_logical`](crate::window::physical_to_logical) for logical
+    /// overlays. For a displayed render-target texture, use
+    /// [`render_target_to_window`] with the same rectangle and flips as its draw.
+    ///
+    /// Points outside the surface or viewport are extrapolated, not clipped.
+    /// Returns `None` without a live drawing surface, or for nonfinite input,
+    /// invalid dimensions/viewport, a singular or unrepresentable projection,
+    /// or nonfinite output.
+    /// Legacy [`Self::world_to_screen`] retains its window-space behavior.
+    pub fn world_to_target(&self, point: Vec2) -> Option<Vec2> {
+        self.world_to_target_with_size(point, self.target_pixel_size()?)
+    }
+
+    /// Unprojects physical, top-left drawing-surface pixels into world coordinates.
+    ///
+    /// This is the inverse of [`Self::world_to_target`], including its physical
+    /// bottom-left viewport, render-target Y orientation and extrapolation rules.
+    /// For window input, pass [`mouse_position_physical`](crate::input::mouse_position_physical),
+    /// or convert logical input with [`logical_to_physical`](crate::window::logical_to_physical).
+    /// For a render target displayed in the window, map logical input through
+    /// [`window_to_render_target`] first. Window DPI does not scale texture pixels.
+    /// Invalid/unavailable surfaces, singular cameras and nonfinite values return
+    /// `None`. Legacy [`Self::screen_to_world`] remains unchanged.
+    pub fn target_to_world(&self, point: Vec2) -> Option<Vec2> {
+        self.target_to_world_with_size(point, self.target_pixel_size()?)
+    }
+
+    /// Projects using an explicit physical drawing-surface size, without a window lookup.
+    ///
+    /// This has the coordinate and validity rules of [`Self::world_to_target`].
+    /// `target_size` replaces only surface dimensions, **not** the camera matrix:
+    /// the presence of [`Self::render_target`] still determines its Y orientation.
+    /// A camera without a texture can therefore be used in headless tests with
+    /// its normal window-camera orientation. Use actual framebuffer dimensions
+    /// (logical size times DPI) for a window, or texture dimensions offscreen.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let camera = Camera2D {
+    ///     viewport: Some((20, 30, 200, 100)),
+    ///     ..Default::default()
+    /// };
+    /// let size = vec2(640.0, 360.0);
+    /// let pixels = camera.world_to_target_with_size(Vec2::ZERO, size).unwrap();
+    /// assert_eq!(pixels, vec2(120.0, 280.0));
+    /// let world = camera.target_to_world_with_size(pixels, size).unwrap();
+    /// assert!(world.length() < 0.0001);
+    /// ```
+    pub fn world_to_target_with_size(&self, point: Vec2, target_size: Vec2) -> Option<Vec2> {
+        project_target(self.matrix(), self.viewport, point, target_size)
+    }
+
+    /// Inverse of [`Self::world_to_target_with_size`] for an explicit physical size.
+    ///
+    /// No window or texture-size lookup occurs. The camera's render-target flag
+    /// still selects its matrix orientation; outside points are extrapolated.
+    /// Invalid input, a singular camera or a nonfinite result returns `None`.
+    pub fn target_to_world_with_size(&self, point: Vec2, target_size: Vec2) -> Option<Vec2> {
+        unproject_target(self.matrix(), self.viewport, point, target_size)
+    }
+
+    fn target_pixel_size(&self) -> Option<Vec2> {
+        let size = if let Some(target) = &self.render_target {
+            (target.texture.width(), target.texture.height())
+        } else {
+            crate::try_screen_size()?;
+            let context = get_context();
+            (context.screen_width, context.screen_height)
+        };
+        positive_size(size).map(|(width, height)| vec2(width, height))
+    }
+}
+
+/// Maps logical window input onto a displayed render target's physical pixels.
+///
+/// `display` is the axis-aligned, positive-size logical window rectangle in which
+/// the **entire** render-target texture was drawn. `target_size` is the texture's
+/// pixel size. `flip_x` and `flip_y` must match [`DrawTextureParams`](crate::texture::DrawTextureParams).
+/// Source cropping, rotation and a transformed display camera are not represented;
+/// map those yourself before using this helper. A normal default-camera draw
+/// with a positive `dest_size` is supported. Supply the inner displayed rectangle
+/// after letterboxing so input in the bars returns `None`.
+///
+/// Output starts at the target framebuffer's top left, y down, suitable for
+/// [`Camera2D::target_to_world`]. A raw render-target texture has reversed Y
+/// relative to these physical pixels: `flip_y = true` gives a direct Y mapping,
+/// while `false` reverses it. This correction is independent of the camera zoom.
+/// No DPI factor is applied: logical input and the logical display rectangle
+/// already share a space; texture dimensions stay fixed at any window DPI.
+///
+/// Rectangle boundaries are included. Outside, empty, nonfinite or unrepresentable
+/// inputs return `None`. This pure helper performs no GPU or window operations.
+///
+/// ```
+/// use macroquad::prelude::*;
+/// let display = Rect::new(40.0, 70.0, 640.0, 360.0);
+/// let size = vec2(320.0, 180.0);
+/// let pixels = window_to_render_target(vec2(200.0, 160.0), size, display, false, true);
+/// assert_eq!(pixels, Some(vec2(80.0, 45.0)));
+/// assert!(window_to_render_target(vec2(10.0, 160.0), size, display, false, true).is_none());
+/// ```
+pub fn window_to_render_target(
+    point: Vec2,
+    target_size: Vec2,
+    display: Rect,
+    flip_x: bool,
+    flip_y: bool,
+) -> Option<Vec2> {
+    positive_size((target_size.x, target_size.y))?;
+    let (min, max) = display_bounds(display)?;
+    if !inside_bounds(point, min, max) {
+        return None;
+    }
+    // Subtraction at a fractional far edge can round above width/height even
+    // though the point passed the inclusive bounds check.
+    let mut normalized = ((point - min) / vec2(display.w, display.h)).clamp(Vec2::ZERO, Vec2::ONE);
+    if flip_x {
+        normalized.x = 1.0 - normalized.x;
+    }
+    if !flip_y {
+        normalized.y = 1.0 - normalized.y;
+    }
+    finite_vec2(normalized * target_size)
+}
+
+/// Maps physical render-target pixels onto its logical window display rectangle.
+///
+/// Inverse of [`window_to_render_target`], with the same full-texture,
+/// axis-aligned display and flip conventions. Use it for logical window overlays
+/// at positions returned by [`Camera2D::world_to_target`]. Points outside the
+/// texture return `None`, including world projections outside its bounds.
+/// Boundaries are included; invalid dimensions/rectangles and nonfinite values
+/// return `None`. This pure helper does not depend on the window DPI.
+pub fn render_target_to_window(
+    point: Vec2,
+    target_size: Vec2,
+    display: Rect,
+    flip_x: bool,
+    flip_y: bool,
+) -> Option<Vec2> {
+    positive_size((target_size.x, target_size.y))?;
+    let (min, _) = display_bounds(display)?;
+    if !inside_bounds(point, Vec2::ZERO, target_size) {
+        return None;
+    }
+    let mut normalized = point / target_size;
+    if flip_x {
+        normalized.x = 1.0 - normalized.x;
+    }
+    if !flip_y {
+        normalized.y = 1.0 - normalized.y;
+    }
+    finite_vec2(min + normalized * vec2(display.w, display.h))
+}
+
+fn display_bounds(rect: Rect) -> Option<(Vec2, Vec2)> {
+    positive_size((rect.w, rect.h))?;
+    let min = vec2(rect.x, rect.y);
+    let max = min + vec2(rect.w, rect.h);
+    if min.is_finite() && max.is_finite() && max.x > min.x && max.y > min.y {
+        Some((min, max))
+    } else {
+        None
+    }
+}
+
+fn inside_bounds(point: Vec2, min: Vec2, max: Vec2) -> bool {
+    point.is_finite()
+        && point.x >= min.x
+        && point.x <= max.x
+        && point.y >= min.y
+        && point.y <= max.y
+}
+
+fn finite_vec2(point: Vec2) -> Option<Vec2> {
+    point.is_finite().then_some(point)
+}
+
+fn target_projection_rect(
+    matrix: Mat4,
+    viewport: Option<(i32, i32, i32, i32)>,
+    size: Vec2,
+) -> Option<Rect> {
+    positive_size((size.x, size.y))?;
+    let determinant = matrix.determinant();
+    if !matrix.is_finite() || !determinant.is_finite() || determinant == 0.0 {
+        return None;
+    }
+    let rect = picking_rect(viewport, size.x, size.y)?;
+    display_bounds(rect)?;
+    Some(rect)
+}
+
+fn project_target(
+    matrix: Mat4,
+    viewport: Option<(i32, i32, i32, i32)>,
+    point: Vec2,
+    size: Vec2,
+) -> Option<Vec2> {
+    let rect = target_projection_rect(matrix, viewport, size)?;
+    if !point.is_finite() {
+        return None;
+    }
+    let ndc = matrix.transform_point3(point.extend(0.0));
+    finite_vec2(vec2(
+        (ndc.x * 0.5 + 0.5) * rect.w + rect.x,
+        (0.5 - ndc.y * 0.5) * rect.h + rect.y,
+    ))
+}
+
+fn unproject_target(
+    matrix: Mat4,
+    viewport: Option<(i32, i32, i32, i32)>,
+    point: Vec2,
+    size: Vec2,
+) -> Option<Vec2> {
+    let rect = target_projection_rect(matrix, viewport, size)?;
+    if !point.is_finite() {
+        return None;
+    }
+    let inverse = matrix.inverse();
+    let ndc = vec3(
+        (point.x - rect.x) / rect.w * 2.0 - 1.0,
+        1.0 - (point.y - rect.y) / rect.h * 2.0,
+        0.0,
+    );
+    finite_vec2(inverse.transform_point3(ndc).truncate())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -594,6 +839,50 @@ pub fn pop_camera_state() {
 mod tests {
     use super::*;
     use crate::math::{vec3, Aabb, Vec3};
+
+    #[test]
+    fn camera2d_target_projection_respects_both_surface_orientations() {
+        let camera = Camera2D {
+            rotation: 31.0,
+            zoom: vec2(0.025, -0.04),
+            target: vec2(17.0, -11.0),
+            offset: vec2(0.13, -0.21),
+            viewport: Some((19, 23, 241, 127)),
+            ..Default::default()
+        };
+        let size = vec2(320.0, 180.0);
+        let point = vec2(21.0, -2.0);
+        let rotation = (camera.rotation as f64).to_radians();
+        let dx = (point.x - camera.target.x) as f64;
+        let dy = (point.y - camera.target.y) as f64;
+        let rx = rotation.cos() * dx - rotation.sin() * dy;
+        let ry = rotation.sin() * dx + rotation.cos() * dy;
+        for texture in [false, true] {
+            let matrix = camera.matrix_for_target(texture);
+            let ndc_x = rx * camera.zoom.x as f64 + camera.offset.x as f64;
+            let ndc_y = ry * camera.zoom.y as f64 * if texture { 1.0 } else { -1.0 }
+                + camera.offset.y as f64;
+            let expected = vec2(
+                ((ndc_x * 0.5 + 0.5) * 241.0 + 19.0) as f32,
+                ((0.5 - ndc_y * 0.5) * 127.0 + 30.0) as f32,
+            );
+            let pixels = project_target(matrix, camera.viewport, point, size).unwrap();
+            assert!((pixels - expected).length() < 0.0001);
+            let restored = unproject_target(matrix, camera.viewport, pixels, size).unwrap();
+            assert!((restored - point).length() < 0.0001);
+            for flip_x in [false, true] {
+                for flip_y in [false, true] {
+                    let display = Rect::new(50.0, 40.0, 640.0, 360.0);
+                    let screen =
+                        render_target_to_window(pixels, size, display, flip_x, flip_y).unwrap();
+                    let target =
+                        window_to_render_target(screen, size, display, flip_x, flip_y).unwrap();
+                    let world = unproject_target(matrix, camera.viewport, target, size).unwrap();
+                    assert!((world - point).length() < 0.0001);
+                }
+            }
+        }
+    }
 
     fn assert_vec3_close(left: Vec3, right: Vec3) {
         let delta = left - right;
