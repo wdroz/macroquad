@@ -201,6 +201,45 @@ fn snapping_velocity_respects_both_the_ground_and_a_previously_touched_wall() {
 }
 
 #[test]
+fn snapping_onto_a_slope_keeps_velocity_out_of_a_resting_wall() {
+    let rotation = Quat::from_rotation_z(30_f32.to_radians());
+    let normal = rotation * Vec3::Y;
+    let half = vec3(0.25, 0.5, 0.25);
+    let x = 0.25;
+    let y = (0.1 + half.dot(normal.abs()) + 0.05 * normal.y - normal.x * x) / normal.y;
+    let start = body(vec3(x, y, 0.0));
+    let wall = [Aabb::from_min_max(
+        vec3(-1.0, -10.0, -10.0),
+        vec3(0.0, 10.0, 10.0),
+    )];
+    let ramp = [Obb::new(Vec3::ZERO, vec3(10.0, 0.1, 10.0), rotation)];
+    for tangent in [0.0, 0.75] {
+        // No X input hits the wall before snapping. The ground projection of
+        // this falling velocity would introduce negative X into the wall.
+        let moved = CharacterController::default().move_body(
+            start,
+            vec3(0.0, -1.0, tangent),
+            0.01,
+            CharacterSolids {
+                aabbs: &wall,
+                obbs: &ramp,
+                ..Default::default()
+            },
+        );
+        assert!(moved.on_ground, "{moved:?}");
+        assert!(moved.velocity.dot(normal) >= -0.00001, "{moved:?}");
+        assert!(moved.velocity.x >= -0.00001, "{moved:?}");
+        assert!(moved.velocity.y.abs() < 0.00001, "{moved:?}");
+        assert!((moved.velocity.z - tangent).abs() < 0.00001, "{moved:?}");
+        assert!(moved.body.min.x.abs() < 0.00001, "{moved:?}");
+        assert!(
+            (moved.body.center().z - tangent * 0.01).abs() < 0.00001,
+            "{moved:?}"
+        );
+    }
+}
+
+#[test]
 fn exhausted_overlap_recovery_does_not_report_a_floor_while_deeply_embedded() {
     let controller = CharacterController {
         max_iterations: 1,

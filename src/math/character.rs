@@ -291,7 +291,7 @@ impl CharacterController {
                                     velocity: self.supported_velocity(
                                         ordinary.velocity,
                                         landed,
-                                        hit.normal,
+                                        &[hit.normal],
                                         dt,
                                         solids,
                                     ),
@@ -377,7 +377,13 @@ impl CharacterController {
         }
         result.motion = CharacterMotion {
             body: landed,
-            velocity: self.supported_velocity(candidate_velocity, landed, hit.normal, dt, solids),
+            velocity: self.supported_velocity(
+                candidate_velocity,
+                landed,
+                &[hit.normal],
+                dt,
+                solids,
+            ),
             on_ground: true,
             ground_normal: Some(hit.normal),
         };
@@ -499,11 +505,17 @@ impl CharacterController {
                         result.body = next;
                         result.ground_normal = Some(hit.normal);
                         result.on_ground = true;
-                        // Ground and a previous wall must both constrain the
-                        // velocity: projecting onto each in turn can enter the
-                        // earlier plane again at their crease.
+                        // Preserve previous contacts and inspect the final
+                        // pose: snapping onto a slope can introduce velocity
+                        // into a resting wall not hit during ordinary motion.
                         planes[plane_count] = hit.normal;
-                        result.velocity = clip_planes(result.velocity, &planes[..=plane_count]);
+                        result.velocity = self.supported_velocity(
+                            result.velocity,
+                            result.body,
+                            &planes[..=plane_count],
+                            dt,
+                            solids,
+                        );
                     }
                 }
             }
@@ -513,22 +525,24 @@ impl CharacterController {
 }
 
 impl CharacterController {
-    // Keep the landing plane and any walls touched at the final pose together.
-    // Projecting only onto the ground could introduce motion into a wall again.
+    // Keep earlier contacts, landing support and walls touched at the final
+    // pose together. Sequential projections can reenter an earlier plane.
     fn supported_velocity(
         &self,
         input: Vec3,
         body: Aabb,
-        ground: Vec3,
+        initial_planes: &[Vec3],
         dt: f32,
         solids: CharacterSolids<'_>,
     ) -> Vec3 {
         let up = (self.up.as_dvec3() / self.up.as_dvec3().length()).as_vec3();
         let slope_cos = self.max_slope_angle.cos().max(0.0);
-        let mut planes = [Vec3::ZERO; 33];
-        planes[0] = ground;
-        let mut velocity = clip_planes(input, &planes[..1]);
-        for count in 1..=self.max_iterations.min(32) {
+        // At most 32 movement contacts plus ground, then 32 final-pose probes.
+        let mut planes = [Vec3::ZERO; 65];
+        let count = initial_planes.len();
+        planes[..count].copy_from_slice(initial_planes);
+        let mut velocity = clip_planes(input, initial_planes);
+        for count in count..count + self.max_iterations.min(32) {
             let delta = velocity * dt;
             if !delta.is_finite() {
                 return Vec3::ZERO;
