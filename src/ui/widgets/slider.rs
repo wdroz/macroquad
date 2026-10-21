@@ -73,6 +73,18 @@ impl<'a> Slider<'a> {
     }
 
     /// Caller-selected finite positive increment in value units; no default step.
+    /// This builder can be configured without a window; call `ui` each frame
+    /// inside a running macroquad application to submit the control.
+    ///
+    /// ```
+    /// use macroquad::{prelude::YELLOW, ui::{hash, widgets::Slider}};
+    /// let _volume = Slider::new(hash!("volume"), 0.0..1.0)
+    ///     .keyboard_focus(true)
+    ///     .keyboard_step(0.05)
+    ///     .enabled(true)
+    ///     .focus_color(YELLOW)
+    ///     .label("Volume");
+    /// ```
     pub const fn keyboard_step(self, keyboard_step: f32) -> Self {
         Self {
             keyboard_step,

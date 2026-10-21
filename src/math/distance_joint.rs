@@ -74,6 +74,13 @@ pub struct DistanceJoint {
 
 impl DistanceJoint {
     /// Creates a checked joint with both correction fractions set to `0.2`.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// assert_eq!(DistanceJoint::new(-1.0), Err(DistanceJointError::InvalidRestLength));
+    /// let joint = DistanceJoint::new(0.0).unwrap();
+    /// assert_eq!(joint.position_correction, 0.2);
+    /// ```
     pub fn new(rest_length: f32) -> Result<Self, DistanceJointError> {
         let joint = Self {
             rest_length,
@@ -105,6 +112,21 @@ impl DistanceJoint {
     /// unchanged. Refresh broadphase bounds after positions change. This
     /// discrete step does not enforce contacts or prevent tunneling, and no
     /// convergence or stability guarantee is made for networks of joints.
+    ///
+    /// Invalid settings preserve both bodies, so callers can handle the error
+    /// before choosing whether to continue their simulation step:
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let shape = RigidBodyShape::Sphere(Sphere::new(Vec3::ZERO, 0.1));
+    /// let mut a = RigidBody::new(Vec3::ZERO, shape, 0.0).unwrap();
+    /// let mut b = RigidBody::new(Vec3::X, shape, 1.0).unwrap();
+    /// let before = (a, b);
+    /// let mut joint = DistanceJoint::new(1.0).unwrap();
+    /// joint.velocity_correction = f32::NAN;
+    /// assert_eq!(joint.solve(&mut a, &mut b), Err(DistanceJointError::InvalidCorrection));
+    /// assert_eq!((a, b), before);
+    /// ```
     pub fn solve(&self, a: &mut RigidBody, b: &mut RigidBody) -> Result<(), DistanceJointError> {
         self.validate()?;
         a.validate()?;

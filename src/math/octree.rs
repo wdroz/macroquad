@@ -133,6 +133,15 @@ impl Octree {
     /// Points, lines and planes are valid. Any invalid box rejects the entire
     /// input, even if a later duplicate would replace it. For valid repeated
     /// indices, the last bounds win. Empty input creates an empty tree.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let old = Aabb::from_center_size(Vec3::ZERO, Vec3::ONE);
+    /// let moved = Aabb::from_center_size(Vec3::X * 4.0, Vec3::ONE);
+    /// let tree = Octree::with_max_depth([(7, old), (7, moved)], 0).unwrap();
+    /// assert!(tree.query_aabb(&old).is_empty());
+    /// assert_eq!(tree.query_aabb(&moved), vec![7]);
+    /// ```
     pub fn with_max_depth(
         entries: impl IntoIterator<Item = (u32, Aabb)>,
         max_depth: u32,

@@ -558,6 +558,17 @@ impl GltfScene {
     /// original references, order and scene-local node indices. Query these
     /// separately after solid movement; trigger shapes retain ordinary overlap
     /// semantics and do not automatically produce events or block movement.
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfScene;
+    /// let scene = GltfScene::from_bytes(br#"{
+    ///   "asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[
+    ///     {"name":"goal_trigger.001","extras":{"mq_shape":"sphere","mq_tag":"goal"}}
+    ///   ]}"#).unwrap();
+    /// let goal = scene.trigger_colliders().next().unwrap();
+    /// assert_eq!(scene.marker_tag(goal.node), Some("goal"));
+    /// assert_eq!(scene.solid_colliders().count(), 0);
+    /// ```
     pub fn trigger_colliders(&self) -> impl Iterator<Item = &GltfCollider> {
         self.colliders.iter().filter(|collider| collider.trigger)
     }

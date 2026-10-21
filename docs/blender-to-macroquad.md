@@ -402,6 +402,15 @@ animation advancement while paused, but continue drawing the level and UI.
 Borrow `root_ui()` once per UI block and release it before awaiting the next
 frame. These UI additions do not require Blender exports or new level markers.
 
+For settings, opt existing `Checkbox` and `Slider` builders into
+`keyboard_focus(true)` using stable, unique IDs. Sliders also require a finite
+positive `keyboard_step` in application value units; their numeric field and
+track are two consecutive Tab stops. Disable unavailable settings with
+`enabled(false)`. The [checkbox](ui-2d-guide.md#make-checkboxes-usable-from-the-keyboard)
+and [slider](ui-2d-guide.md#make-sliders-usable-from-the-keyboard) recipes describe
+key edges, endpoints and invalid input. Run `keyboard_sliders_check` to inspect
+the mixed menu before integrating it into your level loop.
+
 ## Move one imported object
 
 `model.draw` and `draw_culled` submit every chunk with the current material.

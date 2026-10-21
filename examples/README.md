@@ -161,6 +161,13 @@ confirmation modal. Try Tab/Shift+Tab, a held Enter or Space, and canceling the
 modal to return focus to its opener. These are UI examples: an application's
 pause flag must separately gate world input and simulation.
 
+Continue with `cargo run --example keyboard_checkboxes_check` and
+`cargo run --example keyboard_sliders_check`. Each runs automated public-input
+checks and leaves a live compact menu. Tab traverses the numeric editor before
+the slider track; use arrows/Home/End on the track and Space/Enter on checkboxes.
+Hold a key to check the single-press policy, then resize and open the modal.
+These two fixtures have matching HTML hosts using the build/copy steps below.
+
 Next, `camera_target` maps clicks through a displayed render texture into a
 rotated 2D world; `sprite_regions` draws checked source regions while keeping
 the visible pivot fixed through trimming and flips. Change frames manually
@@ -181,7 +188,8 @@ cargo build --target wasm32-unknown-unknown --example scoped_clipping_check
 Copy `target/wasm32-unknown-unknown/debug/examples/scoped_clipping_check.wasm`
 to `examples/scoped_clipping_check.wasm`, serve the fork root, and open
 `examples/scoped_clipping_check.html`. Substitute `responsive_layout`,
-`keyboard_buttons`, `camera_target`, `sprite_regions`, `sprite_animation` or `sprite_ui`
+`keyboard_buttons`, `keyboard_checkboxes`, `keyboard_sliders`, `camera_target`,
+`sprite_regions`, `sprite_animation` or `sprite_ui`
 for the other hosts.
 The paired HTML files load this checkout's JavaScript bundle. Use actual
 window resizing and input after the pixel checks, and inspect at both browser
@@ -213,9 +221,22 @@ The [Blender tutorial](../docs/blender-to-macroquad.md#3-inspect-the-cpu-scene)
 checks emitted collider/spawn counts, a trigger's shape and marker tags before
 opening a window. A duplicated `_trigger.001` name still needs `mq_shape` for
 an empty, and exporting Custom Properties supplies that shape and its `mq_tag`.
-The tutorial's `assets/room.glb` is authored by the reader; no maintained room
-example or room asset is included yet. Existing `gltf_*` samples exercise the
-small checked-in fixtures listed below.
+The six-object tutorial's `assets/room.glb` is authored by the reader. A separate
+maintained `gltf_room` example loads the committed original room described
+[below](#authored-gltf-room); the two assets have different marker counts.
+Existing `gltf_*` samples also exercise the small fixtures listed below.
+
+For newer CPU-only recipes, see [triangle surfaces](../docs/3d-guide.md#triangle-mesh-surfaces),
+[heightfields](../docs/3d-guide.md#heightfield-terrain),
+[static octrees](../docs/3d-guide.md#static-octree-candidates) and
+[distance joints](../docs/3d-guide.md#distance-joints). Run their regressions with:
+
+```sh
+cargo test --test triangle_mesh --test heightfield --test octree --test distance_joint
+```
+
+These recipes need no GPU or `gltf` feature. Broadphase candidates still need
+shape queries; joints need caller-selected integration and pair ordering.
 
 ## `character_controller`
 
@@ -527,7 +548,7 @@ requested/effective reporting, rounding and pacing limitations.
 
 Both generators use Python and do not require Blender. Historical game-round
 prototypes, including Marble Maze and Cinder Court, and their level assets are
-not checked in. The `room.glb` in the Blender tutorial is an export you create.
+not checked in. The six-object tutorial export is separate from the committed `assets/room.glb`.
 
 The guides are [`docs/3d-guide.md`](../docs/3d-guide.md), [`docs/blender-to-macroquad.md`](../docs/blender-to-macroquad.md), [`docs/ui-2d-guide.md`](../docs/ui-2d-guide.md), and [`docs/browser-host.md`](../docs/browser-host.md). The 3D guide also covers pointer capture, queued font-atlas lifetime, and the logical coordinates `Camera3D::screen_to_ray` expects.
 

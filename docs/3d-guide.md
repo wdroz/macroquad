@@ -20,8 +20,13 @@ Choose the movement path according to the result you need:
 | Move an AABB character with ground handling | `CharacterController` | Supply velocity, elapsed seconds, solids and optional step height |
 | Integrate a mass and exchange a normal impulse | `RigidBody::integrate`, then explicit pair response | Choose candidate pairs, response order and simulation time steps |
 
-`UniformGrid` can supply candidates for any of these paths. It stores bound
-snapshots and caller indices; it neither moves bodies nor dispatches contacts.
+`UniformGrid` can supply mutable candidate snapshots for these paths;
+[Octree](#static-octree-candidates) provides immutable snapshots for static bounds.
+Both store caller indices and neither moves bodies nor dispatches contacts.
+[TriangleMesh](#triangle-mesh-surfaces) and [Heightfield](#heightfield-terrain)
+query surfaces, without adding automatic body or controller response.
+[DistanceJoint](#distance-joints) constrains body origins after integration;
+the caller chooses pair order and the number of corrections per step.
 The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting,
 loading, drawing and moving through a marked level. The
 [example index](../examples/README.md) lists runnable samples.
@@ -2060,6 +2065,12 @@ Settings and both bodies are validated on every call, even with zero correction.
 Any error leaves both bodies unchanged, including if only the second proposed
 world shape overflows. Arithmetic uses f64 and accepts finite f32 rounding and
 underflow, which can leave residual error. Refresh spatial bounds after movement.
+Choose a fixed application step and a consistent pair order before tuning
+fractions. If you call `solve` twice in a step, the default position fraction
+removes 36% of an isolated error (1 - 0.8 * 0.8), rather than 20%. Changing
+render FPS should not silently change the number of solver calls. Rebuild an
+octree, or update grid snapshots, after corrections before the next query.
+
 No local attachment offsets, angular joints, automatic collision filtering,
 continuous solving or world ownership are supplied. Pair order and repetition
 count affect the result; networks have no convergence or stability guarantee.

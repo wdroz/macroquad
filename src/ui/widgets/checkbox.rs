@@ -89,6 +89,15 @@ impl<'a> Checkbox<'a> {
 
     /// Disable pointer/keyboard toggles and omit the checkbox from traversal.
     /// Disabled checkboxes use the skin's inactive colors.
+    /// Builder construction needs no window; submit with `ui` in a frame loop.
+    ///
+    /// ```
+    /// use macroquad::{prelude::YELLOW, ui::{hash, widgets::Checkbox}};
+    /// let can_edit = false;
+    /// let _assist = Checkbox::new(hash!("assist"))
+    ///     .keyboard_focus(true).enabled(can_edit).focus_color(YELLOW)
+    ///     .label("Step assist");
+    /// ```
     pub const fn enabled(self, enabled: bool) -> Self {
         Self { enabled, ..self }
     }

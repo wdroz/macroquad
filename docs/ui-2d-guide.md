@@ -454,6 +454,31 @@ public-input checks and leaves a compact settings menu live for native/DOM input
 The [HTML host](../examples/keyboard_sliders_check.html) uses the same fixture.
 Gamepad navigation and accessibility bridges remain deferred.
 
+For a mixed settings panel, keep values outside the frame function, borrow the
+UI once and submit controls in the desired traversal order:
+
+```rust,no_run
+use macroquad::{prelude::*, ui::{hash, widgets, Ui}};
+
+fn settings(ui: &mut Ui, assist: &mut bool, volume: &mut f32, editable: bool) {
+    widgets::Checkbox::new(hash!("settings-assist"))
+        .keyboard_focus(true).enabled(editable).focus_color(YELLOW)
+        .label("Step assist").ui(ui, assist);
+    widgets::Slider::new(hash!("settings-volume"), 0.0..1.0)
+        .keyboard_focus(true).keyboard_step(0.05).enabled(editable)
+        .focus_color(YELLOW).label("Volume").ui(ui, volume);
+    widgets::Button::new("Apply").id(hash!("settings-apply"))
+        .enabled(editable).ui(ui);
+}
+```
+
+The order is checkbox, numeric field, track, then Apply. Arrow keys edit text
+while the numeric field owns focus and adjust the value while the track owns
+focus. Treat the returned button activation as an application action when
+using this recipe; gate global shortcuts separately while the menu is open.
+The `keyboard_sliders_check` fixture includes this mixed traversal and modal
+restoration on native and WebGL; compiling the recipe does not exercise input.
+
 ## Draw a rounded panel
 
 `draw_rectangle_rounded(x, y, width, height, radius, color)` draws a filled
