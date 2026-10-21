@@ -686,13 +686,18 @@ an edit; an already returned pose is a snapshot. Material-frame posed submission
 use that same additional matrix for normals, reflected winding and global
 transparent sorting, and capture it when submitted. For custom drawing, use
 `draw_posed` or the snapshot's `transform()` with the existing shaded submission
-methods. Spawn markers, morphs, skinning and clips stay where they were loaded.
+methods. The scene's stored spawn markers stay at rest. Morph weights and
+clip clocks belong to separate instances; applying an animation sample can edit
+this hierarchy, but an ordinary hierarchy edit does not advance a player or
+change morph weights. Skinning remains unsupported.
 `collider_shape(&scene, collider)` returns one imported collider in the current
 worlds. The list on `GltfScene` stays at rest, and `trigger` is still that
 stored flag, so a slide keeps taking only the solid shapes. The query applies
 `posed_world * inverse(rest_world)` to the imported shape. A quarter turn stays
 an `Aabb`; any other rotation is an `Obb`. A sphere's radius grows by the
-delta's largest stretch. A capsule's endpoints follow the delta, and its radius
+delta's largest stretch, including shear; it encloses the transformed sphere
+instead of choosing only the longest transformed coordinate axis. A capsule's
+endpoints follow the delta, and its radius
 uses the largest stretch perpendicular to the original segment. A default
 Blender cube keeps the size already stored on the collider.
 `Obb::from_world_matrix` on the node reads the node scale as the full size,

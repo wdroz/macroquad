@@ -50,6 +50,69 @@ fn thin_tilted_wall_uses_the_body_projected_extent() {
 }
 
 #[test]
+fn broad_thin_faces_do_not_inflate_their_own_axis_projection() {
+    let rotation = Quat::from_rotation_z(0.37) * Quat::from_rotation_y(0.61);
+    for thin_axis in 0..3 {
+        let normal = rotation * [Vec3::X, Vec3::Y, Vec3::Z][thin_axis];
+        for broad_extent in [1e4, 1e10, 1e20, 1e30] {
+            let mut half_extents = Vec3::splat(broad_extent);
+            half_extents[thin_axis] = 0.01;
+            let solid = Obb::new(Vec3::ZERO, half_extents, rotation);
+            let body = Aabb::from_center_size(-normal * 5.0, Vec3::splat(0.4));
+            let delta = normal * 10.0;
+            let hit = body.sweep_obb(delta, &solid).unwrap_or_else(|| {
+                panic!("missed broad face: axis {thin_axis}, extent {broad_extent}")
+            });
+            let expected = (5.0 - 0.01 - normal.abs().dot(Vec3::splat(0.2))) / 10.0;
+            assert!((hit.t - expected).abs() < 2e-6, "{hit:?}, {expected}");
+            assert_vec(hit.normal, -normal, 2e-6);
+            assert_contact_geometry(body, delta, solid, hit);
+            assert!(body.sweep_obb(Vec3::ZERO, &solid).is_none());
+            assert!(body.sweep_obb(-normal, &solid).is_none());
+        }
+    }
+}
+
+#[test]
+fn long_thin_crossing_edges_keep_their_shared_contact_point() {
+    let rotation = Quat::from_rotation_z(0.37) * Quat::from_rotation_y(0.61);
+    let axes = [Vec3::X, Vec3::Y, Vec3::Z];
+    for world_axis in 0..3 {
+        for box_axis in 0..3 {
+            let normal = axes[world_axis]
+                .cross(rotation * axes[box_axis])
+                .normalize();
+            for long_extent in [1e4, 1e12, 1e30] {
+                let mut solid_half = Vec3::splat(0.01);
+                solid_half[box_axis] = long_extent;
+                let solid = Obb::new(Vec3::ZERO, solid_half, rotation);
+                let mut body_half = Vec3::splat(0.01);
+                body_half[world_axis] = long_extent;
+                let body = Aabb::from_center_size(-normal * 5.0, body_half * 2.0);
+                let delta = normal * 10.0;
+                let hit = body.sweep_obb(delta, &solid).unwrap_or_else(|| {
+                    panic!("missed edges: world {world_axis}, box {box_axis}, extent {long_extent}")
+                });
+                let mut radius = 0.0;
+                for axis in 0..3 {
+                    if axis != world_axis {
+                        radius += 0.01 * normal[axis].abs();
+                    }
+                    if axis != box_axis {
+                        radius += 0.01 * normal.dot(rotation * axes[axis]).abs();
+                    }
+                }
+                let expected = (5.0 - radius) / 10.0;
+                assert!((hit.t - expected).abs() < 2e-6, "{hit:?}, {expected}");
+                assert_vec(hit.normal, -normal, 2e-6);
+                assert_contact_geometry(body, delta, solid, hit);
+                assert!(body.sweep_obb(axes[world_axis] * 10.0, &solid).is_none());
+            }
+        }
+    }
+}
+
+#[test]
 fn tall_body_hits_overhang_missed_by_center_ray_and_small_sphere() {
     let solid = Obb::new(
         vec3(0.0, 1.3, 0.0),

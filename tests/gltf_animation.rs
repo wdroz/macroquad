@@ -346,6 +346,38 @@ fn simultaneous_parent_child_edits_validate_final_worlds_without_transient_overf
         .abs_diff_eq(Mat4::IDENTITY, 1e-5));
 }
 
+#[test]
+fn overflowing_sampled_descendant_world_preserves_every_local_and_world() {
+    let scene = GltfScene::from_bytes(br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"children":[1]},{"translation":[0,1,0]}]}"#).unwrap();
+    let mut pose = GltfModelPose::from_scene(&scene).hierarchy().unwrap();
+    let before = (0..2)
+        .map(|node| {
+            let handle = pose.handle(node).unwrap();
+            (pose.local(handle).unwrap(), pose.world(handle).unwrap())
+        })
+        .collect::<Vec<_>>();
+    let sample = GltfAnimationSample {
+        transforms: (0..2)
+            .map(|node| {
+                (
+                    node,
+                    GltfLocalTransform {
+                        scale: Vec3::splat(1e20),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect(),
+        weights: Vec::new(),
+    };
+    assert!(sample.apply_pose(&mut pose).is_err());
+    for (node, (local, world)) in before.into_iter().enumerate() {
+        let handle = pose.handle(node).unwrap();
+        assert_eq!(pose.local(handle).unwrap(), local);
+        assert_eq!(pose.world(handle).unwrap(), world);
+    }
+}
+
 fn replace_f32(doc: &Value, binary: &mut [u8], accessor: usize, values: &[f32]) {
     let view = doc["accessors"][accessor]["bufferView"].as_u64().unwrap() as usize;
     let offset = doc["bufferViews"][view]["byteOffset"].as_u64().unwrap() as usize;

@@ -1528,43 +1528,79 @@ fn linear_part(delta: Mat4) -> Mat3 {
     )
 }
 
-/// Largest stretch of a linear map. Column lengths are exact when the columns
-/// are orthogonal, which covers translation, rotation, and scale.
-fn max_stretch(linear: Mat3) -> f32 {
-    let cols = [linear.x_axis, linear.y_axis, linear.z_axis];
-    let lengths = [cols[0].length(), cols[1].length(), cols[2].length()];
-    let max_len = lengths[0].max(lengths[1]).max(lengths[2]);
-    if !max_len.is_finite() {
-        return max_len;
-    }
-    let limit = 1.0e-4 * (max_len * max_len + 1.0);
-    let orthogonal = cols[0].dot(cols[1]).abs() <= limit
-        && cols[0].dot(cols[2]).abs() <= limit
-        && cols[1].dot(cols[2]).abs() <= limit;
-    if orthogonal {
-        return max_len;
-    }
-    let mut direction = Vec3::new(1.0, 1.0, 1.0).normalize();
-    for _ in 0..12 {
-        let next = linear.transpose() * (linear * direction);
-        let len = next.length();
-        if len <= f32::EPSILON {
-            return 0.0;
+/// Largest stretch of a linear map, bounded above by the residual after
+/// diagonalizing L^T L. A single power-iteration seed can be orthogonal to the
+/// dominant eigenspace and underestimate this radius even after convergence.
+/// f64 products also keep finite very large/small f32 maps usable.
+fn max_stretch(linear: Mat3) -> f64 {
+    let cols = [
+        linear.x_axis.as_dvec3(),
+        linear.y_axis.as_dvec3(),
+        linear.z_axis.as_dvec3(),
+    ];
+    let mut gram = [[0.; 3]; 3];
+    for row in 0..3 {
+        for column in 0..3 {
+            gram[row][column] = cols[row].dot(cols[column]);
         }
-        direction = next / len;
     }
-    (linear * direction).length().max(max_len)
+    // Cyclic Jacobi rotations handle repeated eigenvalues and collapsed maps
+    // without choosing a direction. Any residual off-diagonal terms remain in
+    // the Gershgorin upper bound below, so stopping cannot shrink the sphere.
+    for _ in 0..12 {
+        for (p, q) in [(0, 1), (0, 2), (1, 2)] {
+            let off = gram[p][q];
+            if off == 0. {
+                continue;
+            }
+            let tau = (gram[q][q] - gram[p][p]) / (2. * off);
+            let tangent = tau.signum() / (tau.abs() + tau.hypot(1.));
+            let cosine = 1. / (1. + tangent * tangent).sqrt();
+            let sine = tangent * cosine;
+            let r = 3 - p - q;
+            let rp = gram[r][p];
+            let rq = gram[r][q];
+            gram[r][p] = cosine * rp - sine * rq;
+            gram[p][r] = gram[r][p];
+            gram[r][q] = sine * rp + cosine * rq;
+            gram[q][r] = gram[r][q];
+            gram[p][p] -= tangent * off;
+            gram[q][q] += tangent * off;
+            gram[p][q] = 0.;
+            gram[q][p] = 0.;
+        }
+    }
+    (0..3)
+        .map(|row| {
+            gram[row][row]
+                + (0..3)
+                    .filter(|&column| column != row)
+                    .map(|column| gram[row][column].abs())
+                    .sum::<f64>()
+        })
+        .fold(0., f64::max)
+        .sqrt()
 }
 
-fn perpendicular_stretch(linear: Mat3, axis: Vec3) -> f32 {
+fn perpendicular_stretch(linear: Mat3, axis: Vec3) -> f64 {
+    let axis = axis.as_dvec3();
     let len = axis.length();
-    if !len.is_finite() || len <= f32::EPSILON {
+    if !len.is_finite() || len == 0. {
         return max_stretch(linear);
     }
     let axis = axis / len;
-    let helper = if axis.x.abs() < 0.9 { Vec3::X } else { Vec3::Y };
+    let helper = if axis.x.abs() < 0.9 {
+        glam::DVec3::X
+    } else {
+        glam::DVec3::Y
+    };
     let tangent = axis.cross(helper).normalize();
     let bitangent = axis.cross(tangent);
+    let linear = glam::DMat3::from_cols(
+        linear.x_axis.as_dvec3(),
+        linear.y_axis.as_dvec3(),
+        linear.z_axis.as_dvec3(),
+    );
     let along = linear * tangent;
     let across = linear * bitangent;
     let a = along.dot(along);
@@ -1572,16 +1608,27 @@ fn perpendicular_stretch(linear: Mat3, axis: Vec3) -> f32 {
     let c = across.dot(across);
     let discriminant = (a - c) * (a - c) + 4.0 * b * b;
     if !a.is_finite() || !b.is_finite() || !c.is_finite() || !discriminant.is_finite() {
-        return f32::NAN;
+        return f64::NAN;
     }
     (0.5 * (a + c + discriminant.max(0.0).sqrt()))
         .max(0.0)
         .sqrt()
 }
 
+fn stretched_radius(radius: f32, stretch: f64) -> f32 {
+    let exact = radius as f64 * stretch;
+    let rounded = exact as f32;
+    // Keep the bounding radius outward when reducing the f64 query to f32.
+    if (rounded as f64) < exact {
+        rounded.next_up()
+    } else {
+        rounded
+    }
+}
+
 fn transform_sphere(delta: Mat4, sphere: Sphere) -> Option<GltfColliderShape> {
     let center = delta.transform_point3(sphere.center);
-    let radius = sphere.radius * max_stretch(linear_part(delta));
+    let radius = stretched_radius(sphere.radius, max_stretch(linear_part(delta)));
     if !center.is_finite() || !radius.is_finite() {
         return None;
     }
@@ -1591,7 +1638,10 @@ fn transform_sphere(delta: Mat4, sphere: Sphere) -> Option<GltfColliderShape> {
 fn transform_capsule(delta: Mat4, capsule: Capsule) -> Option<GltfColliderShape> {
     let a = delta.transform_point3(capsule.a);
     let b = delta.transform_point3(capsule.b);
-    let radius = capsule.radius * perpendicular_stretch(linear_part(delta), capsule.b - capsule.a);
+    let radius = stretched_radius(
+        capsule.radius,
+        perpendicular_stretch(linear_part(delta), capsule.b - capsule.a),
+    );
     if !a.is_finite() || !b.is_finite() || !radius.is_finite() {
         return None;
     }

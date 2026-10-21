@@ -88,14 +88,22 @@ impl Aabb {
         let mut touching_normal = DVec3::ZERO;
         let mut touching_velocity = -INTO_SLOP;
         let mut initially_overlapping = true;
-        for axis in axes {
+        for (index, axis) in axes.into_iter().enumerate() {
             let length = axis.length();
             if length == 0.0 {
                 continue;
             }
             let axis = axis / length;
             let distance = moving.center.dot(axis);
-            let radius = moving.radius(axis) + solid.radius(axis);
+            // A box's own axes are orthonormal by construction. Keep the
+            // known zero/unit projections exact: multiplying tiny dot-product
+            // roundoff by a very broad face can otherwise move first contact
+            // outside the thin solid, where contact clipping correctly fails.
+            let radius = match index {
+                0..=2 => moving.half[index] + solid.radius(axis),
+                3..=5 => moving.radius(axis) + solid.half[index - 3],
+                _ => moving.radius(axis) + solid.radius_except(axis, (index - 6) % 3),
+            };
             let depth = radius - distance.abs();
             let velocity = delta.dot(axis);
             // f64 roundoff in a projection is distinct from the public
@@ -191,23 +199,38 @@ impl SweepBox {
             + self.half.z * axis.dot(self.axes[2]).abs()
     }
 
-    fn corner(&self, index: usize) -> DVec3 {
-        let signs = DVec3::new(
+    fn radius_except(&self, axis: DVec3, perpendicular: usize) -> f64 {
+        (0..3)
+            .filter(|index| *index != perpendicular)
+            .map(|index| self.half[index] * axis.dot(self.axes[index]).abs())
+            .sum()
+    }
+
+    fn edge_center(&self, index: usize, direction: usize) -> DVec3 {
+        let mut signs = DVec3::new(
             if index & 1 == 0 { -1.0 } else { 1.0 },
             if index & 2 == 0 { -1.0 } else { 1.0 },
             if index & 4 == 0 { -1.0 } else { 1.0 },
         ) * self.half;
+        signs[direction] = 0.0;
         self.center + self.axes[0] * signs.x + self.axes[1] * signs.y + self.axes[2] * signs.z
     }
 
-    fn clip_edge(&self, start: DVec3, end: DVec3) -> Option<(DVec3, DVec3)> {
-        let offset = start - self.center;
-        let delta = end - start;
-        let mut near = 0.0_f64;
-        let mut far = 1.0_f64;
+    fn clip_edge(
+        &self,
+        center: DVec3,
+        direction: DVec3,
+        half_length: f64,
+    ) -> Option<(DVec3, DVec3)> {
+        // Parameterize from the edge midpoint, in world-distance units.
+        // Starting at a distant endpoint and adding most of its full length
+        // loses a narrow intersection when an edge is much longer than it.
+        let offset = center - self.center;
+        let mut near = -half_length;
+        let mut far = half_length;
         for (i, axis) in self.axes.iter().enumerate() {
             let position = offset.dot(*axis);
-            let velocity = delta.dot(*axis);
+            let velocity = direction.dot(*axis);
             let extent = self.half[i];
             let epsilon = 64.0 * f64::EPSILON * extent.max(position.abs()).max(1.0);
             if velocity == 0.0 {
@@ -225,9 +248,9 @@ impl SweepBox {
             }
         }
         // A touching pair can invert the final interval by a few f64 ulps.
-        let near = near.clamp(0.0, 1.0);
-        let far = far.clamp(near, 1.0);
-        Some((start + delta * near, start + delta * far))
+        let near = near.clamp(-half_length, half_length);
+        let far = far.clamp(near, half_length);
+        Some((center + direction * near, center + direction * far))
     }
 }
 
@@ -243,9 +266,11 @@ fn shared_point(a: &SweepBox, b: &SweepBox) -> Option<DVec3> {
             for axis in 0..3 {
                 let other = corner ^ (1 << axis);
                 if other > corner {
-                    if let Some((start, end)) =
-                        clipper.clip_edge(edges.corner(corner), edges.corner(other))
-                    {
+                    if let Some((start, end)) = clipper.clip_edge(
+                        edges.edge_center(corner, axis),
+                        edges.axes[axis],
+                        edges.half[axis],
+                    ) {
                         point += start + end;
                         count += 2;
                     }
