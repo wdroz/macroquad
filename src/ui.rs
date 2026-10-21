@@ -75,6 +75,7 @@ use crate::{
 
 use std::collections::HashMap;
 mod cursor;
+mod focus;
 mod input;
 mod key_repeat;
 mod layout;
@@ -262,78 +263,6 @@ impl StyleStack {
     }
 }
 
-pub(crate) struct TabSelector {
-    counter: isize,
-    wants: Option<isize>,
-    to_change: Option<isize>,
-}
-
-impl TabSelector {
-    const fn new() -> Self {
-        TabSelector {
-            counter: 0,
-            wants: None,
-            to_change: None,
-        }
-    }
-
-    fn new_frame(&mut self) {
-        self.to_change = if self.wants == Some(-1) {
-            Some(self.counter - 1)
-        } else if self.wants == Some(self.counter) {
-            Some(0)
-        } else {
-            self.wants
-        };
-        self.wants = None;
-        self.counter = 0;
-    }
-
-    /// Returns true if this widget should gain focus, because user pressed `Tab` or `Shift + Tab`.
-    pub(crate) fn register_selectable_widget(&mut self, has_focus: bool, input: &Input) -> bool {
-        if has_focus {
-            enum PressedTabKey {
-                Tab,
-                ShiftTab,
-                Other,
-            }
-
-            let key = if input
-                .input_buffer
-                .iter()
-                .any(|inp| inp.key == Key::KeyCode(KeyCode::Tab) && inp.modifier_shift)
-            {
-                PressedTabKey::ShiftTab
-            } else if input
-                .input_buffer
-                .iter()
-                .any(|inp| inp.key == Key::KeyCode(KeyCode::Tab))
-            {
-                PressedTabKey::Tab
-            } else {
-                PressedTabKey::Other
-            };
-
-            match key {
-                PressedTabKey::Tab => self.wants = Some(self.counter + 1),
-                PressedTabKey::ShiftTab => self.wants = Some(self.counter - 1),
-                PressedTabKey::Other => {}
-            }
-        }
-
-        let result = if self.to_change.map(|id| id == self.counter).unwrap_or(false) {
-            self.to_change = None;
-            true
-        } else {
-            false
-        };
-
-        self.counter += 1;
-
-        result
-    }
-}
-
 pub struct Ui {
     input: Input,
     skin_stack: StyleStack,
@@ -374,7 +303,7 @@ pub struct Ui {
 
     key_repeat: key_repeat::KeyRepeat,
 
-    tab_selector: TabSelector,
+    keyboard_focus: focus::KeyboardFocus,
     input_focus: Option<Id>,
 }
 
@@ -419,7 +348,9 @@ pub(crate) struct WindowContext<'a> {
     pub focused: bool,
     pub last_item_clicked: &'a mut bool,
     pub last_item_hovered: &'a mut bool,
-    pub tab_selector: &'a mut TabSelector,
+    pub keyboard_focus: &'a mut focus::KeyboardFocus,
+    pub keyboard_scope: Option<Id>,
+    pub keyboard_eligible: bool,
     pub input_focus: &'a mut Option<Id>,
 }
 
@@ -517,7 +448,8 @@ impl<'a> WindowContext<'a> {
     }
 
     pub fn register_click_intention(&mut self, rect: Rect) -> (bool, bool) {
-        *self.last_item_hovered = self.input.window_active
+        *self.last_item_hovered = self.keyboard_focus.allows(self.keyboard_scope)
+            && self.input.window_active
             && rect.contains(self.input.mouse_position)
             && self.window.painter.clipping_zone.map_or(true, |clip| {
                 clip.w > 0. && clip.h > 0. && clip.contains(self.input.mouse_position)
@@ -528,8 +460,14 @@ impl<'a> WindowContext<'a> {
     }
 
     pub fn input_focused(&self, id: Id) -> bool {
-        self.input_focus
-            .map_or(false, |input_focus| input_focus == id)
+        self.keyboard_focus.allows(self.keyboard_scope)
+            && self
+                .input_focus
+                .map_or(false, |input_focus| input_focus == id)
+    }
+
+    pub(crate) fn keyboard_visible(&self, rect: Rect) -> bool {
+        focus::rect_visible(rect, self.window.painter.clipping_zone)
     }
 }
 
@@ -540,6 +478,12 @@ impl InputHandler for Ui {
         self.input.is_mouse_down = true;
         self.input.click_down = true;
         self.input.mouse_position = position;
+
+        // A popup owns outside clicks too: they may dismiss it, but must not
+        // reorder or begin dragging a background window.
+        if !self.keyboard_focus.allows(None) {
+            return;
+        }
 
         if let Some(ref window) = self.modal {
             let rect = Rect::new(
@@ -619,6 +563,9 @@ impl InputHandler for Ui {
     }
 
     fn char_event(&mut self, character: char, shift: bool, ctrl: bool) {
+        if character == ' ' && self.keyboard_focus.suppress_key(KeyCode::Space) {
+            return;
+        }
         self.input.modifier_ctrl = ctrl;
         self.input.input_buffer.push(input::InputCharacter {
             key: input::Key::Char(character),
@@ -628,6 +575,10 @@ impl InputHandler for Ui {
     }
 
     fn key_down(&mut self, key: KeyCode, shift: bool, ctrl: bool) {
+        self.keyboard_focus.key_down(key, shift, ctrl);
+        if self.keyboard_focus.suppress_key(key) {
+            return;
+        }
         self.input.modifier_ctrl = ctrl;
 
         if key == KeyCode::Escape {
@@ -648,6 +599,10 @@ impl InputHandler for Ui {
                 modifier_ctrl: ctrl,
             });
         }
+    }
+
+    fn key_up(&mut self, key: KeyCode) {
+        self.keyboard_focus.key_up(key);
     }
 }
 
@@ -714,7 +669,7 @@ impl Ui {
             key_repeat: key_repeat::KeyRepeat::new(),
             last_item_clicked: false,
             last_item_hovered: false,
-            tab_selector: TabSelector::new(),
+            keyboard_focus: focus::KeyboardFocus::default(),
             input_focus: None,
         }
     }
@@ -748,7 +703,7 @@ impl Ui {
 
         self.active_window = Some(id);
 
-        let focused = self.is_focused(id);
+        let focused = self.in_modal || self.is_focused(id);
         let margin = self.skin_stack.top().margin;
         let margin_window = self.skin_stack.top().window_style.border_margin();
 
@@ -761,6 +716,11 @@ impl Ui {
         let windows_focus_order = &mut self.windows_focus_order;
 
         let parent_force_focus = match parent {
+            Some(parent)
+                if self.in_modal && self.modal.as_ref().is_some_and(|modal| modal.id == parent) =>
+            {
+                true
+            }
             // childs of root window are always force_focused
             Some(0) => true,
             // childs of force_focused windows are always force_focused as well
@@ -771,9 +731,15 @@ impl Ui {
             _ => false,
         };
         let parent_clip_rect = if let Some(parent) = parent {
-            self.windows
-                .get(&parent)
-                .and_then(|window| window.painter.clipping_zone)
+            if self.in_modal && self.modal.as_ref().is_some_and(|modal| modal.id == parent) {
+                self.modal
+                    .as_ref()
+                    .and_then(|modal| modal.painter.clipping_zone)
+            } else {
+                self.windows
+                    .get(&parent)
+                    .and_then(|window| window.painter.clipping_zone)
+            }
         } else {
             None
         };
@@ -833,12 +799,25 @@ impl Ui {
             clipboard: &mut *self.clipboard,
             last_item_clicked: &mut self.last_item_clicked,
             last_item_hovered: &mut self.last_item_hovered,
-            tab_selector: &mut self.tab_selector,
+            keyboard_scope: if self.in_modal {
+                self.modal.as_ref().map(|window| window.id)
+            } else {
+                None
+            },
+            keyboard_eligible: focused,
+            keyboard_focus: &mut self.keyboard_focus,
             input_focus: &mut self.input_focus,
         }
     }
 
     pub(crate) fn begin_modal(&mut self, id: Id, position: Vec2, size: Vec2) -> WindowContext {
+        let opening = !self.keyboard_focus.allows(Some(id));
+        self.keyboard_focus.enter_modal(id, &mut self.input_focus);
+        if opening {
+            self.input.input_buffer.clear();
+            self.input.enter = false;
+        }
+        self.moving = None;
         self.input.window_active = true;
         self.in_modal = true;
 
@@ -859,8 +838,14 @@ impl Ui {
             )
         });
 
+        window.id = id;
         window.parent = self.active_window;
+        self.active_window = Some(id);
         window.size = size;
+        window.cursor.area.w = size.x;
+        window.cursor.area.h = size.y;
+        window.cursor.scroll.rect.w = size.x;
+        window.cursor.scroll.rect.h = size.y;
         window.want_close = false;
         window.active = true;
         window.painter.clipping_zone = Some(Rect::new(position.x, position.y, size.x, size.y));
@@ -880,12 +865,15 @@ impl Ui {
             clipboard: &mut *self.clipboard,
             last_item_clicked: &mut self.last_item_clicked,
             last_item_hovered: &mut self.last_item_hovered,
-            tab_selector: &mut self.tab_selector,
+            keyboard_scope: Some(id),
+            keyboard_eligible: true,
+            keyboard_focus: &mut self.keyboard_focus,
             input_focus: &mut self.input_focus,
         }
     }
 
     pub(crate) fn end_modal(&mut self) {
+        self.active_window = self.modal.as_ref().and_then(|window| window.parent);
         self.in_modal = false;
         self.input.window_active = self.is_input_hovered(self.active_window.unwrap_or(0));
     }
@@ -896,6 +884,12 @@ impl Ui {
     }
 
     pub(crate) fn get_active_window_context(&mut self) -> WindowContext {
+        self.input.window_active = self.is_input_hovered(self.active_window.unwrap_or(0));
+        let keyboard_scope = if self.in_modal {
+            self.modal.as_ref().map(|window| window.id)
+        } else {
+            None
+        };
         let focused;
         let window = if self.in_modal == false {
             match self.active_window {
@@ -910,7 +904,11 @@ impl Ui {
             }
         } else {
             focused = true;
-            self.modal.as_mut().unwrap()
+            if self.active_window == keyboard_scope {
+                self.modal.as_mut().unwrap()
+            } else {
+                self.windows.get_mut(&self.active_window.unwrap()).unwrap()
+            }
         };
 
         WindowContext {
@@ -927,7 +925,9 @@ impl Ui {
             clipboard: &mut *self.clipboard,
             last_item_clicked: &mut self.last_item_clicked,
             last_item_hovered: &mut self.last_item_hovered,
-            tab_selector: &mut self.tab_selector,
+            keyboard_scope,
+            keyboard_eligible: focused,
+            keyboard_focus: &mut self.keyboard_focus,
             input_focus: &mut self.input_focus,
         }
     }
@@ -1022,6 +1022,9 @@ impl Ui {
     }
 
     fn is_input_hovered(&self, id: Id) -> bool {
+        if !self.in_modal && !self.keyboard_focus.allows(None) {
+            return false;
+        }
         // if thats exactly the clicked window - it's always the hovered one
         if id == self.hovered_window {
             return true;
@@ -1082,7 +1085,8 @@ impl Ui {
         self.input.reset();
         self.input.window_active = self.hovered_window == 0;
 
-        self.tab_selector.new_frame();
+        self.keyboard_focus.new_frame(&mut self.input_focus);
+        self.input.window_active = self.is_input_hovered(self.active_window.unwrap_or(0));
 
         self.key_repeat.new_frame(self.time);
 
@@ -1161,6 +1165,46 @@ impl Ui {
             let window = self.windows_focus_order.remove(n);
             self.windows_focus_order.insert(0, window);
         }
+    }
+
+    /// The currently keyboard-focused editbox or opted-in button.
+    ///
+    /// Tab traversal and removal cleanup take effect at the next frame boundary,
+    /// after the complete current widget list is known. IDs used for keyboard
+    /// focus must be unique across this `Ui`, including modal contents.
+    pub fn focused_widget(&self) -> Option<Id> {
+        self.input_focus
+    }
+
+    /// Draw a single modal popup with contained keyboard and pointer input.
+    ///
+    /// The first enabled focusable child receives focus on opening. Tab and
+    /// Shift+Tab wrap inside the popup. Omit this call to close it; focus returns
+    /// to its still-present opener after that frame's submission. The opening
+    /// activation key is consumed. Submit the popup after its opener; only one
+    /// popup may be active, and nested modals are unsupported. Coordinates use
+    /// the active UI's units, normally logical window pixels.
+    pub fn modal<R>(
+        &mut self,
+        id: Id,
+        position: Vec2,
+        size: Vec2,
+        contents: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        assert!(!self.in_modal, "nested UI modals are unsupported");
+        let context = self.begin_modal(id, position, size);
+        context.window.painter.draw_element_background(
+            &context.style.window_style,
+            position,
+            size,
+            ElementState {
+                focused: true,
+                ..Default::default()
+            },
+        );
+        let result = contents(self);
+        self.end_modal();
+        result
     }
 
     pub fn set_input_focus(&mut self, id: Id) {
@@ -1291,8 +1335,27 @@ pub(crate) mod ui_context {
                 ui.mouse_up(mouse_position);
             }
 
-            let shift = is_key_down(KeyCode::LeftShift) || is_key_down(KeyCode::RightShift);
-            let ctrl = is_key_down(KeyCode::LeftControl) || is_key_down(KeyCode::RightControl);
+            let shift = is_key_down(KeyCode::LeftShift)
+                || is_key_down(KeyCode::RightShift)
+                || is_key_pressed(KeyCode::LeftShift)
+                || is_key_pressed(KeyCode::RightShift);
+            let ctrl = is_key_down(KeyCode::LeftControl)
+                || is_key_down(KeyCode::RightControl)
+                || is_key_pressed(KeyCode::LeftControl)
+                || is_key_pressed(KeyCode::RightControl);
+
+            // A release and a new press can both arrive between frames. Rearm
+            // before forwarding the press, then retain only the final held state.
+            let navigation_keys = [
+                (KeyCode::Tab, megaui::KeyCode::Tab),
+                (KeyCode::Enter, megaui::KeyCode::Enter),
+                (KeyCode::Space, megaui::KeyCode::Space),
+            ];
+            for (key, ui_key) in navigation_keys {
+                if is_key_released(key) {
+                    ui.key_up(ui_key);
+                }
+            }
 
             while let Some(c) = get_char_pressed_ui() {
                 if ctrl == false {
@@ -1325,6 +1388,12 @@ pub(crate) mod ui_context {
             process!(A);
             process!(Escape);
             process!(Enter);
+            process!(Space);
+            for (key, ui_key) in navigation_keys {
+                if is_key_released(key) && !is_key_down(key) {
+                    ui.key_up(ui_key);
+                }
+            }
 
             if is_key_down(KeyCode::LeftControl)
                 || is_key_down(KeyCode::RightControl)

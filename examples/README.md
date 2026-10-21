@@ -20,6 +20,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Rounded panels | `rounded_panels`, `rounded_panels_check` | Filled radius-clamped panels and shared native/WebGL single-alpha-coverage regression; see the [UI and 2D guide](../docs/ui-2d-guide.md#draw-a-rounded-panel) |
 | Custom clipping | `scoped_clipping`, `scoped_clipping_check` | Nested document/image/text clips, precise empty intersections, DPI/target/viewport coordinates and restored HUD/UI state; see the [UI and 2D guide](../docs/ui-2d-guide.md#clip-custom-document-content) |
 | Responsive layout | `responsive_layout`, `responsive_layout_check` | Explicit padding/gaps, available-width sizing, row/column/free placement, alignment and oversized scrolling settings at compact/desktop sizes; see the [UI and 2D guide](../docs/ui-2d-guide.md#size-rows-columns-and-scrolling-settings) |
+| Keyboard buttons | `keyboard_buttons`, `keyboard_buttons_check` | Stable button IDs, mixed editbox Tab traversal, disabled controls, press-once activation and modal focus containment/restoration; see the [UI and 2D guide](../docs/ui-2d-guide.md#make-buttons-usable-from-the-keyboard) |
 | Existing UI/2D samples | `camera`, `camera_transformations`, `texture`, `ui`, `ui_skins`, `platformer` | World/HUD cameras, texture drawing, widgets/skins, tile maps and platformer collisions; see the [UI and 2D guide](../docs/ui-2d-guide.md) for current limitations |
 
 Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).
@@ -57,7 +58,18 @@ cargo run --example cursor_capture
 cargo run --example canvas_host
 cargo run --example rounded_panels
 cargo run --example rounded_panels_check
+cargo run --example keyboard_buttons
+cargo run --example keyboard_buttons_check
 ```
+
+`keyboard_buttons_check` runs the same public-input fixture as the native
+`keyboard_buttons` integration test, then leaves a live menu for real input.
+Its HTML host loads `keyboard_buttons_check.wasm` from the examples directory.
+The exports `keyboard_buttons_status` (0 pending, 1 passed, 2 panic),
+`keyboard_buttons_focus`, action counters and `keyboard_buttons_rect` support
+browser checks without game assets. `keyboard_buttons_command` provides
+explicit test-model changes (clear focus, hide/show a button, disable/enable
+Apply); keyboard and pointer events can still come from the real DOM.
 
 These commands run from the fork root and open a window. To compile a sample
 without opening a window, use `cargo build --example <name>` with the same

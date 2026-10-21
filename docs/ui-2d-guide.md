@@ -77,8 +77,8 @@ whole window and no render target or viewport.
 Submit widgets every frame; store the game/settings values outside the widgets.
 Keep IDs stable and unique for stateful windows, groups and editboxes, using
 `macroquad::ui::hash` (or your own `u64` IDs). Repeated generated widgets need an
-item-specific hash input. Buttons currently return pointer activation; a stable
-button focus ID, Tab traversal and Enter/Space activation remain queued.
+item-specific hash input. Existing button calls retain their pointer behavior. Add a stable `.id(id)` to
+opt a button into keyboard focus, shared with editboxes as described below.
 
 The existing building blocks include:
 
@@ -174,6 +174,64 @@ pause/settings example uses wrapped text, an oversized scroll group and a
 pinned action row. `responsive_layout_check` shares the native/WebGL fixture
 for resize, geometry, clipping, scroll reachability and pointer input. Clipped
 buttons do not react to pointer events outside their group's visible content.
+
+## Make buttons usable from the keyboard
+
+Use `widgets::Button::new(label).id(stable_id)` for a keyboard-operable button.
+The ID identifies the action, so keep it unchanged when its label, position or
+value changes and keep it unique across the `Ui`. Existing `Ui::button` and
+`Button::new` calls without an ID remain pointer-only. Pointer activation still
+works on identified buttons and focuses that button.
+
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::ui::{hash, root_ui, widgets};
+
+let mut ui = root_ui();
+let can_save = true;
+if widgets::Button::new("Save")
+    .id(hash!("save-action"))
+    .enabled(can_save)
+    .focus_color(YELLOW)
+    .size(vec2(220., 36.))
+    .ui(&mut ui)
+{
+    // Save once for this pointer click or Enter/Space press.
+}
+```
+
+Tab and Shift+Tab traverse enabled identified buttons and editboxes in
+submission order. Traversal is resolved after the frame's complete widget
+registration, so removed or newly disabled controls cannot remain tab stops.
+Fully clipped and empty controls are also excluded; use the existing scroll
+interaction to reveal an offscreen control before focusing it. Submit the same
+current UI each frame. Enter and Space activate a focused
+button once per press; repeated key-down events while held do not activate
+again. Editboxes keep text input and their existing editing keys. A button's
+inset focus outline is blue by default; `.focus_color(color)` can match your
+skin without changing existing `Skin` or `Style` struct literals.
+`.enabled(false)` suppresses both pointer and keyboard activation.
+`Ui::focused_widget()` reports the current ID, and existing `set_input_focus`
+and `clear_input_focus` let the caller choose or clear it.
+
+Use `Ui::modal(id, position, size, |ui| { ... })` when a confirmation needs an
+explicit position. This uses the same existing single-modal path as
+`widgets::Popup`; nested modals are not supported. Submit the modal while it
+is open and stop submitting it to close it. Its first enabled focusable
+control receives focus, Tab/Shift+Tab stay inside it, and the activation that
+opened it does not activate its first button. Closing restores the prior
+control when it is still present and enabled. Underlying controls remain
+inactive while the modal is active. Positions and sizes use the active UI's
+coordinates, logical window units for `root_ui`.
+
+Run `cargo run --example keyboard_buttons` for a settings menu with an
+editbox, disabled save state and a reset confirmation. The native/WebGL
+`keyboard_buttons_check` fixture exercises traversal, editbox input, repeated
+Space, removal/disabling, modal containment/restoration and legacy pointer
+activation. Its browser exports expose counters, focus and widget rectangles
+for additional real DOM keyboard/pointer checks; the fixture's scripted public
+`InputHandler` calls alone are not OS input. Checkbox/slider keyboard controls,
+gamepad navigation and platform accessibility bridges remain separate work.
 
 ## Draw a rounded panel
 

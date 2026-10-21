@@ -292,7 +292,12 @@ impl<'a> Editbox<'a> {
 
         let rect = Rect::new(pos.x, pos.y, self.size.x, self.size.y);
 
-        let hovered = rect.contains(context.input.mouse_position);
+        let hovered = context.keyboard_focus.allows(context.keyboard_scope)
+            && context.focused
+            && rect.contains(context.input.mouse_position)
+            && context.window.painter.clipping_zone.map_or(true, |clip| {
+                clip.w > 0. && clip.h > 0. && clip.contains(context.input.mouse_position)
+            });
 
         if context.input.click_down() && hovered {
             #[cfg(target_os = "android")]
@@ -305,6 +310,7 @@ impl<'a> Editbox<'a> {
             *context.input_focus = None;
         }
 
+        let keyboard_visible = context.keyboard_visible(rect);
         let state = context
             .storage_any
             .get_or_default::<EditboxState>(hash!(self.id, "cursor"));
@@ -324,15 +330,12 @@ impl<'a> Editbox<'a> {
             state.cursor = text_vec.len() as u32;
         }
 
-        let input_focused =
-            context.input_focus.map_or(false, |id| id == self.id) && context.focused;
-
-        let is_tab_selected = context
-            .tab_selector
-            .register_selectable_widget(input_focused, context.input);
-        if is_tab_selected {
-            *context.input_focus = Some(self.id);
-        }
+        let input_focused = context.keyboard_focus.register(
+            self.id,
+            context.keyboard_scope,
+            context.keyboard_eligible && keyboard_visible,
+            context.input_focus,
+        );
 
         // reset selection state when lost focus
         if context.focused == false || input_focused == false {
