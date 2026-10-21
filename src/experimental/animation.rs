@@ -12,6 +12,10 @@
 //! holds the last frame after its full duration. Neither playback nor seeking
 //! needs a window, texture or GPU.
 //!
+//! [`SpriteClip`] and [`TimedSprite`] support individually held frames using
+//! checked regions and caller-supplied seconds. They preserve the uniform-FPS
+//! API and use the same loop/once, pause, reset and seek policies.
+//!
 //! # Examples
 //! Let's say we have an image of our character where every frame is 15x20 rect and we have this animations:
 //! - Idle animation with 20 frames at 12 fps
@@ -73,6 +77,9 @@ use crate::{
 mod sprite_region;
 pub use sprite_region::{SpriteRegion, SpriteRegionDrawParams, SpriteRegionError};
 
+mod timed_sprite;
+pub use timed_sprite::{SpriteClip, SpriteClipError, TimedSprite};
+
 /// One row-based clip of equal-sized sprite-sheet cells.
 ///
 /// The player checks nonzero frame count and FPS, but does not know the image
@@ -97,13 +104,14 @@ pub struct AnimationFrame {
     pub dest_size: Vec2,
 }
 
-/// What happens after the last frame has been displayed for `1 / fps` seconds.
+/// What happens after the last frame has been displayed for its full duration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AnimationPlayback {
     /// Return to the first frame, preserving any fractional elapsed time.
     #[default]
     Loop,
-    /// Hold the last frame and report [`AnimatedSprite::is_finished`].
+    /// Hold the last frame and report [`AnimatedSprite::is_finished`] or
+    /// [`TimedSprite::is_finished`].
     Once,
 }
 

@@ -15,6 +15,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Target picking | `camera_target`, `camera_target_check` | Physical Camera2D surface coordinates, GL viewport origin, rotated offscreen sprites, display flips and letterboxed picking after resize; see the [UI and 2D guide](../docs/ui-2d-guide.md#pick-a-displayed-render-target) |
 | Sprite regions | `sprite_regions`, `sprite_regions_check` | Checked grid/explicit regions, trimmed-frame offsets, stable pivots and flips using one tiny generated sheet; see the [UI and 2D guide](../docs/ui-2d-guide.md#draw-source-regions-and-animations) |
 | Sprite timing | `sprite_animation`, `sprite_animation_check` | Caller elapsed time, looping/one-shot completion, pause/resume, reset/seek and long ticks using the same sheet; see the [sprite clock guide](../docs/ui-2d-guide.md#control-the-sprite-clock) |
+| Per-frame timing | `timed_sprite_check` | Unequal durations, checked trimmed regions, exact boundaries, fractional/multi-loop clocks, pause/reset/seek, independent players and native/WebGL pixel checks; [WebGL host](timed_sprite_check.html) |
 | 2D and UI integration | `sprite_ui`, `sprite_ui_check` | Animated sprite, camera picking, responsive HUD, clipped log and a keyboard-operable pause modal; see the [complete flow](../docs/ui-2d-guide.md#combine-sprites-picking-and-a-pause-menu) |
 | Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading`, `gltf_pose_check`, `gltf_morph_check`, `gltf_animation_check` | Immediate/retained GLB draw, staged loading, opt-in shading, pose/morph instances and caller-timed transform/weight clip pixel fixtures |
 | Renderer behavior | `retained_mesh`, `material_depth_check`, `font_atlas_lifetime` | Immutable buffers and draw order, independent depth writes/testing, queued samplers, queued text across atlas growth and font drop |
@@ -562,3 +563,12 @@ WASD moves, R resets and Escape exits. The room keeps glTF Y-up.
 wall blocking, trigger traversal and duplicate-name fallback without a window
 or Blender. See the [Blender guide](../docs/blender-to-macroquad.md#samples-in-this-repository)
 for headless regeneration and the separate six-object tutorial.
+
+Run variable-duration checks with `cargo test --test timed_sprite`, then
+`cargo run --example timed_sprite_check`. Space pauses/resumes, R resets,
+S seeks to 0.125 seconds and T advances 2.25 seconds. For WebGL, build with
+`cargo build --release --target wasm32-unknown-unknown --example timed_sprite_check`,
+copy that WASM beside `timed_sprite_check.html` and serve the repository root
+so the host can load `../js/mq_js_bundle.js`. The same deterministic fixture
+checks 72,000 target pixels (15 states, including both horizontal flips) before
+the interactive scene starts. Escape closes the native example.

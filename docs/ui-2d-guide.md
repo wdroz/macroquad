@@ -708,6 +708,35 @@ Completion does not change the caller's `playing` flag. `reset()` and `seek()`
 also preserve it, so resetting a completed player resumes only if it is playing.
 `elapsed()` is the wrapped loop position or the clamped one-shot position;
 `duration()` is the frame count divided by FPS. Each instance owns its clock.
+For unequal frame durations, use `SpriteClip` and `TimedSprite` beside this
+uniform-FPS API. A clip owns checked `SpriteRegion` values and individual `f64`
+seconds; it owns no texture. `Animation` and `AnimationFrame` literals and
+`AnimatedSprite` behavior stay unchanged.
+
+```rust
+use macroquad::experimental::animation::{SpriteClip, TimedSprite, SpriteRegion};
+use macroquad::prelude::*;
+let anticipation = SpriteRegion::from_grid(vec2(40., 20.), vec2(20., 20.), 0, 0).unwrap();
+let recovery = SpriteRegion::from_grid(vec2(40., 20.), vec2(20., 20.), 1, 0).unwrap();
+let clip = SpriteClip::new(&[(anticipation, 0.125), (recovery, 0.375)]).unwrap();
+let mut player = TimedSprite::new(clip, true);
+player.update_with_delta(0.125).unwrap();
+assert_eq!(player.current_frame(), 1); // exact boundary selects the next region
+assert_eq!(player.duration(), 0.5); // sum, including the held recovery frame
+```
+
+Empty clips, nonfinite/nonpositive durations, overflowing sums and additions
+that cannot advance the accumulated boundary are rejected. Each region occupies
+`[start, end)` using stored `f64` boundaries. Looping wraps at the total;
+`Once` holds the final region and finishes at that total. Seek, pause, reset,
+mode changes and invalid-time handling follow the same policy as the uniform
+player. Large deltas reduce whole cycles before addition; fractional progress
+is retained. Floating-point rounding applies, so differently subdivided clocks
+need not match bit for bit. Draw `player.frame()` through `SpriteRegion::draw`
+with its matching texture, preserving trim/pivot/flip behavior. The maintained
+`timed_sprite_check` example uses the tiny asymmetric sheet and checks actual
+pixels on native/WebGL before showing interactive loop/once playback.
+
 Choose the operation by the state change you want:
 
 | Action | Operation | Result |
