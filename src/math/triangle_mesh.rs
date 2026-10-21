@@ -93,6 +93,10 @@ impl TriangleMesh {
     /// Whether a finite, non-negative-radius sphere touches the triangle
     /// surface. Invalid spheres miss. Closest surface points and squared
     /// distances use f64 intermediates, including degenerate edges/vertices.
+    /// Interior edge distances use perpendicular distance rather than a
+    /// reconstructed closest point, preserving small offsets on long edges.
+    /// These are floating-point tests, not exact predicates; extreme aspect
+    /// ratios or nearly collinear faces can still lose precision.
     pub fn overlaps_sphere(&self, sphere: &Sphere) -> bool {
         if !sphere.center.is_finite() || !sphere.radius.is_finite() || sphere.radius < 0.0 {
             return false;
@@ -162,12 +166,25 @@ fn triangle_distance_squared(t: Triangle, p: DVec3) -> f64 {
         .map(|(start, end)| {
             let edge = end - start;
             let len2 = edge.length_squared();
-            let t = if len2 > 0.0 {
-                ((p - start).dot(edge) / len2).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            p.distance_squared(start + edge * t)
+            if len2 == 0.0 {
+                return p.distance_squared(start);
+            }
+            let projection = (p - start).dot(edge);
+            if projection <= 0.0 {
+                return p.distance_squared(start);
+            }
+            if projection >= len2 {
+                return p.distance_squared(end);
+            }
+            // Reconstructing start + edge * t can erase a small closest
+            // point on an edge spanning large opposite coordinates. Measure
+            // the perpendicular distance instead, using the nearest of the
+            // endpoints/midpoint to reduce cancellation in the offset.
+            let anchor = [start, end, (start + end) * 0.5]
+                .into_iter()
+                .min_by(|a, b| p.distance_squared(*a).total_cmp(&p.distance_squared(*b)))
+                .unwrap();
+            (p - anchor).cross(edge).length_squared() / len2
         })
         .fold(f64::INFINITY, f64::min)
 }

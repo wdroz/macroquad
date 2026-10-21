@@ -251,3 +251,62 @@ fn enclosed_volume_does_not_imply_surface_overlap() {
     assert!(!m.overlaps_aabb(&Aabb::from_center_size(Vec3::splat(0.5), Vec3::splat(0.1))));
     assert!(m.overlaps_sphere(&Sphere::new(Vec3::splat(0.5), 0.5)));
 }
+
+#[test]
+fn long_degenerate_edges_preserve_small_surface_distances() {
+    for direction in [Vec3::X, Vec3::Y, Vec3::Z, vec3(1.0, 1.0, 0.0)] {
+        let a = direction * -1e30;
+        let b = -a;
+        let m = mesh(Triangle::new(a, b, a));
+        for t in [-2.0, 0.0, 1.0, 3.0] {
+            let p = direction * t;
+            assert!(m.overlaps_sphere(&Sphere::new(p, 0.0)), "{direction:?} {t}");
+            assert!(m.overlaps_sphere(&Sphere::new(p + Vec3::Z * 0.5, 0.5)));
+            if direction.z == 0.0 {
+                assert!(!m.overlaps_sphere(&Sphere::new(p + Vec3::Z * 0.5, 0.49)));
+            }
+        }
+    }
+    // A diagonal spanning the origin must still reject a point off its line.
+    let m = mesh(Triangle::new(
+        vec3(-1e30, -1e30, 0.0),
+        vec3(1e30, 1e30, 0.0),
+        vec3(-1e30, -1e30, 0.0),
+    ));
+    assert!(!m.overlaps_sphere(&Sphere::new(vec3(1.0, 2.0, 0.0), 0.7)));
+    assert!(m.overlaps_sphere(&Sphere::new(vec3(1.0, 2.0, 0.0), 0.71)));
+}
+
+#[test]
+fn edge_projection_keeps_endpoints_and_excludes_extensions() {
+    let m = mesh(Triangle::new(Vec3::ZERO, vec3(3.0, 4.0, 0.0), Vec3::ZERO));
+    for p in [Vec3::ZERO, vec3(1.5, 2.0, 0.0), vec3(3.0, 4.0, 0.0)] {
+        assert!(m.overlaps_sphere(&Sphere::new(p, 0.0)));
+        assert!(m.overlaps_sphere(&Sphere::new(p + Vec3::Z, 1.0)));
+        assert!(!m.overlaps_sphere(&Sphere::new(p + Vec3::Z, 0.99)));
+    }
+    assert!(!m.overlaps_sphere(&Sphere::new(vec3(-0.6, -0.8, 0.0), 0.99)));
+    assert!(!m.overlaps_sphere(&Sphere::new(vec3(3.6, 4.8, 0.0), 0.99)));
+}
+
+#[test]
+fn segment_spheres_match_analytic_perpendicular_distances() {
+    let mut seed = 173u32;
+    for extent in [1e3, 1e10, 1e20, 1e30] {
+        for direction in [Vec3::X, vec3(1.0, 1.0, 0.0), vec3(-1.0, 1.0, 0.0)] {
+            let a = direction * -extent;
+            let b = -a;
+            let m = mesh(Triangle::new(a, b, a));
+            for _ in 0..500 {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let along = (seed % 129) as f32 - 64.0;
+                let p = direction * along;
+                // Z is exactly perpendicular to every tested segment. Its
+                // analytic distance does not depend on segment projection.
+                assert!(m.overlaps_sphere(&Sphere::new(p, 0.0)));
+                assert!(m.overlaps_sphere(&Sphere::new(p + Vec3::Z * 0.5, 0.5)));
+                assert!(!m.overlaps_sphere(&Sphere::new(p + Vec3::Z * 0.5, 0.49)));
+            }
+        }
+    }
+}

@@ -1433,6 +1433,10 @@ intermediates (triangle/box separating axes or sphere/surface distance). Touches
 count, including degenerate triangle segments and points. Non-finite or inverted
 boxes and non-finite/negative-radius spheres miss. These are surface queries:
 being wholly inside a closed mesh without touching a face does not overlap.
+Sphere/edge tests measure perpendicular distance without reconstructing a
+closest point, so small positions on long edges spanning the origin survive.
+The f64 calculations are still rounded, not exact geometric predicates;
+extreme aspect ratios and nearly collinear faces can lose precision.
 All queries are linear scans, with no BVH, solid-volume test, sweep or mesh
 response solver. The pure non-axis-aligned fixture and query regressions live
 in `tests/triangle_mesh.rs` and run without a window.
