@@ -1990,3 +1990,29 @@ rejects invalid dimensions, inputs or unrepresentable extents/vertices.
 Ray units, exact ties and numerical limits follow `TriangleMesh`; AABB overlaps
 include surface touches but do not treat terrain as a solid volume below ground.
 No controller response or acceleration structure is added.
+
+
+### Static octree candidates
+
+`Octree` is a build-once alternative to the mutable `UniformGrid` for static
+world-space AABB snapshots. Caller `u32` indices remain application-owned.
+Construct a new tree when objects move. `new` rejects any non-finite/inverted
+box; valid repeated indices use the last bounds. Empty input is valid.
+
+```rust
+use macroquad::prelude::*;
+let wall = Aabb::from_center_size(Vec3::X * 4.0, Vec3::ONE);
+let tree = Octree::new([(12, wall)]).unwrap();
+assert_eq!(tree.query_aabb(&wall), vec![12]);
+assert_eq!(tree.query_ray(&Ray::new(Vec3::ZERO, Vec3::X * 2.0), 2.0), vec![12]);
+```
+
+Boxes crossing a split plane stay in the parent; each entry is stored once.
+`with_max_depth` clamps the subdivision limit to 16; zero uses one linear leaf.
+Degenerate clusters stop splitting, and leaves can exceed the eight-entry target.
+Queries include touches and return sorted unique indices, not distance order or
+contacts. Ray limits use `origin + direction * t`, allow positive infinity and
+retain nonzero subnormal directions. The grid and octree share double-precision
+slab predicates and their conservative rounding limits at extreme scales.
+Check the actual shapes after selecting candidates. This does not add a physics
+world, mesh acceleration or a measured performance claim.

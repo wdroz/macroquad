@@ -11,7 +11,7 @@
 //! returns one shared translation for a rigid group of equal-radius spheres.
 //! [`Heightfield`] samples regular terrain in a caller-defined up frame.
 //! [`TriangleMesh`] caches triangle bounds for indexed ray hits and surface overlaps.
-//! [`UniformGrid`] indexes caller-owned world bounds for overlap and ray candidates.
+//! [`UniformGrid`] and immutable [`Octree`] index caller-owned world bounds for overlap and ray candidates.
 //! [`RigidBody`] integrates caller-owned velocity and position with gravity and
 //! damping, with local [`RigidBodyShape`] geometry. Its explicit
 //! [`RigidBody::resolve_collision`] and [`RigidBody::resolve_static_obb`] methods
@@ -112,6 +112,7 @@ mod sweep_obb;
 mod triangle;
 mod triangle_mesh;
 mod uniform_grid;
+mod octree;
 
 pub use aabb::{Aabb, RayHit};
 pub use capsule::Capsule;
@@ -136,6 +137,7 @@ pub use sweep::SweepHit;
 pub use triangle::Triangle;
 pub use triangle_mesh::TriangleMesh;
 pub use uniform_grid::UniformGrid;
+pub use octree::Octree;
 
 /// Roots of `|offset + delta * t| = radius`, in increasing order.
 ///

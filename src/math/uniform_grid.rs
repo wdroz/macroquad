@@ -292,11 +292,11 @@ impl UniformGrid {
     }
 }
 
-fn valid_bounds(bounds: &Aabb) -> bool {
+pub(super) fn valid_bounds(bounds: &Aabb) -> bool {
     bounds.min.is_finite() && bounds.max.is_finite() && bounds.min.cmple(bounds.max).all()
 }
 
-fn ray_meets_bounds(bounds: &Aabb, origin: [f64; 3], direction: [f64; 3], max_t: f64) -> bool {
+pub(super) fn ray_meets_bounds(bounds: &Aabb, origin: [f64; 3], direction: [f64; 3], max_t: f64) -> bool {
     let min = bounds.min.to_array();
     let max = bounds.max.to_array();
     let mut enter = 0.0_f64;

@@ -173,8 +173,8 @@ capsule, or a sphere moving against either box type,
 `TriangleMesh` owns finite world-space triangles with cached bounds, closest
 indexed ray hits and AABB/sphere surface overlaps. See the [3D guide](docs/3d-guide.md#triangle-mesh-surfaces).
 
-`UniformGrid` indexes caller-owned world bounds for candidate queries; its
-snapshots must be updated after movement. Sliding and initial recovery need
+`UniformGrid` and immutable `Octree` index caller-owned world bounds for candidate
+queries. Refresh snapshots after movement, constructing a new tree for `Octree`. Sliding and initial recovery need
 [conservative candidate bounds](docs/3d-guide.md#candidate-bounds-for-sliding).
 `CharacterController` adds AABB movement, ground handling and optional steps.
 `RigidBody` integrates caller-owned velocity and position with gravity and
