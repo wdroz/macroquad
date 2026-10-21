@@ -571,15 +571,62 @@ Run `cargo run --example sprite_regions` to inspect the tiny generated sheet.
 
 [`experimental::animation`](../src/experimental/animation.rs) provides
 `Animation`, `AnimatedSprite` and `AnimationFrame` for equal-sized cells with
-one animation per sheet row. `frame()` supplies a source rectangle and size
-for `draw_texture_ex`; `playing` pauses frame advancement. Its current
-`update()` reads `get_frame_time`, advances at most one frame per call, discards
-the time remainder after an advance and loops the frame index. It is not a
-caller-timed or one-shot player. `set_animation` preserves timing/current frame
-modulo the new length; `set_frame` changes the index without resetting time.
-Supply nonempty animations with positive tile sizes, frame counts and FPS,
-valid indices and an adequately sized texture yourself. Checked construction,
-elapsed-time/seek controls and deterministic long-tick handling are queued.
+one animation per sheet row. Existing struct literals are unchanged.
+`try_new` checks nonzero tile dimensions, a nonempty animation list and positive
+frame counts/FPS. Texture bounds are checked separately with `SpriteRegion`.
+
+### Control the sprite clock
+
+Pass elapsed **seconds** to `update_with_delta(f64)` from your simulation clock.
+It advances all elapsed frames and keeps fractional time; `update()` is a
+convenience using `get_frame_time()`. A frame boundary belongs to the next frame.
+Finite nonnegative times are accepted; negative or nonfinite times return an
+error without changing the player. Floating-point precision still applies:
+arbitrary decimal time partitions are not promised to be bit-identical.
+
+```rust
+use macroquad::experimental::animation::{
+    AnimatedSprite, Animation, AnimationPlayback, SpriteRegion,
+};
+use macroquad::prelude::*;
+
+let clips = [Animation { name: "pulse".into(), row: 0, frames: 2, fps: 2 }];
+let mut sprite = AnimatedSprite::try_new(20, 20, &clips, true).unwrap();
+sprite.update_with_delta(2.75).unwrap(); // two loops plus 0.75 seconds
+assert_eq!(sprite.current_frame(), 1);
+sprite.playing = false;
+sprite.update_with_delta(100.0).unwrap(); // pause preserves the fraction
+sprite.seek(0.25).unwrap(); // seeking also works while paused
+sprite.set_playback(AnimationPlayback::Once);
+sprite.playing = true;
+sprite.update_with_delta(0.75).unwrap();
+assert!(sprite.is_finished()); // last frame has had its full duration
+let region = SpriteRegion::new(vec2(40., 20.), sprite.frame().source_rect).unwrap();
+assert_eq!(region.source(), Rect::new(20., 0., 20., 20.));
+sprite.reset(); // first frame, zero elapsed time, completion cleared
+assert!(!sprite.is_finished());
+```
+
+`AnimationPlayback::Loop` is the default. `Once` clamps at the clip's duration
+and holds the last frame. `is_last_frame()` reports which frame is visible;
+`is_finished()` reports completion after that frame's full interval.
+Completion does not change the caller's `playing` flag. `reset()` and `seek()`
+also preserve it, so resetting a completed player resumes only if it is playing.
+`elapsed()` is the wrapped loop position or the clamped one-shot position;
+`duration()` is the frame count divided by FPS. Each instance owns its clock.
+The legacy `set_animation` retains the frame modulo the new length and the
+fractional seconds; `set_frame` retains fractional seconds. Both clear
+completion. Changing FPS can leave excess fractional seconds pending until the
+next playing update, so `elapsed()` is temporarily unnormalized after that
+legacy operation. Prefer `reset` or `seek` for an explicit timeline position.
+
+Run `cargo run --example sprite_animation` for independently timed loop/once
+players. Space plays/pauses, R resets, S seeks to 0.5 seconds and T supplies a
+2.75-second tick while playing. `sprite_animation_check` and its HTML host run
+the same 72,000-pixel native/WebGL fixture before leaving the demo interactive.
+It reuses the generated sheet from `sprite_regions`; the player still owns no
+texture and drawing uses the existing checked source-region path.
+
 This sprite timer is separate from the completed optional glTF transform and
 morph-weight clip player described in the [3D guide](3d-guide.md#playing-gltf-clips).
 
@@ -601,7 +648,7 @@ These upstream examples use existing bundled assets where needed. Use
 `--target wasm32-unknown-unknown` and use the repository's
 [WASM hosting instructions](../README.md#wasm). Serve asset paths over HTTP
 when running in a browser. The maintained 2D/UI integration example combining
-the proposed helpers remains an unchecked roadmap item.
+these helpers remains an unchecked roadmap item.
 
 The renderer batches ordinary geometry; a batch count alone is not a measured
 performance result. Default drawing/UI preserve source-over alpha, and queued

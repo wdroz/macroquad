@@ -14,6 +14,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
 | Target picking | `camera_target`, `camera_target_check` | Physical Camera2D surface coordinates, GL viewport origin, rotated offscreen sprites, display flips and letterboxed picking after resize; see the [UI and 2D guide](../docs/ui-2d-guide.md#pick-a-displayed-render-target) |
 | Sprite regions | `sprite_regions`, `sprite_regions_check` | Checked grid/explicit regions, trimmed-frame offsets, stable pivots and flips using one tiny generated sheet; see the [UI and 2D guide](../docs/ui-2d-guide.md#draw-source-regions-and-animations) |
+| Sprite timing | `sprite_animation`, `sprite_animation_check` | Caller elapsed time, looping/one-shot completion, pause/resume, reset/seek and long ticks using the same sheet; see the [sprite clock guide](../docs/ui-2d-guide.md#control-the-sprite-clock) |
 | Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading`, `gltf_pose_check`, `gltf_morph_check`, `gltf_animation_check` | Immediate/retained GLB draw, staged loading, opt-in shading, pose/morph instances and caller-timed transform/weight clip pixel fixtures |
 | Renderer behavior | `retained_mesh`, `material_depth_check`, `font_atlas_lifetime` | Immutable buffers and draw order, independent depth writes/testing, queued samplers, queued text across atlas growth and font drop |
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
@@ -47,6 +48,8 @@ cargo run --example camera_target
 cargo run --example camera_target_check
 cargo run --example sprite_regions
 cargo run --example sprite_regions_check
+cargo run --example sprite_animation
+cargo run --example sprite_animation_check
 cargo run --features gltf --example gltf_textured
 cargo run --example material_depth_check
 cargo run --example retained_mesh
@@ -93,6 +96,18 @@ grid and trimmed frames, flips, rotation, atlas batching, rejected mismatched
 textures and queued texture ownership. Build its WASM, copy
 `sprite_regions_check.wasm` beside its HTML host, and serve the fork root.
 
+`sprite_animation` starts paused with independent looping and one-shot players.
+Space plays/pauses both, R resets, S seeks to 0.5 seconds and T supplies a
+2.75-second tick while playing. Each frame lasts 0.5 seconds. The one-shot
+holds its last frame after one second; completion leaves `playing` unchanged.
+`sprite_animation_check` first verifies 72,000 target pixels across a fixed
+timing script, including exact boundaries, long ticks, pause, seek, reset,
+completion and source-region flips. Its HTML host loads the matching WASM.
+Exports `sprite_animation_status` (0 pending, 1 passed, 2 panic),
+`sprite_animation_checks`, `sprite_animation_frames`, `sprite_animation_state`
+and `sprite_animation_dpi_milli` support browser checks. State bits are loop
+frame (0), one-shot frame (1), completion (2) and playing (3).
+
 `keyboard_buttons_check` runs the same public-input fixture as the native
 `keyboard_buttons` integration test, then leaves a live menu for real input.
 Its HTML host loads `keyboard_buttons_check.wasm` from the examples directory.
@@ -134,9 +149,9 @@ pause flag must separately gate world input and simulation.
 Next, `camera_target` maps clicks through a displayed render texture into a
 rotated 2D world; `sprite_regions` draws checked source regions while keeping
 the visible pivot fixed through trimming and flips. Change frames manually
-with Space. This example does not implement the queued deterministic sprite
-animation clock. The [UI and 2D guide](../docs/ui-2d-guide.md) connects these
-APIs, coordinate spaces and current animation limitations.
+with Space, then use `sprite_animation` to advance those cells from caller
+elapsed time or to seek/reset a paused player. The
+[UI and 2D guide](../docs/ui-2d-guide.md) connects these APIs and coordinate spaces.
 
 Each of these demos has a matching `_check` example with a shared native/WebGL
 fixture. Run the native fixture with `cargo run --example <name>_check`. For
@@ -149,7 +164,8 @@ cargo build --target wasm32-unknown-unknown --example scoped_clipping_check
 Copy `target/wasm32-unknown-unknown/debug/examples/scoped_clipping_check.wasm`
 to `examples/scoped_clipping_check.wasm`, serve the fork root, and open
 `examples/scoped_clipping_check.html`. Substitute `responsive_layout`,
-`keyboard_buttons`, `camera_target` or `sprite_regions` for the other hosts.
+`keyboard_buttons`, `camera_target`, `sprite_regions` or `sprite_animation`
+for the other hosts.
 The paired HTML files load this checkout's JavaScript bundle. Use actual
 window resizing and input after the pixel checks, and inspect at both browser
 DPR 1 and 2; compiling WASM alone does not verify rendering or input.
