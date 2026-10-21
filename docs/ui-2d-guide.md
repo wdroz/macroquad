@@ -386,8 +386,35 @@ editbox, disabled save state and a reset confirmation. The native/WebGL
 Space, removal/disabling, modal containment/restoration and legacy pointer
 activation. Its browser exports expose counters, focus and widget rectangles
 for additional real DOM keyboard/pointer checks; the fixture's scripted public
-`InputHandler` calls alone are not OS input. Checkbox/slider keyboard controls,
+`InputHandler` calls alone are not OS input. Slider keyboard controls,
 gamepad navigation and platform accessibility bridges remain separate work.
+
+## Make checkboxes usable from the keyboard
+
+Use `Checkbox::new(id).keyboard_focus(true)` with a unique stable ID. It shares
+Tab/Shift+Tab submission order with editboxes and opted-in buttons, including
+modal containment and focus restoration. Space and Enter both toggle once per
+press; held-key repeats do not toggle again. `.enabled(false)` blocks pointer
+and keyboard input and skips traversal; omitted or fully clipped controls cannot
+retain keyboard focus. Traversal applies next frame, like buttons. Scroll a
+fully clipped control into view before focusing it.
+
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::ui::{hash, root_ui, widgets};
+let mut step_assist = false;
+widgets::Checkbox::new(hash!("step-assist"))
+    .keyboard_focus(true).focus_color(YELLOW)
+    .label("Step assist").size(vec2(240., 28.))
+    .ui(&mut root_ui(), &mut step_assist);
+```
+
+The inset outline surrounds the checkbox square in both checked states, independent
+of skin colors. Existing `ui.checkbox` and builder calls remain pointer-only and
+toggle on pointer release over the square. Keyboard activation and pointer release
+in the same frame produce one toggle. `keyboard_checkboxes_check` runs the shared
+public-input fixture and then leaves the menu live for OS/DOM input; its HTML host
+supports resize and DPR checks. Gamepad and accessibility bridges remain deferred.
 
 ## Draw a rounded panel
 

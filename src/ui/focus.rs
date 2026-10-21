@@ -357,3 +357,37 @@ mod tests {
         assert!(state.activate(true));
     }
 }
+
+#[cfg(test)]
+mod checkbox_tests {
+    use super::*;
+
+    #[test]
+    fn checkbox_space_and_enter_share_edges_and_do_not_double_toggle() {
+        let mut state = KeyboardFocus::default();
+        let mut focus = Some(2);
+        // Editbox, checkbox, button in mixed submission order.
+        for id in [1, 2, 3] {
+            state.register(id, None, true, &mut focus);
+        }
+        state.new_frame(&mut focus);
+        let mut checked = false;
+        state.key_down(KeyCode::Space, false, false);
+        state.key_down(KeyCode::Enter, false, false);
+        if state.activate(true) {
+            checked = !checked;
+        }
+        assert!(checked);
+        assert!(!state.activate(true));
+        for _ in 0..4 {
+            state.register(2, None, true, &mut focus);
+            state.new_frame(&mut focus);
+            state.key_down(KeyCode::Space, false, false);
+            state.key_down(KeyCode::Enter, false, false);
+            assert!(!state.activate(true));
+        }
+        state.key_up(KeyCode::Enter);
+        state.key_down(KeyCode::Enter, false, false);
+        assert!(state.activate(true));
+    }
+}
