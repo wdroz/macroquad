@@ -27,9 +27,8 @@ impl Room {
             ("back", vec3(0., 1., -4.), vec3(8., 2., 0.2)),
         ] {
             let markers: Vec<_> = scene
-                .colliders
-                .iter()
-                .filter(|c| !c.trigger && scene.marker_tag(c.node) == Some(tag))
+                .solid_colliders()
+                .filter(|c| scene.marker_tag(c.node) == Some(tag))
                 .collect();
             assert_eq!(markers.len(), 1, "solid tag {tag}");
             let collider = markers[0];
@@ -43,9 +42,8 @@ impl Room {
             solids.push(bounds);
         }
         let goals: Vec<_> = scene
-            .colliders
-            .iter()
-            .filter(|c| c.trigger && scene.marker_tag(c.node) == Some("goal"))
+            .trigger_colliders()
+            .filter(|c| scene.marker_tag(c.node) == Some("goal"))
             .collect();
         assert_eq!(goals.len(), 1);
         let marker = goals[0];

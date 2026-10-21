@@ -139,12 +139,12 @@ let scene = GltfScene::from_bytes(bytes).expect("level");
 
 // Check the authoring contract before starting gameplay. These counts describe
 // this six-object tutorial scene; change them when authoring a different level.
-assert_eq!(scene.colliders.iter().filter(|c| !c.trigger).count(), 4);
-assert_eq!(scene.colliders.iter().filter(|c| c.trigger).count(), 1);
+assert_eq!(scene.solid_colliders().count(), 4);
+assert_eq!(scene.trigger_colliders().count(), 1);
 assert_eq!(scene.spawns.len(), 1);
 assert_eq!(scene.marker_tags.len(), scene.nodes.len());
-let goal = scene.colliders.iter()
-    .find(|c| c.trigger && scene.marker_tag(c.node) == Some("goal"))
+let goal = scene.trigger_colliders()
+    .find(|c| scene.marker_tag(c.node) == Some("goal"))
     .expect("goal trigger: export its mq_shape and mq_tag");
 let GltfColliderShape::Sphere(goal_shape) = goal.shape else {
     panic!("goal needs mq_shape = sphere");
@@ -158,8 +158,8 @@ let spawn = scene
     .expect("spawn");
 let body = Sphere::new(spawn.position, 0.4);
 
-for collider in &scene.colliders {
-    if !collider.trigger && collider.shape.overlaps_sphere(&body) {
+for collider in scene.solid_colliders() {
+    if collider.shape.overlaps_sphere(&body) {
         // `body` touches or overlaps this solid; boundaries are inclusive.
     }
 }
@@ -225,7 +225,7 @@ async fn main() {
         .expect("player_spawn");
     let (mut aabbs, mut obbs, mut spheres, mut capsules) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for collider in scene.colliders.iter().filter(|c| !c.trigger) {
+    for collider in scene.solid_colliders() {
         match collider.shape {
             GltfColliderShape::Aabb(shape) => aabbs.push(shape),
             GltfColliderShape::Obb(shape) => obbs.push(shape),
@@ -235,7 +235,7 @@ async fn main() {
     }
     // Markers are all we need after extracting the solids and spawn. Drop the
     // separate CPU scene's mesh/image data as well as the input file bytes.
-    let triggers: Vec<_> = scene.colliders.iter().filter(|c| c.trigger).cloned().collect();
+    let triggers: Vec<_> = scene.trigger_colliders().cloned().collect();
     drop(scene);
     drop(bytes);
     let radius = 0.4;
@@ -309,7 +309,7 @@ This helper queries one translation and excludes triggers:
 use macroquad::prelude::*;
 
 fn first_solid_hit(scene: &GltfScene, body: Aabb, delta: Vec3) -> Option<SweepHit> {
-    scene.colliders.iter().filter(|collider| !collider.trigger)
+    scene.solid_colliders()
         .filter_map(|collider| match collider.shape {
             GltfColliderShape::Aabb(shape) => body.sweep(delta, &shape),
             GltfColliderShape::Obb(shape) => body.sweep_obb(delta, &shape),

@@ -334,6 +334,17 @@ Complete `GltfScene` literals written before tag support need a `marker_tags`
 entry per node (use `None` for untagged nodes). Loader calls populate that field
 automatically; keep it aligned if you reorder `nodes` yourself.
 
+`scene.solid_colliders()` and `scene.trigger_colliders()` lazily borrow the
+existing collider references by their current `trigger` flag without allocating.
+They preserve stored order, names, shapes and scene-local `collider.node` indices,
+including tagged Blender duplicate names. Enumerating a filtered iterator gives
+filtered positions; enumerate `scene.colliders` before filtering when you need
+original collider-list indices for a broadphase. These helpers do not transform
+shapes, apply response or create events. The [room example](../examples/gltf_room.rs)
+extracts solids for its movement loop and queries its goal separately; the
+[Blender movement recipe](blender-to-macroquad.md#4-upload-once-move-and-draw)
+shows all four shape slices and a separate trigger overlap query.
+
 For a spawn or another marker, read its world orientation with
 `scene.marker_rotation(node)`. The index is the scene-local `GltfNode` index,
 such as `spawn.node`; it is not necessarily the node index in the source file.

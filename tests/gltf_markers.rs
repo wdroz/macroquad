@@ -15,6 +15,94 @@ fn scene(nodes: Vec<Value>) -> GltfScene {
 }
 
 #[test]
+fn filtered_colliders_keep_borrowed_identity_order_tags_and_scene_local_nodes() {
+    // File indices 4, 2, 3, 1 load in that order; file node 0 is unused.
+    let scene = GltfScene::from_bytes(
+        &serde_json::to_vec(&json!({
+            "asset": {"version": "2.0"}, "scene": 1,
+            "scenes": [{"nodes": [0]}, {"nodes": [4, 1]}],
+            "nodes": [
+                {"name": "unused_collider", "extras": {"mq_shape": "box"}},
+                {"name": "pad_trigger.002", "extras": {"mq_shape": "sphere", "mq_tag": "exit"}},
+                {"name": "pad_collider.001", "extras": {"mq_shape": "box", "mq_tag": "wall"}},
+                {"name": "pad_trigger.001", "extras": {"mq_role": "collider", "mq_shape": "capsule", "mq_tag": "rail"}},
+                {"name": "pad_trigger.001", "children": [2, 3], "extras": {"mq_shape": "sphere", "mq_tag": "entry"}}
+            ]
+        })).unwrap(),
+    ).unwrap();
+    assert_eq!(scene.colliders.len(), 4);
+    for (actual, index, tag) in scene
+        .solid_colliders()
+        .zip([1, 2])
+        .zip(["wall", "rail"])
+        .map(|((actual, index), tag)| (actual, index, tag))
+    {
+        assert!(std::ptr::eq(actual, &scene.colliders[index]));
+        assert_eq!(actual.node, index);
+        assert_eq!(scene.marker_tag(actual.node), Some(tag));
+    }
+    let triggers: Vec<_> = scene.trigger_colliders().collect();
+    assert_eq!(triggers.len(), 2);
+    for (actual, index, tag) in [(triggers[0], 0, "entry"), (triggers[1], 3, "exit")] {
+        assert!(std::ptr::eq(actual, &scene.colliders[index]));
+        assert_eq!(actual.node, index);
+        assert_eq!(scene.marker_tag(actual.node), Some(tag));
+    }
+    assert_eq!(scene.solid_colliders().count(), 2);
+    assert_eq!(triggers[0].name.as_deref(), Some("pad_trigger.001"));
+    assert_eq!(triggers[1].name.as_deref(), Some("pad_trigger.002"));
+}
+
+#[test]
+fn filtered_colliders_cover_empty_all_solid_and_all_trigger_sets() {
+    for flags in [
+        vec![],
+        vec![false; 3],
+        vec![true; 3],
+        vec![true, false, true, false],
+    ] {
+        let scene = scene(flags.iter().map(|trigger| json!({
+            "extras": {"mq_role": if *trigger { "trigger" } else { "collider" }, "mq_shape": "box"}
+        })).collect());
+        let solids: Vec<_> = scene.solid_colliders().collect();
+        let triggers: Vec<_> = scene.trigger_colliders().collect();
+        assert_eq!(solids.len(), flags.iter().filter(|flag| !**flag).count());
+        assert_eq!(triggers.len(), flags.iter().filter(|flag| **flag).count());
+        for (actual, original) in solids
+            .iter()
+            .chain(&triggers)
+            .map(|actual| (*actual, &scene.colliders[actual.node]))
+        {
+            assert!(std::ptr::eq(actual, original));
+        }
+    }
+}
+
+#[test]
+fn filtered_colliders_read_current_public_flags_and_order_without_cached_roles() {
+    let mut scene = scene(vec![
+        json!({"name": "wall_collider", "extras": {"mq_shape": "box"}}),
+        json!({"name": "goal_trigger", "extras": {"mq_shape": "sphere"}}),
+    ]);
+    scene.colliders[0].trigger = true;
+    scene.colliders[1].trigger = false;
+    scene.colliders.reverse();
+    assert!(std::ptr::eq(
+        scene.solid_colliders().next().unwrap(),
+        &scene.colliders[0]
+    ));
+    assert_eq!(scene.solid_colliders().next().unwrap().node, 1);
+    assert!(std::ptr::eq(
+        scene.trigger_colliders().next().unwrap(),
+        &scene.colliders[1]
+    ));
+    assert_eq!(scene.trigger_colliders().next().unwrap().node, 0);
+    scene.colliders.clear();
+    assert_eq!(scene.solid_colliders().count(), 0);
+    assert_eq!(scene.trigger_colliders().count(), 0);
+}
+
+#[test]
 fn suffix_only_blender_duplicate_is_a_spawn_with_its_original_name() {
     let scene = scene(vec![json!({
         "name": "patrol_spawn.001",

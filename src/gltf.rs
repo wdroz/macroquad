@@ -529,6 +529,39 @@ impl std::fmt::Display for GltfError {
 impl std::error::Error for GltfError {}
 
 impl GltfScene {
+    /// Borrows solid markers (`trigger == false`) from [`Self::colliders`].
+    ///
+    /// This lazy iterator allocates nothing and preserves the stored collider
+    /// order. Each item is the original reference: names, world-space shapes
+    /// and scene-local [`GltfCollider::node`] indices are unchanged. Enumerating
+    /// this filtered iterator gives filtered positions, not original collider
+    /// indices; enumerate `colliders` before filtering if you need those.
+    /// No shape conversion, pose update or collision response is performed.
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfScene;
+    /// let scene = GltfScene::from_bytes(br#"{
+    ///   "asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"nodes":[
+    ///     {"name":"wall_collider","extras":{"mq_shape":"box"}},
+    ///     {"name":"goal_trigger.001","extras":{"mq_shape":"sphere"}}
+    ///   ]}"#).unwrap();
+    /// assert!(std::ptr::eq(scene.solid_colliders().next().unwrap(), &scene.colliders[0]));
+    /// assert!(std::ptr::eq(scene.trigger_colliders().next().unwrap(), &scene.colliders[1]));
+    /// ```
+    pub fn solid_colliders(&self) -> impl Iterator<Item = &GltfCollider> {
+        self.colliders.iter().filter(|collider| !collider.trigger)
+    }
+
+    /// Borrows trigger markers (`trigger == true`) from [`Self::colliders`].
+    ///
+    /// Like [`Self::solid_colliders`], this is lazy, allocation-free and keeps
+    /// original references, order and scene-local node indices. Query these
+    /// separately after solid movement; trigger shapes retain ordinary overlap
+    /// semantics and do not automatically produce events or block movement.
+    pub fn trigger_colliders(&self) -> impl Iterator<Item = &GltfCollider> {
+        self.colliders.iter().filter(|collider| collider.trigger)
+    }
+
     /// Parses a `.glb` or `.gltf` document from memory.
     ///
     /// The default scene is loaded. When `scene` is omitted, the first scene
