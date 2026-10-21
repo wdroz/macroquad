@@ -1,8 +1,7 @@
 # UI and 2D guide
 
-This guide describes the APIs available today. The unchecked UI and 2D items in
-the [fork roadmap](../ROADMAP_3D.md#priorities) are proposals, not additional
-helpers you can call yet. Start with the existing immediate-mode UI, `Camera2D`
+This guide describes the APIs available today. Start with the existing
+immediate-mode UI, `Camera2D`
 and texture drawing; `macroquad-tiled` and `macroquad-platformer` already provide
 companion support for tile maps and 2D platformer collisions.
 
@@ -630,6 +629,52 @@ texture and drawing uses the existing checked source-region path.
 This sprite timer is separate from the completed optional glTF transform and
 morph-weight clip player described in the [3D guide](3d-guide.md#playing-gltf-clips).
 
+## Combine sprites, picking and a pause menu
+
+Run `cargo run --example sprite_ui` for a small complete example of these APIs
+working together. It uses the same generated 40 x 20 sheet as `sprite_regions`
+and `sprite_animation`; no external assets or optional features are needed.
+The [shared scene](../examples/support/sprite_ui_scene.rs) owns the animation,
+texture, render target, score and pause state. The executable supplies elapsed
+seconds and repeats the scene each frame.
+
+The frame has four responsibilities:
+
+1. Recompute the logical HUD and letterbox rectangles from the current window
+   size. Keep the offscreen target's pixel size independent of window DPI.
+2. Build the HUD and any pause modal using one scoped `root_ui()` borrow.
+   Stable button IDs provide pointer activation, Tab/Shift+Tab traversal and
+   Enter/Space activation. The modal contains focus and restores the previously
+   focused control when it is still present and enabled.
+3. Gate world picking and the animation clock with application pause state.
+   Map a logical pointer through `window_to_render_target`, then
+   `Camera2D::target_to_world`, and test the sprite's world rectangle. A clip or
+   modal alone does not pause the application. Opening or closing a menu must
+   consume that frame's world action so the same press cannot also pick a sprite.
+4. Draw the checked animation region into the camera's render target, return
+   to `set_default_camera()`, and display it in the same letterbox rectangle used
+   for picking. Draw the rounded log panel and clip its text in logical window units;
+   built-in UI widgets are submitted at the end of the frame with their own clips.
+
+Pause preserves the sprite's fractional clock. Resume continues it, while the
+modal's restart action resets the score and animation while staying paused.
+Escape opens or closes the menu. Keep the `Texture2D` and
+render target in the scene instead of reloading them each frame. Region
+metadata and the animation player do not own textures; queued drawing retains
+the texture handles it needs until submission.
+
+Resize between 390 x 400 and desktop dimensions, click the visible sprite, and
+open the pause menu with the HUD button. Try keyboard traversal and activation,
+clicking the world behind the modal, and resuming after a delay. The score and
+clock should stop during pause, the controls should remain reachable, and the
+log should stay inside its panel without clipping the HUD.
+
+`sprite_ui_check` and its HTML host run the shared native/WebGL fixture before
+leaving the same scene interactive. They exercise the combined flow and queued
+texture lifetime. Actual native and browser input checks complement the
+fixture's scripted public UI input. Build/hosting commands are in the
+[example index](../examples/README.md#ui-and-2d-learning-path).
+
 ## Run the existing examples
 
 From the fork root:
@@ -647,8 +692,8 @@ These upstream examples use existing bundled assets where needed. Use
 `cargo build --example <name>` to compile without opening a window, or add
 `--target wasm32-unknown-unknown` and use the repository's
 [WASM hosting instructions](../README.md#wasm). Serve asset paths over HTTP
-when running in a browser. The maintained 2D/UI integration example combining
-these helpers remains an unchecked roadmap item.
+when running in a browser. Use `sprite_ui` above for a maintained example
+combining the completed sprite, camera and UI helpers.
 
 The renderer batches ordinary geometry; a batch count alone is not a measured
 performance result. Default drawing/UI preserve source-over alpha, and queued
