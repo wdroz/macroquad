@@ -278,6 +278,30 @@ macroquad application and uploads textures while producing drawable chunks.
 The two calls parse independently. Their `with_up_axis` helpers must use the
 same axis before converting the draw model to retained geometry.
 
+For a spawn or another marker, read its world orientation with
+`scene.marker_rotation(node)`. The index is the scene-local `GltfNode` index,
+such as `spawn.node`; it is not necessarily the node index in the source file.
+The returned unit quaternion includes parent rotation and any `with_up_axis`
+conversion applied to that scene:
+
+```rust
+use macroquad::gltf::GltfScene;
+use macroquad::math::Vec3;
+# fn spawn_forward(scene: &GltfScene) -> Option<Vec3> {
+let spawn = scene.spawns.iter()
+    .find(|spawn| spawn.name.as_deref() == Some("player_spawn"))?;
+let rotation = scene.marker_rotation(spawn.node)?;
+// This game chooses local -Z as its forward direction.
+let forward = rotation * -Vec3::Z;
+# Some(forward) }
+```
+
+`GltfSpawn` continues to store only `node`, `name`, and `position`. The helper
+returns `None` for a missing node or a world transform from which it cannot
+obtain a finite rotation. It decomposes the matrix stored in `scene.nodes`;
+read that full world matrix when scale or shear also matters. Editing a separate
+`GltfHierarchyPose` does not update the scene's stored marker orientation.
+
 `GltfScene::images` contains top-row-first, 8-bit RGBA `GltfImage` values.
 `GltfPrimitive::base_color_texture` indexes this decoded-image list, not the
 file's texture array. Primitives sharing a source image share its entry. Only

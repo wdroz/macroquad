@@ -59,8 +59,10 @@ Blender duplicates commonly receive a suffix such as `.001`:
 `player_spawn.001` no longer ends in `_spawn`. Set `mq_role = spawn` on the
 object to make that duplicate a spawn. Arbitrary properties such as `mq_tag`
 are not exposed by the current scene API. `GltfSpawn` has `node`, `name`, and
-`position`; get its full pose from `scene.nodes[spawn.node].world` and choose
-the player's collision radius in the game.
+`position`; use `scene.marker_rotation(spawn.node)` for its world rotation, or
+`scene.nodes[spawn.node].world` for the full matrix. The rotation includes its
+parents and any up-axis conversion applied to the scene. Choose the player's
+collision radius in the game.
 
 ## 1. Build a small level
 
@@ -139,6 +141,29 @@ for collider in &scene.colliders {
 
 CPU parsing needs no graphics context and is suitable for tests. The floor is
 expected to overlap the resting player's sphere because touching counts.
+
+To preserve the facing direction of a spawn, rotate its empty in Blender before
+exporting. Reading only `spawn.position` loses that orientation. After loading
+and any up-axis conversion, obtain the rotation through its node:
+
+```rust
+use macroquad::gltf::GltfScene;
+use macroquad::math::{Quat, Vec3};
+# fn player_pose(scene: &GltfScene) -> Option<(Vec3, Quat)> {
+let spawn = scene.spawns.iter()
+    .find(|spawn| spawn.name.as_deref() == Some("player_spawn"))?;
+let rotation = scene.marker_rotation(spawn.node)?;
+// Choose the local forward axis used by the player's mesh or controller.
+let forward = rotation * -Vec3::Z;
+# let _ = forward;
+# Some((spawn.position, rotation)) }
+```
+
+`marker_rotation` returns a unit quaternion from the stored node world matrix,
+including parent rotation. It returns `None` for an invalid index or when no
+finite rotation can be obtained. The helper reads the CPU scene; editing an
+independent hierarchy pose does not change it. Keep the full node matrix when
+the application also needs scale or shear.
 
 ## 4. Upload once, move, and draw
 

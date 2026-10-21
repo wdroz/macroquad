@@ -66,7 +66,8 @@
 //! role. That ending is case-sensitive: `Crate_collider` is a collider role
 //! and `Player_Spawn` is not a spawn. An empty with a role but no `mq_shape`
 //! and no mesh is still not emitted as a collider. A spawn stores the world
-//! translation and the node name, and ignores `mq_shape`.
+//! translation and the node name, and ignores `mq_shape`. Use
+//! [`GltfScene::marker_rotation`] with its node index for world-space facing.
 //!
 //! ```
 //! use macroquad::gltf::GltfScene;
@@ -451,6 +452,7 @@ pub struct GltfCollider {
 }
 
 /// A spawn point taken from one glTF node.
+/// Use [`GltfScene::marker_rotation`] with [`Self::node`] to read its facing.
 ///
 /// # Example
 ///
@@ -665,6 +667,52 @@ impl GltfScene {
             append_node(&mut loaded, &root, None, Mat4::IDENTITY, &mut state)?;
         }
         Ok(loaded)
+    }
+
+    /// Returns a node's world-space rotation, including its parents' transforms.
+    ///
+    /// `node` indexes [`Self::nodes`], as [`GltfSpawn::node`] and
+    /// [`GltfCollider::node`] do; it is not a document node index. Any loaded
+    /// node can be queried, even without marker markup. The result includes
+    /// [`Self::with_up_axis`] conversion and is a normalized quaternion.
+    ///
+    /// Uses [`Mat4::to_scale_rotation_translation`]: a reflection is assigned
+    /// to the X scale, and a sheared matrix yields that decomposition's
+    /// approximate rotation. This does not read an edited
+    /// [`crate::gltf_draw::GltfHierarchyPose`]; it reads this scene's world matrix.
+    /// Missing nodes, non-finite matrices, singular transforms, and rotations
+    /// that cannot be normalized return [`None`]. No window is needed.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfScene;
+    /// use macroquad::math::Vec3;
+    ///
+    /// let scene = GltfScene::from_bytes(
+    ///     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[
+    ///         {"name":"helm_spawn","rotation":[0,-0.1305262,0,0.9914449]}
+    ///     ]}"#,
+    /// ).unwrap();
+    /// let spawn = &scene.spawns[0];
+    /// let forward = scene.marker_rotation(spawn.node).unwrap() * Vec3::X;
+    /// let yaw = forward.z.atan2(forward.x);
+    /// assert!((yaw.to_degrees() - 15.0).abs() < 0.001);
+    /// assert_eq!(scene.marker_rotation(usize::MAX), None);
+    /// ```
+    pub fn marker_rotation(&self, node: usize) -> Option<Quat> {
+        let world = self.nodes.get(node)?.world;
+        let determinant = world.determinant();
+        if !world.is_finite() || determinant == 0.0 {
+            return None;
+        }
+        let (_, rotation, _) = world.to_scale_rotation_translation();
+        let length = rotation.length();
+        if rotation.is_finite() && length.is_finite() && length > 0.0 {
+            Some(rotation / length)
+        } else {
+            None
+        }
     }
 
     /// Rotates the scene so glTF +Y points along `up`.
@@ -1926,6 +1974,115 @@ mod tests {
             .iter()
             .find(|node| node.name.as_deref() == Some(name))
             .unwrap_or_else(|| panic!("missing node {name}"))
+    }
+
+    #[test]
+    fn marker_rotation_preserves_helm_yaw_without_changing_spawn_fields() {
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scenes": [{"nodes": [1]}],
+            "nodes": [
+                {"name": "not_in_scene"},
+                {"name": "helm_spawn", "translation": [4.0, 1.0, 2.0],
+                 "rotation": Quat::from_rotation_y(-15.0_f32.to_radians()).to_array(),
+                 "scale": [2.0, 3.0, 4.0]}
+            ]
+        }))
+        .unwrap();
+        let scene = GltfScene::from_bytes(&bytes).unwrap();
+        let spawn = &scene.spawns[0];
+        assert_eq!(spawn.node, 0); // Scene-local, not document node 1.
+        assert_eq!(spawn.position, vec3(4.0, 1.0, 2.0));
+        let rotation = scene.marker_rotation(spawn.node).unwrap();
+        assert!((rotation.length() - 1.0).abs() < 1e-6);
+        let forward = rotation * Vec3::X;
+        assert!((forward.z.atan2(forward.x) - 0.26179942).abs() < 1e-6);
+        let unchanged_literal = GltfSpawn {
+            node: spawn.node,
+            name: spawn.name.clone(),
+            position: spawn.position,
+        };
+        assert_eq!(&unchanged_literal, spawn);
+    }
+
+    #[test]
+    fn marker_rotation_inherits_parent_yaw_and_up_axis() {
+        let parent = Quat::from_rotation_y(-15.0_f32.to_radians());
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scenes": [{"nodes": [0]}],
+            "nodes": [
+                {"children": [1], "rotation": parent.to_array(), "scale": [2.0, 2.0, 2.0]},
+                {"name": "child_spawn", "translation": [1.0, 0.0, 0.0]}
+            ]
+        }))
+        .unwrap();
+        let scene = GltfScene::from_bytes(&bytes).unwrap();
+        let spawn = &scene.spawns[0];
+        let rotation = scene.marker_rotation(spawn.node).unwrap();
+        assert_vec3_close(rotation * Vec3::X, parent * Vec3::X);
+        assert_vec3_close(
+            scene.marker_rotation(0).unwrap() * Vec3::Z,
+            parent * Vec3::Z,
+        );
+        let z_up = scene.with_up_axis(Vec3::Z);
+        let basis = up_axis_rotation(Vec3::Z).unwrap();
+        assert_vec3_close(
+            z_up.marker_rotation(spawn.node).unwrap() * Vec3::X,
+            basis * (parent * Vec3::X),
+        );
+    }
+
+    #[test]
+    fn marker_rotation_rejects_missing_singular_and_non_finite_worlds() {
+        let mut scene = GltfScene::from_bytes(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{}]}"#,
+        )
+        .unwrap();
+        assert_eq!(scene.marker_rotation(0), Some(Quat::IDENTITY));
+        assert_eq!(scene.marker_rotation(1), None);
+        assert_eq!(scene.marker_rotation(usize::MAX), None);
+        for world in [
+            Mat4::ZERO,
+            Mat4::from_scale(vec3(1.0, 0.0, 1.0)),
+            Mat4::from_cols(
+                Vec3::X.extend(0.0),
+                Vec3::X.extend(0.0),
+                Vec3::Z.extend(0.0),
+                glam::Vec4::W,
+            ),
+            Mat4::from_scale(Vec3::splat(f32::NAN)),
+            Mat4::from_scale(Vec3::splat(f32::INFINITY)),
+        ] {
+            scene.nodes[0].world = world;
+            assert_eq!(scene.marker_rotation(0), None);
+        }
+    }
+
+    #[test]
+    fn marker_rotation_matches_signed_scale_decomposition_and_normalizes_shear() {
+        let mut scene = GltfScene::from_bytes(
+            br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{}]}"#,
+        )
+        .unwrap();
+        let rotation = Quat::from_rotation_y(-0.35);
+        scene.nodes[0].world =
+            Mat4::from_scale_rotation_translation(vec3(-2.0, 3.0, 4.0), rotation, Vec3::ZERO);
+        assert_vec3_close(
+            scene.marker_rotation(0).unwrap() * Vec3::X,
+            rotation * Vec3::X,
+        );
+        scene.nodes[0].world =
+            Mat4::from_scale_rotation_translation(Vec3::splat(1e19), rotation, Vec3::ZERO);
+        assert_vec3_close(
+            scene.marker_rotation(0).unwrap() * Vec3::X,
+            rotation * Vec3::X,
+        );
+        scene.nodes[0].world = Mat4::from_scale(vec3(2.0, 1.0, 1.0)) * Mat4::from_rotation_y(0.4);
+        let (_, decomposed, _) = scene.nodes[0].world.to_scale_rotation_translation();
+        let actual = scene.marker_rotation(0).unwrap();
+        assert!((actual.length() - 1.0).abs() < 1e-6);
+        assert_vec3_close(actual * Vec3::Z, decomposed.normalize() * Vec3::Z);
     }
 
     #[test]

@@ -157,6 +157,13 @@ is the export and loading tutorial, including `with_up_axis` and the
 collider / trigger / spawn names. Bot-added examples are listed in
 [examples/README.md](examples/README.md).
 
+`GltfScene::marker_rotation(spawn.node)` supplies a normalized world rotation
+for an imported spawn, including parent rotation and `with_up_axis` conversion.
+The application chooses its local forward axis; the existing `GltfSpawn`
+fields stay unchanged. Missing nodes and undecomposable transforms return
+`None`. Shear uses an approximate matrix decomposition; see the
+[marker orientation guide](docs/3d-guide.md#loading-and-materials).
+
 The default mesh chunk limits fit macroquad's default buffers. For larger
 chunks, pass `GltfMeshLimits` to `from_bytes_with_limits` and increase both
 `draw_call_vertex_capacity` and `draw_call_index_capacity` in the app's config
