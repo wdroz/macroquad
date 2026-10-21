@@ -246,14 +246,15 @@ impl AnimatedSprite {
     /// afterward to start the selected clip at time zero.
     ///
     /// # Panics
-    /// The index must exist.
+    /// The index must exist. An invalid index leaves the player unchanged.
     pub fn set_animation(&mut self, animation: usize) {
+        // Validate before changing the index, so callers that recover a panic
+        // retain a usable player rather than an out-of-bounds selection.
+        let selected = &self.animations[animation];
         let seconds = self.frame_time / f64::from(self.animations[self.current_animation].fps);
+        self.frame %= selected.frames;
+        self.frame_time = seconds * f64::from(selected.fps);
         self.current_animation = animation;
-
-        let animation = &self.animations[self.current_animation];
-        self.frame %= animation.frames;
-        self.frame_time = seconds * f64::from(animation.fps);
         self.finished = false;
     }
 

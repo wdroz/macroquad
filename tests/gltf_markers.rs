@@ -221,6 +221,57 @@ fn escaped_unicode_tags_before_roles_do_not_hide_extras_precedence() {
 }
 
 #[test]
+fn undecodable_unrelated_strings_do_not_hide_later_marker_fields() {
+    // Raw glTF extras may retain an unpaired JSON UTF-16 escape even though
+    // it cannot become a Rust string. Only the selected field needs decoding.
+    for escape in [r"\ud800", r"\udfff", r"\ud800x", r"\ud800\u0041"] {
+        let document = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scenes":[{{"nodes":[0]}}],
+            "nodes":[{{"name":"patrol_spawn.001","extras":{{
+                "note":"{escape}", "mq_tag":"guard", "mq_role":"trigger", "mq_shape":"box"
+            }}}}]}}"#
+        );
+        let scene = GltfScene::from_bytes(document.as_bytes()).unwrap();
+        assert_eq!(scene.marker_tag(0), Some("guard"), "{escape}");
+        assert!(scene.spawns.is_empty(), "{escape}");
+        assert_eq!(scene.colliders.len(), 1, "{escape}");
+        assert!(scene.colliders[0].trigger, "{escape}");
+    }
+}
+
+#[test]
+fn undecodable_tag_is_absent_without_changing_explicit_role() {
+    let scene = GltfScene::from_bytes(
+        br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+        "nodes":[{"name":"patrol_spawn.001","extras":{
+            "mq_tag":"\ud800", "mq_role":"trigger", "mq_shape":"box"
+        }}]}"#,
+    )
+    .unwrap();
+    assert_eq!(scene.marker_tag(0), None);
+    assert!(scene.spawns.is_empty());
+    assert_eq!(scene.colliders.len(), 1);
+    assert!(scene.colliders[0].trigger);
+}
+
+#[test]
+fn undecodable_keys_and_nested_metadata_do_not_hide_later_marker_fields() {
+    let scene = GltfScene::from_bytes(
+        br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+        "nodes":[{"name":"patrol_spawn.001","extras":{
+            "\ud800":"ignored",
+            "nested":[{"mq_tag":"hidden","text":"\udfff","brackets":"[{\"}]"}],
+            "mq\u005ftag":"visible", "mq\u005frole":"trigger", "mq_shape":"box"
+        }}]}"#,
+    )
+    .unwrap();
+    assert_eq!(scene.marker_tag(0), Some("visible"));
+    assert!(scene.spawns.is_empty());
+    assert_eq!(scene.colliders.len(), 1);
+    assert!(scene.colliders[0].trigger);
+}
+
+#[test]
 fn scenes_without_a_selected_scene_have_no_tag_metadata() {
     let scene = GltfScene::from_bytes(
         br#"{

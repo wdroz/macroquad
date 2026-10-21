@@ -10,7 +10,7 @@ use glam::{vec3, Vec3};
 
 use super::{Aabb, Capsule, Obb, Sphere};
 
-/// How far two contact times can be and still be the same hit.
+/// Tolerance for stopping negligible motion and zero-time contact handling.
 const TIME_SLOP: f32 = 1e-5;
 /// Motion into a surface below this is numeric noise, not a new collision.
 const INTO_SLOP: f32 = 1e-5;
@@ -588,9 +588,13 @@ fn consider(best: &mut Option<SlideHit>, hit: Option<SlideHit>, delta: Vec3) {
     let replace = match *best {
         None => true,
         Some(current) => {
-            if hit.t < current.t - TIME_SLOP {
+            // A time tolerance must not choose a later hit: its displacement
+            // can already pass an earlier face, and a subsequent sweep from
+            // inside the solid may no longer find that entry. This applies
+            // both to different solids and to different members of a group.
+            if hit.t < current.t {
                 true
-            } else if hit.t > current.t + TIME_SLOP {
+            } else if hit.t > current.t {
                 false
             } else {
                 hit.normal.dot(delta) < current.normal.dot(delta)

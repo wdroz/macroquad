@@ -263,3 +263,51 @@ fn finite_ray_endpoint_rejection_is_consistent_with_fallback_queries() {
         );
     }
 }
+
+#[test]
+fn cell_budget_and_signed_index_edges_preserve_boundary_hits() {
+    let mut grid = UniformGrid::new(1.0).unwrap();
+    // Exactly 4096 inclusive cells, then one more: both storage paths must
+    // retain the same boundary semantics for point and stationary-ray queries.
+    grid.insert(1, bounds([0.0; 3], [4095.0, 0.0, 0.0]));
+    grid.insert(2, bounds([0.0; 3], [4096.0, 0.0, 0.0]));
+    for (x, expected) in [(4095.0, vec![1, 2]), (4096.0, vec![2])] {
+        let at = vec3(x, 0.0, 0.0);
+        assert_eq!(grid.query_aabb(&point(at)), expected);
+        assert_eq!(grid.query_ray(&Ray::new(at, Vec3::ZERO), 0.0), expected);
+    }
+    // f32 cannot represent i32::MAX; use the nearest representable inside and
+    // outside values at either end of the supported cell-coordinate range.
+    for (index, x) in [-2147483904.0, -2147483648.0, 2147483520.0, 2147483648.0]
+        .into_iter()
+        .enumerate()
+    {
+        let id = index as u32 + 10;
+        let at = vec3(x, 0.0, 0.0);
+        assert!(grid.insert(id, point(at)));
+        assert_eq!(grid.query_aabb(&point(at)), vec![id]);
+        assert_eq!(grid.query_ray(&Ray::new(at, Vec3::X), 0.0), vec![id]);
+    }
+}
+
+#[test]
+fn cloned_grid_mutations_do_not_leave_stale_indexed_or_fallback_entries() {
+    let mut original = UniformGrid::new(1.0).unwrap();
+    let all = bounds([-f32::MAX; 3], [f32::MAX; 3]);
+    original.insert(1, point(Vec3::ZERO));
+    original.insert(2, all);
+    let mut cloned = original.clone();
+    // Exchange storage paths, then clear/rebuild only the clone.
+    cloned.insert(1, all);
+    cloned.insert(2, point(Vec3::ONE));
+    assert_eq!(cloned.query_aabb(&point(Vec3::ZERO)), vec![1]);
+    assert_eq!(cloned.query_aabb(&point(Vec3::ONE)), vec![1, 2]);
+    cloned.clear();
+    assert!(cloned.query_aabb(&all).is_empty());
+    assert!(cloned.query_ray(&Ray::default(), f32::INFINITY).is_empty());
+    assert_eq!(cloned.rebuild([(3, all), (3, point(Vec3::ONE))]), 1);
+    assert!(cloned.query_aabb(&point(Vec3::ZERO)).is_empty());
+    assert_eq!(cloned.query_aabb(&point(Vec3::ONE)), vec![3]);
+    assert_eq!(original.query_aabb(&point(Vec3::ZERO)), vec![1, 2]);
+    assert_eq!(original.query_aabb(&point(Vec3::ONE)), vec![2]);
+}

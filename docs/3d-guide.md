@@ -317,7 +317,11 @@ array. Missing/non-string/nested tags and missing node indices return `None`;
 empty strings, whitespace, case and Unicode are preserved. Tags are available
 for all loaded nodes and do not create a role or alter a shape. Clone and
 up-axis conversion preserve them. `GltfSpawn` and `GltfCollider` retain their
-existing fields.
+existing fields. An unpaired UTF-16 JSON escape cannot become a tag and returns
+`None`; undecodable unrelated extras keys or values do not hide later fields.
+Complete `GltfScene` literals written before tag support need a `marker_tags`
+entry per node (use `None` for untagged nodes). Loader calls populate that field
+automatically; keep it aligned if you reorder `nodes` yourself.
 
 For a spawn or another marker, read its world orientation with
 `scene.marker_rotation(node)`. The index is the scene-local `GltfNode` index,
@@ -1537,7 +1541,9 @@ takes world-space centers with one shared radius and returns one world-space
 **translation**, including any initial push-out. Add it once to the owning
 object's position, or add the same value to every center. All members advance
 to the earliest hit by any member, then share the remaining slide. Their
-separation stays fixed. Contact planes are retained for the move so sliding
+separation stays fixed. Close collision times still use the earlier time;
+only exactly equal times use the stronger opposing normal. The same ordering
+applies to `slide_sphere_solids`. Contact planes are retained for the move so sliding
 at a later contact cannot point back into an earlier one. Averaging independent
 `slide_sphere_solids` results could move the leading member through a wall; it
 does not produce this result.

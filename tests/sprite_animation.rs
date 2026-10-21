@@ -299,6 +299,25 @@ fn legacy_setters_keep_fractional_seconds_and_clear_completion() {
 }
 
 #[test]
+fn invalid_animation_selection_does_not_poison_a_recovered_player() {
+    let mut sprite = player(4, 8);
+    sprite.seek(0.1875).unwrap();
+    let before = snapshot(&sprite);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        sprite.set_animation(usize::MAX);
+    }));
+    assert!(
+        result.is_err(),
+        "the legacy setter still rejects invalid indices"
+    );
+    assert_eq!(snapshot(&sprite), before);
+    assert_eq!(sprite.frame().source_rect, Rect::new(8., 0., 8., 12.));
+    sprite.update_with_delta(0.0625).unwrap();
+    assert_eq!(sprite.current_frame(), 2);
+    assert_eq!(sprite.elapsed(), 0.25);
+}
+
+#[test]
 fn playback_mode_changes_preserve_progress_and_wrap_completed_once() {
     let mut sprite = player(4, 8);
     sprite.seek(0.1875).unwrap();

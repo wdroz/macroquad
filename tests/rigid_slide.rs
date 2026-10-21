@@ -303,3 +303,43 @@ fn rotated_room_keeps_tangent_after_a_long_sweep() {
         vec3(1.6928105, 1.6900139, -1.8393724),
     );
 }
+
+#[test]
+fn nearby_member_hits_never_advance_past_the_earlier_face() {
+    // The Y hit is less than 1e-5 of the frame after the X hit, but choosing
+    // its stronger normal must not move the first member through its wall.
+    let centers = [Vec3::ZERO, Vec3::Z * 20.0];
+    let walls = [
+        Aabb::from_min_max(vec3(10.5, -1000.0, -2.0), vec3(11.5, 1000.0, 2.0)),
+        Aabb::from_min_max(vec3(-1000.0, 20.501, 18.0), vec3(1000.0, 21.501, 22.0)),
+    ];
+    for speed in [100.0, 1000.0, 10_000.0] {
+        let delta = vec3(speed, speed * 2.0, 0.1);
+        for centers in [centers, [centers[1], centers[0]]] {
+            for walls in [walls, [walls[1], walls[0]]] {
+                let moved = slide_spheres_solids(&centers, 0.5, delta, &walls, &[], &[], &[]);
+                assert!(moved.x <= 10.0 + 1e-4, "passed the first face: {moved:?}");
+                close(moved, vec3(10.0, 20.001, delta.z));
+            }
+        }
+    }
+}
+
+#[test]
+fn nearby_solid_hits_on_one_member_keep_the_earlier_face() {
+    let centers = [Vec3::ZERO, Vec3::Z * 20.0];
+    let walls = [
+        Aabb::from_min_max(vec3(10.5, -1000.0, -2.0), vec3(11.5, 1000.0, 2.0)),
+        Aabb::from_min_max(vec3(-1000.0, 20.501, -2.0), vec3(1000.0, 21.501, 2.0)),
+    ];
+    let delta = vec3(100.0, 200.0, 0.1);
+    for walls in [walls, [walls[1], walls[0]]] {
+        let moved = slide_spheres_solids(&centers, 0.5, delta, &walls, &[], &[], &[]);
+        assert!(moved.x <= 10.0 + 1e-4, "passed the first face: {moved:?}");
+        close(moved, vec3(10.0, 20.001, delta.z));
+        close(
+            slide_sphere_solids(Vec3::ZERO, 0.5, delta, &walls, &[], &[], &[]),
+            moved,
+        );
+    }
+}

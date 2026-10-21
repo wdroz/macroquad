@@ -151,6 +151,11 @@ pub use morph::{
 /// markers on those nodes, in the same preorder. See the module docs for the
 /// markup and for which images are kept.
 ///
+/// Complete struct literals written before marker tags were added must include
+/// `marker_tags: vec![None; nodes.len()]` (using the node count before moving
+/// `nodes` into the scene). [`GltfNode`], [`GltfCollider`] and [`GltfSpawn`]
+/// literals are unchanged. Loader methods populate the metadata automatically.
+///
 /// # Example
 ///
 /// ```
@@ -693,6 +698,7 @@ impl GltfScene {
     /// is independent of the node's role; it neither creates a marker nor
     /// changes suffix recognition. Tags are case-sensitive, are not trimmed,
     /// and retain empty strings. Missing nodes, missing tags, non-string tags,
+    /// strings with unpaired UTF-16 JSON escapes,
     /// and tags nested inside another extras object return [`None`]. Cloning
     /// or applying [`Self::with_up_axis`] preserves these values.
     ///
@@ -1840,13 +1846,15 @@ fn json_object_string(json: &str, key: &str) -> Option<String> {
         if cursor.peek() == Some('}') {
             return None;
         }
-        let found = cursor.parse_string()?;
+        // Raw extras can contain an unpaired UTF-16 escape in a key. It
+        // cannot name a Rust string field, but must not hide later fields.
+        let found = cursor.parse_string();
         cursor.skip_ws();
         if cursor.bump() != Some(':') {
             return None;
         }
         cursor.skip_ws();
-        if found == key {
+        if found.as_deref() == Some(key) {
             return cursor.parse_string();
         }
         if !cursor.skip_value() {
@@ -1886,11 +1894,18 @@ impl<'a> JsonCursor<'a> {
         if self.bump() != Some('"') {
             return None;
         }
+        // Advance the outer cursor over the complete string before decoding.
+        // A decoding failure then cannot leave it in the middle of a key.
+        let start = self.rest;
+        self.skip_string_body()?;
+        let mut value = Self {
+            rest: &start[..start.len() - self.rest.len()],
+        };
         let mut out = String::new();
         loop {
-            match self.bump()? {
+            match value.bump()? {
                 '"' => return Some(out),
-                '\\' => out.push(self.unescape()?),
+                '\\' => out.push(value.unescape()?),
                 ch => out.push(ch),
             }
         }
@@ -1937,7 +1952,10 @@ impl<'a> JsonCursor<'a> {
     fn skip_value(&mut self) -> bool {
         self.skip_ws();
         match self.peek() {
-            Some('"') => self.parse_string().is_some(),
+            Some('"') => {
+                self.bump();
+                self.skip_string_body().is_some()
+            }
             Some('{') => self.skip_container('{', '}'),
             Some('[') => self.skip_container('[', ']'),
             Some('-' | '0'..='9') => self.skip_number(),

@@ -60,13 +60,22 @@ name: `scene.marker_tag(spawn.node) == Some("player")`. Tags are stored in
 `scene.marker_tags`, indexed by the same scene-local node indices as `scene.nodes`.
 Every loaded node has an entry, even without a marker role; a tag alone does
 not create a spawn or collider. Missing, nested, or non-string tags return
-`None`. Empty strings, case, whitespace, and Unicode are preserved. Nodes
+`None`. Strings with an unpaired UTF-16 JSON escape also return `None`; an
+undecodable unrelated extras key or value does not hide later marker fields.
+Empty strings, case, whitespace, and Unicode are preserved. Nodes
 outside the loaded scene have no entries. Cloning or changing the up axis keeps
 the tags unchanged. `GltfSpawn` still has `node`, `name`, and
 `position`; use `scene.marker_rotation(spawn.node)` for its world rotation, or
 `scene.nodes[spawn.node].world` for the full matrix. The rotation includes its
 parents and any up-axis conversion applied to the scene. Choose the player's
 collision radius in the game.
+
+If you construct a complete `GltfScene` literal, include `marker_tags` with
+one `None` per node (or the tags you supply). This field was added with marker
+tag support; older complete scene literals need that migration. `GltfNode`,
+`GltfCollider`, and `GltfSpawn` literals are unchanged. Normal loader calls
+populate the metadata automatically. Keep `marker_tags` aligned when editing
+or reordering `nodes` yourself.
 
 ## 1. Build a small level
 
