@@ -77,7 +77,8 @@ into a 320 x 180 target with a nonzero physical viewport. Resize the window and
 click the cyan sprite; Space flips display Y, X flips X, and R changes rotation.
 The shared [scene](support/camera_target_scene.rs) contains the public conversion
 calls. `camera_target_check` first checks actual native/WebGL marker pixels on
-the target and window, then leaves the same scene for real input. Build its
+the target and window, including nested camera/HUD viewport restoration, then
+leaves the same scene for real input. Build its
 WASM, copy `camera_target_check.wasm` beside its HTML host and serve the fork
 root. Exports `camera_target_status` (0 pending, 1 passed, 2 panic),
 `camera_target_checks`, `camera_target_hits`, `camera_target_misses`,

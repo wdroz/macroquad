@@ -22,6 +22,7 @@ pub struct Menu {
     pub modal: bool,
     pub show_extra: bool,
     pub apply_enabled: bool,
+    keep_enabled: bool,
     pub text: String,
     modal_text: String,
     modal_edit_mode: bool,
@@ -57,6 +58,7 @@ impl Menu {
             modal: false,
             show_extra: true,
             apply_enabled: true,
+            keep_enabled: true,
             text: String::new(),
             modal_text: String::new(),
             modal_edit_mode: false,
@@ -172,6 +174,7 @@ impl Menu {
                             self.rectangles[slot] = Rect::new(p.x, p.y, width, 32.);
                             if widgets::Button::new(label)
                                 .id(id)
+                                .enabled(id != KEEP || self.keep_enabled)
                                 .focus_color(YELLOW)
                                 .size(vec2(width, 32.))
                                 .ui(ui)
@@ -372,6 +375,22 @@ pub async fn run() -> Menu {
     assert_eq!(menu.legacy, 1, "legacy pointer behavior stays available");
     assert_eq!(menu.disabled_clicks, 0);
     root_ui().mouse_move((-100., -100.));
+    menu.modal = true;
+    settle(&mut menu).await;
+    root_ui().set_input_focus(KEEP);
+    menu.keep_enabled = false;
+    press(&mut menu, UiKey::Enter, false).await;
+    assert!(
+        menu.modal,
+        "disabling Confirm must not transfer its Enter activation to Close"
+    );
+    assert_eq!(focus(), Some(CLOSE));
+    press(&mut menu, UiKey::Enter, false).await;
+    assert!(
+        !menu.modal,
+        "a fresh Enter may activate the newly focused Close"
+    );
+    menu.keep_enabled = true;
     root_ui().set_input_focus(APPLY);
     settle(&mut menu).await;
     menu

@@ -159,5 +159,51 @@ pub async fn run() -> Menu {
         #[cfg(target_arch = "wasm32")]
         let _ = index;
     }
+    check_resize_scroll().await;
     menu
+}
+
+/// A newly enlarged group must use its clamped offset on the first resized frame.
+async fn check_resize_scroll() {
+    let draw = |height: f32| {
+        let mut first_y = 0.;
+        let mut scroll_y = 0.;
+        widgets::Group::new(
+            macroquad::hash!("resize-scroll-regression"),
+            vec2(240., height),
+        )
+        .position(vec2(12., 12.))
+        .content_layout(LayoutSettings::new(Layout::Vertical))
+        .ui(&mut root_ui(), |ui| {
+            first_y = ui.canvas().cursor().y;
+            for _ in 0..8 {
+                widgets::Button::new("Resize check")
+                    .size(vec2(200., 30.))
+                    .ui(ui);
+            }
+            scroll_y = ui.scroll().y;
+        });
+        (first_y, scroll_y)
+    };
+    let mut unscrolled_y = 0.;
+    for _ in 0..3 {
+        unscrolled_y = draw(100.).0;
+        next_frame().await;
+    }
+    root_ui().mouse_move((50., 50.));
+    root_ui().mouse_wheel(0., 10_000.);
+    draw(100.);
+    next_frame().await;
+    assert!(draw(100.).1 < 0., "fixture must start scrolled down");
+    next_frame().await;
+    let (first_y, scroll_y) = draw(300.);
+    assert!(
+        (first_y - unscrolled_y).abs() < 0.01,
+        "resizing must immediately restore the first control: {first_y}"
+    );
+    assert_eq!(
+        scroll_y, 0.,
+        "a taller viewport must not retain stale or negative bounds"
+    );
+    next_frame().await;
 }

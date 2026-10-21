@@ -3,5 +3,5 @@ mod fixture;
 
 #[macroquad::test]
 async fn target_and_display_picking_match_drawn_pixels() {
-    assert_eq!(fixture::run().await, 261);
+    assert_eq!(fixture::run().await, 429);
 }

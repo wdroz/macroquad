@@ -363,6 +363,10 @@ impl<'a> WindowContext<'a> {
             ..rect
         };
 
+        // The viewport may have grown since the previous submission. Clamp
+        // before capturing the shared scrollbar/child offset. Wheel and drag
+        // input keep their existing next-frame application to both.
+        self.window.cursor.scroll.update();
         self.window.cursor.scroll.scroll = Vec2::new(
             -self.window.cursor.scroll.rect.x,
             -self.window.cursor.scroll.rect.y,
@@ -382,8 +386,6 @@ impl<'a> WindowContext<'a> {
         } else {
             self.window.vertical_scroll_bar_width = 0.;
         }
-
-        self.window.cursor.scroll.update();
     }
 
     pub(crate) fn close(&mut self) {

@@ -20,16 +20,13 @@ pub struct Scroll {
 
 impl Scroll {
     pub fn scroll_to(&mut self, y: f32) {
-        self.rect.y = y
-            .max(self.inner_rect_previous_frame.y)
-            .min(self.inner_rect_previous_frame.h - self.rect.h + self.inner_rect_previous_frame.y);
+        let start = self.inner_rect_previous_frame.y;
+        let end = start + (self.inner_rect_previous_frame.h - self.rect.h).max(0.);
+        self.rect.y = y.max(start).min(end);
     }
 
     pub fn update(&mut self) {
-        self.rect.y =
-            self.rect.y.max(self.inner_rect_previous_frame.y).min(
-                self.inner_rect_previous_frame.h - self.rect.h + self.inner_rect_previous_frame.y,
-            );
+        self.scroll_to(self.rect.y);
     }
 }
 
@@ -198,5 +195,23 @@ impl Cursor {
             .combine_with(Rect::new(res.x, res.y, size.x, size.y));
 
         res + Vec2::new(self.area.x, self.area.y) + self.scroll.scroll + Vec2::new(self.ident, 0.)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn growing_scroll_viewport_past_content_keeps_the_leading_edge_visible() {
+        let mut cursor = Cursor::new(Rect::new(0., 0., 200., 100.), 0.);
+        cursor.scroll.inner_rect_previous_frame = Rect::new(0., 10., 200., 300.);
+        cursor.scroll.scroll_to(210.);
+        assert_eq!(cursor.scroll.rect.y, 210.);
+        cursor.scroll.rect.h = 500.;
+        cursor.scroll.update();
+        assert_eq!(cursor.scroll.rect.y, 10.);
+        cursor.scroll.scroll_to(1000.);
+        assert_eq!(cursor.scroll.rect.y, 10.);
     }
 }

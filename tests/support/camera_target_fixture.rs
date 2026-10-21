@@ -73,6 +73,31 @@ pub async fn run() -> u32 {
             unsafe { get_internal_gl().flush() };
             checked += check_markers(&camera, &target.texture.get_texture_data());
 
+            // Nested HUD/camera scopes must restore both an explicit viewport
+            // and the default None viewport, together with the matrix/pass.
+            clear_background(BLACK);
+            push_camera_state();
+            set_default_camera();
+            clear_background(BLACK);
+            push_camera_state();
+            set_camera(&Camera2D {
+                viewport: Some((0, 0, 40, 30)),
+                ..Default::default()
+            });
+            pop_camera_state();
+            let center = vec2(screen_width(), screen_height()) * 0.5;
+            draw_rectangle(center.x - 8., center.y - 8., 16., 16., WHITE);
+            assert_eq!(
+                pixel(&get_screen_data(), logical_to_physical(center)),
+                [255; 4],
+                "nested camera pop restores the full-window HUD viewport"
+            );
+            checked += 1;
+            pop_camera_state();
+            draw_markers();
+            unsafe { get_internal_gl().flush() };
+            checked += check_markers(&camera, &target.texture.get_texture_data());
+
             for flip_x in [false, true] {
                 for flip_y in [false, true] {
                     set_default_camera();

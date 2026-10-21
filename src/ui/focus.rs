@@ -111,6 +111,9 @@ impl KeyboardFocus {
             }
         } else if *focus == Some(id) && self.allows(scope) {
             *focus = None;
+            // A disabled or clipped control may yield modal focus to the next
+            // registered control, but its pending key press must not follow it.
+            self.activate = false;
         }
         enabled && self.allows(scope) && *focus == Some(id)
     }
@@ -234,6 +237,33 @@ mod tests {
         submit(&mut state, &mut focus, &[30]);
         state.new_frame(&mut focus);
         assert_eq!(focus, None);
+    }
+
+    #[test]
+    fn disabling_focused_modal_control_does_not_activate_its_replacement() {
+        for key in [KeyCode::Enter, KeyCode::Space] {
+            let mut state = KeyboardFocus::default();
+            let mut focus = None;
+            state.enter_modal(100, &mut focus);
+            state.register(10, Some(100), true, &mut focus);
+            state.register(20, Some(100), true, &mut focus);
+            state.new_frame(&mut focus);
+            state.enter_modal(100, &mut focus);
+            state.key_down(key, false, false);
+            assert!(!state.register(10, Some(100), false, &mut focus));
+            assert!(state.register(20, Some(100), true, &mut focus));
+            assert_eq!(focus, Some(20));
+            assert!(
+                !state.activate(true),
+                "a press aimed at the disabled control must not activate its replacement"
+            );
+            state.key_up(key);
+            state.key_down(key, false, false);
+            assert!(
+                state.activate(true),
+                "a fresh press still activates the replacement"
+            );
+        }
     }
 
     #[test]

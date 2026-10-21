@@ -35,6 +35,11 @@ use a negative height and matching Y origin when you want downward-positive Y
 Return to `set_default_camera()` for immediate screen-space drawing. `root_ui()`
 is rendered at the end of the frame using the default screen camera.
 
+For a temporary HUD or another camera followed by more world drawing, call
+`push_camera_state()` before switching and `pop_camera_state()` afterward.
+The stack restores the render pass, viewport, depth mode and matrix, including
+the automatic full-surface viewport. Nested pairs restore in reverse order.
+
 This complete example needs no assets. Copy it into a macroquad application's
 `src/main.rs`; clicking the button toggles the marker color.
 
@@ -156,7 +161,8 @@ between 390 x 400 and desktop dimensions. Space flips the displayed Y axis,
 X flips X, and R changes camera rotation. The shared
 [`scene`](../examples/support/camera_target_scene.rs) shows the complete mapping.
 `camera_target_check` checks actual target/window pixel colors for off-center
-markers, rotation, nonzero viewports and all display flip combinations, then
+markers, rotation, nonzero viewports, nested camera/HUD restoration and all
+display flip combinations, then
 leaves the same live scene available for native or real browser pointer input.
 Its HTML host supports DPR 1/2 and resize checks without external assets.
 
