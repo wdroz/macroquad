@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Rounded outlines</title>
+<style>html,body { margin:0; width:100%; height:100%; } #glcanvas { width:100%; height:100%; display:block; }</style>
+<canvas id="glcanvas" tabindex="1"></canvas>
+<!-- Build rounded_outlines_check for wasm32-unknown-unknown, copy the wasm beside
+     this file, then serve the repository root. The fixture checks pixels on GPU. -->
+<script src="../js/mq_js_bundle.js"></script>
+<script>load("rounded_outlines_check.wasm");</script>
+</html>

@@ -161,6 +161,104 @@ fn rounded_rectangle_geometry(
     Some((vertices, indices))
 }
 
+/// Draws an inward rounded rectangle outline in the current camera's coordinates.
+///
+/// The outer boundary matches [`draw_rectangle_rounded`], including its eight
+/// segments per quarter-circle. Finite radii clamp to `0..=min(w, h)/2`.
+/// `thickness` is the full inward width: the inner bounds are inset by that
+/// amount and the inner radius is `max(clamped_radius - thickness, 0)`.
+/// Widths at least half the smaller dimension fill the outer shape.
+///
+/// Nonpositive thickness, nonfinite geometry (including thickness), nonpositive
+/// dimensions, and bounds that overflow, collapse or invert at `f32` precision
+/// draw nothing, without changing renderer state. An inset too small to be
+/// represented at the supplied origin also draws nothing.
+///
+/// Shared vertices give single translucent coverage without overlapping seams.
+/// Edge antialiasing depends on framebuffer multisampling. Camera, material and
+/// clip state are preserved; this helper does not change widget skins.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// draw_rectangle_rounded_lines(20., 20., 240., 100., 12., 3., BLUE);
+/// ```
+pub fn draw_rectangle_rounded_lines(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
+    thickness: f32,
+    color: Color,
+) {
+    let Some((vertices, indices)) =
+        rounded_rectangle_outline_geometry(x, y, w, h, radius, thickness, color)
+    else {
+        return;
+    };
+    let context = get_context();
+    context.gl.texture(None);
+    context.gl.draw_mode(DrawMode::Triangles);
+    context.gl.geometry(&vertices, &indices);
+}
+
+fn rounded_rectangle_outline_geometry(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
+    thickness: f32,
+    color: Color,
+) -> Option<(Vec<Vertex>, Vec<u16>)> {
+    if !thickness.is_finite() || thickness <= 0. {
+        return None;
+    }
+    let (outer, fill_indices) = rounded_rectangle_geometry(x, y, w, h, radius, color)?;
+    let limit = w.min(h) * 0.5;
+    if thickness >= limit {
+        return Some((outer.to_vec(), fill_indices.to_vec()));
+    }
+    let (left, top, right, bottom) = (
+        x + thickness,
+        y + thickness,
+        x + w - thickness,
+        y + h - thickness,
+    );
+    if left <= x || top <= y || right >= x + w || bottom >= y + h {
+        return None;
+    }
+    let (inner, _) = rounded_rectangle_geometry(
+        left,
+        top,
+        right - left,
+        bottom - top,
+        (radius.max(0.).min(limit) - thickness).max(0.),
+        color,
+    )?;
+    let mut vertices = outer[1..].to_vec();
+    vertices.extend_from_slice(&inner[1..]);
+    // Use outer-bound UVs on both contours, as for the filled helper.
+    for vertex in &mut vertices {
+        vertex.uv = vec2((vertex.position.x - x) / w, (vertex.position.y - y) / h);
+    }
+    let mut indices = Vec::with_capacity(216);
+    for i in 0..36_u16 {
+        let next = (i + 1) % 36;
+        indices.extend_from_slice(&[i, next, i + 36, next, next + 36, i + 36]);
+    }
+    // Rounding must not fold any strip triangle back over its neighbor.
+    for triangle in indices.chunks_exact(3) {
+        let a = vertices[triangle[0] as usize].position.as_dvec3();
+        let b = vertices[triangle[1] as usize].position.as_dvec3() - a;
+        let c = vertices[triangle[2] as usize].position.as_dvec3() - a;
+        if b.x * c.y - b.y * c.x < 0. {
+            return None;
+        }
+    }
+    Some((vertices, indices))
+}
+
 /// Draws a rectangle outline with its top-left corner at `[x, y]` with size `[w, h]` (width going to
 /// the right, height going down), with a given line `thickness` and `color`.
 pub fn draw_rectangle_lines(x: f32, y: f32, w: f32, h: f32, thickness: f32, color: Color) {
@@ -687,5 +785,123 @@ mod rounded_rectangle_tests {
             assert_eq!(vertex.position.z, 0.);
         }
         assert!(indices.iter().all(|i| *i < 37));
+    }
+}
+
+#[cfg(test)]
+mod rounded_outline_tests {
+    use super::*;
+    use crate::color::colors::WHITE;
+
+    #[test]
+    fn invalid_outlines_do_not_need_a_context() {
+        for (x, y, w, h, r, t) in [
+            (0., 0., 20., 20., 4., 0.),
+            (0., 0., 20., 20., 4., -1.),
+            (0., 0., 20., 20., 4., f32::NAN),
+            (0., 0., 20., 20., 4., f32::INFINITY),
+            (f32::NAN, 0., 20., 20., 4., 2.),
+            (0., f32::INFINITY, 20., 20., 4., 2.),
+            (0., 0., 0., 20., 4., 2.),
+            (0., 0., 20., -1., 4., 2.),
+            (0., 0., f32::INFINITY, 20., 4., 2.),
+            (0., 0., 20., f32::NAN, 4., 2.),
+            (0., 0., 20., 20., f32::NAN, 2.),
+            (f32::MAX, 0., f32::MAX, 20., 4., 2.),
+            (1e20, 0., 1., 20., 4., 2.),
+            (1e8, 0., 10., 10., 5., 2.),
+            (1e8, 0., 32., 32., 0., 1.),
+        ] {
+            assert!(rounded_rectangle_outline_geometry(x, y, w, h, r, t, WHITE).is_none());
+            draw_rectangle_rounded_lines(x, y, w, h, r, t, WHITE);
+        }
+    }
+
+    #[test]
+    fn clamped_width_is_exactly_the_existing_fill() {
+        for r in [-10., 0., 4., 1000.] {
+            let (fill, fi) = rounded_rectangle_geometry(-5., 3., 80., 40., r, WHITE).unwrap();
+            for t in [20., 21., f32::MAX] {
+                let (v, i) =
+                    rounded_rectangle_outline_geometry(-5., 3., 80., 40., r, t, WHITE).unwrap();
+                assert_eq!(i, fi);
+                assert_eq!(
+                    v.iter().map(|v| v.position).collect::<Vec<_>>(),
+                    fill.iter().map(|v| v.position).collect::<Vec<_>>()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn ring_area_bounds_winding_and_single_coverage() {
+        for (w, h) in [(80_f32, 50_f32), (20., 80.), (20., 20.)] {
+            for r in [-10_f32, 0., 1., 8., 23.25, 1000.] {
+                for t in [0.25_f32, 1., 4., 9.75] {
+                    let color = Color::new(0.2, 0.4, 0.6, 0.5);
+                    let (v, i) =
+                        rounded_rectangle_outline_geometry(-7., 11., w, h, r, t, color).unwrap();
+                    let (outer, oi) = rounded_rectangle_geometry(-7., 11., w, h, r, color).unwrap();
+                    let (inner, ii) = rounded_rectangle_geometry(
+                        -7. + t,
+                        11. + t,
+                        w - 2. * t,
+                        h - 2. * t,
+                        (r.max(0.).min(w.min(h) * 0.5) - t).max(0.),
+                        color,
+                    )
+                    .unwrap();
+                    let cross = |a: Vertex, b: Vertex, c: Vertex| {
+                        let b = b.position.as_dvec3() - a.position.as_dvec3();
+                        let c = c.position.as_dvec3() - a.position.as_dvec3();
+                        b.x * c.y - b.y * c.x
+                    };
+                    let area = |v: &[Vertex], i: &[u16]| {
+                        i.chunks_exact(3)
+                            .map(|q| {
+                                cross(v[q[0] as usize], v[q[1] as usize], v[q[2] as usize]) * 0.5
+                            })
+                            .sum::<f64>()
+                    };
+                    assert!((area(&v, &i) - area(&outer, &oi) + area(&inner, &ii)).abs() < 0.002);
+                    for q in i.chunks_exact(3) {
+                        assert!(cross(v[q[0] as usize], v[q[1] as usize], v[q[2] as usize]) >= 0.);
+                    }
+                    for a in &v {
+                        assert!(
+                            a.position.x >= -7.
+                                && a.position.x <= -7. + w
+                                && a.position.y >= 11.
+                                && a.position.y <= 11. + h
+                        );
+                        assert_eq!(a.color, <[u8; 4]>::from(color));
+                        assert!((0. ..=1.).contains(&a.uv.x) && (0. ..=1.).contains(&a.uv.y));
+                    }
+                    for x in 0..37 {
+                        for y in 0..31 {
+                            let p = Vertex::new(
+                                -7. + (x as f32 + 0.31) * w / 37.,
+                                11. + (y as f32 + 0.23) * h / 31.,
+                                0.,
+                                0.,
+                                0.,
+                                color,
+                            );
+                            let count = i
+                                .chunks_exact(3)
+                                .filter(|q| {
+                                    let (a, b, c) =
+                                        (v[q[0] as usize], v[q[1] as usize], v[q[2] as usize]);
+                                    cross(a, b, p) > 1e-6
+                                        && cross(b, c, p) > 1e-6
+                                        && cross(c, a, p) > 1e-6
+                                })
+                                .count();
+                            assert!(count <= 1, "overlap {w} {h} {r} {t}");
+                        }
+                    }
+                }
+            }
+        }
     }
 }

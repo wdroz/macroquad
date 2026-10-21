@@ -506,6 +506,25 @@ depends on framebuffer multisampling. The helper preserves the active camera,
 material and clip; it has the same texture-reset behavior as `draw_rectangle`.
 It does not add an outline or change built-in widget skins.
 
+`draw_rectangle_rounded_lines(x, y, width, height, radius, thickness, color)`
+uses the same outer boundary, with the full stroke width placed inward. Radius
+clamps first; the inner radius is `max(radius - thickness, 0)`. Nonpositive
+thickness draws nothing; thickness at least half the smaller dimension fills
+the outer shape. Nonfinite geometry, empty dimensions, unrepresentable insets
+and bounds that collapse or invert at f32 precision draw nothing. Existing
+`draw_rectangle_lines` keeps its established behavior.
+
+```rust,no_run
+use macroquad::prelude::*;
+draw_rectangle_rounded_lines(16., 16., 280., 100., 12., 3., SKYBLUE);
+```
+
+The outline shares vertices for single translucent coverage, follows the current
+camera and respects `with_clip_rect` without changing camera/material/clip state.
+It does not automatically style widgets. `rounded_outlines_check` compares
+4,718,592 native/WebGL pixels against separate fill masks, including transformed
+cameras, nested clipping, square/clamped corners and empty/full-width strokes.
+
 Run `cargo run --example rounded_panels` to inspect adjustable radii and
 transparency. `rounded_panels_check` shares the native pixel regression and
 can also run on WebGL through its accompanying HTML host. The fixture checks

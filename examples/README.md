@@ -22,6 +22,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 | Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
 | Browser host | `canvas_host` | Density, framebuffer budgets, and a requested frame-rate cap |
+| Rounded outlines | `rounded_outlines_check` | Inward, radius/width-clamped outlines; shared native/WebGL alpha, camera and clipping regression |
 | Rounded panels | `rounded_panels`, `rounded_panels_check` | Filled radius-clamped panels and shared native/WebGL single-alpha-coverage regression; see the [UI and 2D guide](../docs/ui-2d-guide.md#draw-a-rounded-panel) |
 | Custom clipping | `scoped_clipping`, `scoped_clipping_check` | Nested document/image/text clips, precise empty intersections, DPI/target/viewport coordinates and restored HUD/UI state; see the [UI and 2D guide](../docs/ui-2d-guide.md#clip-custom-document-content) |
 | Responsive layout | `responsive_layout`, `responsive_layout_check` | Explicit padding/gaps, available-width sizing, row/column/free placement, alignment and oversized scrolling settings at compact/desktop sizes; see the [UI and 2D guide](../docs/ui-2d-guide.md#size-rows-columns-and-scrolling-settings) |
@@ -572,3 +573,10 @@ copy that WASM beside `timed_sprite_check.html` and serve the repository root
 so the host can load `../js/mq_js_bundle.js`. The same deterministic fixture
 checks 72,000 target pixels (15 states, including both horizontal flips) before
 the interactive scene starts. Escape closes the native example.
+
+Run `cargo run --example rounded_outlines_check` for the responsive outline demo.
+For WebGL, build it with `cargo build --release --target wasm32-unknown-unknown
+--example rounded_outlines_check`, copy the WASM beside
+`examples/rounded_outlines_check.html` and serve the repository root. Browser
+exports `rounded_outlines_status` (0 pending, 1 passed, 2 panic) and
+`rounded_outlines_pixels` report the shared GPU fixture result.
