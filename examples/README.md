@@ -25,6 +25,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Custom clipping | `scoped_clipping`, `scoped_clipping_check` | Nested document/image/text clips, precise empty intersections, DPI/target/viewport coordinates and restored HUD/UI state; see the [UI and 2D guide](../docs/ui-2d-guide.md#clip-custom-document-content) |
 | Responsive layout | `responsive_layout`, `responsive_layout_check` | Explicit padding/gaps, available-width sizing, row/column/free placement, alignment and oversized scrolling settings at compact/desktop sizes; see the [UI and 2D guide](../docs/ui-2d-guide.md#size-rows-columns-and-scrolling-settings) |
 | Keyboard buttons | `keyboard_buttons`, `keyboard_buttons_check` | Stable button IDs, mixed editbox Tab traversal, disabled controls, press-once activation and modal focus containment/restoration; see the [UI and 2D guide](../docs/ui-2d-guide.md#make-buttons-usable-from-the-keyboard) |
+| Keyboard sliders | `keyboard_sliders_check` | Opt-in keyboard steps, numeric-field/track traversal, endpoint clamping, invalid input, modal restoration and compact menus; see the [UI guide](../docs/ui-2d-guide.md#make-sliders-usable-from-the-keyboard) and [WebGL host](keyboard_sliders_check.html) |
 | Keyboard checkboxes | `keyboard_checkboxes_check` | Opt-in stable-ID checkbox focus, mixed editbox/button traversal, repeat suppression, disabled/removed controls, modal restoration and visible focus; see the [UI guide](../docs/ui-2d-guide.md#make-checkboxes-usable-from-the-keyboard) and [WebGL host](keyboard_checkboxes_check.html) |
 | Existing UI/2D samples | `camera`, `camera_transformations`, `texture`, `ui`, `ui_skins`, `platformer` | World/HUD cameras, texture drawing, widgets/skins, tile maps and platformer collisions; see the [UI and 2D guide](../docs/ui-2d-guide.md) for current limitations |
 
@@ -78,6 +79,7 @@ cargo run --example responsive_layout_check
 cargo run --example keyboard_buttons
 cargo run --example keyboard_buttons_check
 cargo run --example keyboard_checkboxes_check
+cargo run --example keyboard_sliders_check
 ```
 
 `camera_target` draws a generated asymmetric sprite through a rotated camera

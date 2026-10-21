@@ -281,6 +281,10 @@ impl<'a> Editbox<'a> {
     }
 
     pub fn ui(self, ui: &mut Ui, text: &mut String) -> bool {
+        self.ui_enabled(ui, text, true)
+    }
+
+    pub(crate) fn ui_enabled(self, ui: &mut Ui, text: &mut String, enabled: bool) -> bool {
         let mut text_vec = text.chars().collect::<Vec<_>>();
         let time = ui.time;
 
@@ -292,7 +296,8 @@ impl<'a> Editbox<'a> {
 
         let rect = Rect::new(pos.x, pos.y, self.size.x, self.size.y);
 
-        let hovered = context.keyboard_focus.allows(context.keyboard_scope)
+        let hovered = enabled
+            && context.keyboard_focus.allows(context.keyboard_scope)
             && context.focused
             && rect.contains(context.input.mouse_position)
             && context.window.painter.clipping_zone.map_or(true, |clip| {
@@ -333,7 +338,7 @@ impl<'a> Editbox<'a> {
         let input_focused = context.keyboard_focus.register(
             self.id,
             context.keyboard_scope,
-            context.keyboard_eligible && keyboard_visible,
+            enabled && context.keyboard_eligible && keyboard_visible,
             context.input_focus,
         );
 

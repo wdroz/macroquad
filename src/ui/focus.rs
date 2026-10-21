@@ -37,8 +37,9 @@ pub(crate) struct KeyboardFocus {
     saved_focus: Option<Id>,
     tab: Option<bool>,
     activate: bool,
-    held: [bool; 3],
-    opening_keys: [bool; 3],
+    held: [bool; 9],
+    opening_keys: [bool; 9],
+    slider_keys: [bool; 6],
 }
 
 impl KeyboardFocus {
@@ -47,6 +48,12 @@ impl KeyboardFocus {
             KeyCode::Tab => Some(0),
             KeyCode::Enter => Some(1),
             KeyCode::Space => Some(2),
+            KeyCode::Left => Some(3),
+            KeyCode::Right => Some(4),
+            KeyCode::Down => Some(5),
+            KeyCode::Up => Some(6),
+            KeyCode::Home => Some(7),
+            KeyCode::End => Some(8),
             _ => None,
         }
     }
@@ -56,8 +63,10 @@ impl KeyboardFocus {
             if !self.held[index] && !ctrl {
                 if key == KeyCode::Tab {
                     self.tab = Some(shift);
-                } else {
+                } else if index < 3 {
                     self.activate = true;
+                } else {
+                    self.slider_keys[index - 3] = true;
                 }
             }
             self.held[index] = true;
@@ -89,6 +98,7 @@ impl KeyboardFocus {
             // The key that opened a popup belongs to its opener.
             self.tab = None;
             self.activate = false;
+            self.slider_keys = [false; 6];
             self.opening_keys = self.held;
         }
         self.submitted_modal = Some(id);
@@ -114,6 +124,7 @@ impl KeyboardFocus {
             // A disabled or clipped control may yield modal focus to the next
             // registered control, but its pending key press must not follow it.
             self.activate = false;
+            self.slider_keys = [false; 6];
         }
         enabled && self.allows(scope) && *focus == Some(id)
     }
@@ -124,6 +135,21 @@ impl KeyboardFocus {
             true
         } else {
             false
+        }
+    }
+
+    pub fn slider_action(&mut self, focused: bool) -> Option<SliderAction> {
+        if !focused || self.tab.is_some() {
+            return None;
+        }
+        let keys = std::mem::take(&mut self.slider_keys);
+        if keys[5] {
+            Some(SliderAction::End)
+        } else if keys[4] {
+            Some(SliderAction::Start)
+        } else {
+            let direction = (keys[1] || keys[3]) as i8 - (keys[0] || keys[2]) as i8;
+            (direction != 0).then_some(SliderAction::Step(direction))
         }
     }
 
@@ -172,12 +198,54 @@ impl KeyboardFocus {
         self.submitted_modal = None;
         self.tab = None;
         self.activate = false;
+        self.slider_keys = [false; 6];
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum SliderAction {
+    Start,
+    End,
+    Step(i8),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slider_edges_cancel_repeat_and_respect_modal_opening_and_disabled_focus() {
+        let mut state = KeyboardFocus::default();
+        let mut focus = Some(10);
+        state.key_down(KeyCode::Right, false, false);
+        assert_eq!(state.slider_action(true), Some(SliderAction::Step(1)));
+        state.new_frame(&mut focus);
+        state.key_down(KeyCode::Right, false, false);
+        assert_eq!(state.slider_action(true), None);
+        state.key_up(KeyCode::Right);
+        state.key_down(KeyCode::Right, false, false);
+        state.key_down(KeyCode::Left, false, false);
+        assert_eq!(state.slider_action(true), None);
+        state.key_down(KeyCode::Home, false, false);
+        state.key_down(KeyCode::End, false, false);
+        assert_eq!(state.slider_action(true), Some(SliderAction::End));
+        state.key_up(KeyCode::End);
+        state.key_down(KeyCode::End, false, false);
+        state.enter_modal(100, &mut focus);
+        assert_eq!(state.slider_action(true), None);
+        assert!(state.suppress_key(KeyCode::End));
+        state.key_down(KeyCode::End, false, false);
+        assert_eq!(state.slider_action(true), None);
+        state.key_up(KeyCode::End);
+        state.key_down(KeyCode::End, false, false);
+        state.register(20, Some(100), true, &mut focus);
+        assert!(!state.register(20, Some(100), false, &mut focus));
+        state.register(30, Some(100), true, &mut focus);
+        assert_eq!(state.slider_action(true), None);
+        state.key_up(KeyCode::End);
+        state.key_down(KeyCode::End, false, true);
+        assert_eq!(state.slider_action(true), None);
+    }
 
     #[test]
     fn fully_clipped_or_invalid_controls_are_not_keyboard_candidates() {

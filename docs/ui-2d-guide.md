@@ -386,7 +386,7 @@ editbox, disabled save state and a reset confirmation. The native/WebGL
 Space, removal/disabling, modal containment/restoration and legacy pointer
 activation. Its browser exports expose counters, focus and widget rectangles
 for additional real DOM keyboard/pointer checks; the fixture's scripted public
-`InputHandler` calls alone are not OS input. Slider keyboard controls,
+`InputHandler` calls alone are not OS input. See the slider section below;
 gamepad navigation and platform accessibility bridges remain separate work.
 
 ## Make checkboxes usable from the keyboard
@@ -415,6 +415,44 @@ toggle on pointer release over the square. Keyboard activation and pointer relea
 in the same frame produce one toggle. `keyboard_checkboxes_check` runs the shared
 public-input fixture and then leaves the menu live for OS/DOM input; its HTML host
 supports resize and DPR checks. Gamepad and accessibility bridges remain deferred.
+
+## Make sliders usable from the keyboard
+
+Opt into `Slider::keyboard_focus(true)` and supply `keyboard_step(step)` in value
+units. The existing numeric field is the first Tab stop, followed by the track;
+checkboxes, buttons and other editboxes share the same stable-ID order and modal
+rules. Both slider IDs (the supplied ID and its derived editbox ID) must remain
+unique in the `Ui`. Existing calls keep pointer dragging and numeric text editing.
+
+```rust,no_run
+use macroquad::{prelude::*, ui::{hash, root_ui, widgets}};
+let mut volume = 0.5;
+widgets::Slider::new(hash!("volume"), 0.0..1.0)
+    .keyboard_focus(true).keyboard_step(0.1)
+    .focus_color(YELLOW).label("Volume")
+    .ui(&mut root_ui(), &mut volume);
+```
+
+Right/Up increase and Left/Down decrease once per fresh press, with no held-key
+repeat. Home selects the exact start and End the exact end, including the normally
+exclusive range end. Opposing arrow directions cancel; two arrows in the same
+direction count once. End takes precedence over Home, then arrows. Ctrl-modified
+keys have no track action. Values clamp before stepping, compute in f64 and round
+to f32, so a step smaller than local f32 resolution can leave the value unchanged.
+
+For opted-in sliders, nonfinite values/endpoints, nonascending ranges and missing,
+nonfinite or nonpositive steps disable all input without changing caller data.
+`enabled(false)` also disables both Tab stops, numeric editing and dragging.
+The separate inset track outline defaults to blue and can use `focus_color`;
+fully clipped controls do not enter traversal. After pointer dragging, an opted-in
+track keeps focus for keyboard adjustment. Numeric fields retain normal text
+cursor keys, independently of track actions. During an active drag, pointer
+position wins over a keyboard adjustment in the same frame.
+
+[`keyboard_sliders_check`](../examples/keyboard_sliders_check.rs) runs the shared
+public-input checks and leaves a compact settings menu live for native/DOM input.
+The [HTML host](../examples/keyboard_sliders_check.html) uses the same fixture.
+Gamepad navigation and accessibility bridges remain deferred.
 
 ## Draw a rounded panel
 

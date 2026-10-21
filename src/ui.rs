@@ -1397,6 +1397,12 @@ pub(crate) mod ui_context {
                 (KeyCode::Tab, megaui::KeyCode::Tab),
                 (KeyCode::Enter, megaui::KeyCode::Enter),
                 (KeyCode::Space, megaui::KeyCode::Space),
+                (KeyCode::Left, megaui::KeyCode::Left),
+                (KeyCode::Right, megaui::KeyCode::Right),
+                (KeyCode::Down, megaui::KeyCode::Down),
+                (KeyCode::Up, megaui::KeyCode::Up),
+                (KeyCode::Home, megaui::KeyCode::Home),
+                (KeyCode::End, megaui::KeyCode::End),
             ];
             for (key, ui_key) in navigation_keys {
                 if is_key_released(key) {
