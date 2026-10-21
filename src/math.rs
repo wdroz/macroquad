@@ -134,7 +134,10 @@ pub use rect::{Rect, RectOffset};
 pub use rigid_body::{
     CollisionResponseError, RigidBody, RigidBodyError, RigidBodyMode, RigidBodyShape,
 };
-pub use slide::{slide_sphere, slide_sphere_solids, slide_spheres_solids};
+pub use slide::{
+    slide_sphere, slide_sphere_solids, slide_spheres_solids, slide_spheres_solids_with_contacts,
+    SlideSolidKind, SphereSlideContact, SphereSlidePhase,
+};
 pub use sphere::Sphere;
 pub use sweep::SweepHit;
 pub use triangle::Triangle;

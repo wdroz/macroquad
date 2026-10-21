@@ -1626,6 +1626,45 @@ explicit sweep and contact queries when a response also needs a hit normal.
 
 ### Rigid groups of spheres
 
+For contact identity, `slide_spheres_solids_with_contacts` takes the same inputs
+plus a synchronous callback and returns the identical translation. Each
+`SphereSlideContact` carries `solid_kind`, the original per-kind `solid_index`,
+`sample_index`, a world-space outward `normal`, and `PushOut` or `Sweep` phase.
+The solver allocates no contact list; collect into caller-owned storage if needed.
+
+Sweeps select earliest exact time, then the strongest opposing normal, then
+sample order, AABB/OBB/sphere/capsule order, then slice index. Push-outs select
+the largest squared correction, with the same sample/kind/index tie order.
+Only applied initial corrections and selected sweep contacts are reported,
+including blocked final probes; repeated events are possible. Zero motion
+reports initial recovery only. Tangent touches alone and invalid/free moves
+emit nothing. Events are solver observations, not a complete contact manifold
+or a promise that every reported final probe was reached.
+
+```rust
+use macroquad::prelude::*;
+let wall = Aabb::from_center_size(Vec3::ZERO, vec3(1., 8., 8.));
+let requested = vec3(3., 0., 1.);
+let up = Vec3::Z; // Caller-defined; the helper assumes no up direction.
+let mut into_wall = 0.0_f32;
+let moved = slide_spheres_solids_with_contacts(
+    &[vec3(-2., 0., 0.), vec3(-3., 0., 0.)], 0.5, requested,
+    &[wall], &[], &[], &[], |contact| {
+        if contact.phase == SphereSlidePhase::Sweep && contact.normal.dot(up).abs() < 0.1 {
+            into_wall = into_wall.max(-requested.dot(contact.normal));
+        }
+    },
+);
+assert!((moved - vec3(1., 0., 1.)).length() < 1e-4);
+assert_eq!(into_wall, 3.0);
+```
+
+Use each normal with the caller's requested motion/up for scrape or stop
+feedback. The callback does not change velocity, add friction or solve yaw.
+`cargo test --test slide_contacts --test slide_contact_allocations` checks
+identity, ordering, shared translation and allocation-free stack collection.
+
+
 `slide_spheres_solids(centers, radius, delta, aabbs, obbs, spheres, capsules)`
 takes world-space centers with one shared radius and returns one world-space
 **translation**, including any initial push-out. Add it once to the owning

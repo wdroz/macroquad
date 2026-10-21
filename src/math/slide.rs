@@ -22,6 +22,36 @@ const PLANE_SLOP: f32 = 1e-4;
 struct SlideHit {
     t: f32,
     normal: Vec3,
+    contact: Option<SphereSlideContact>,
+}
+
+/// Kind of static solid in the corresponding caller-provided slice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SlideSolidKind {
+    Aabb,
+    Obb,
+    Sphere,
+    Capsule,
+}
+
+/// Why the solver selected a contact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SphereSlidePhase {
+    /// An initial overlap correction actually applied to the whole group.
+    PushOut,
+    /// A selected sweep contact, including a blocking final clear-path probe.
+    Sweep,
+}
+
+/// One selected contact, in world coordinates; indices refer to input slices.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SphereSlideContact {
+    pub solid_kind: SlideSolidKind,
+    pub solid_index: usize,
+    pub sample_index: usize,
+    /// Unit outward normal, independent of any caller-defined up direction.
+    pub normal: Vec3,
+    pub phase: SphereSlidePhase,
 }
 
 /// Moves a sphere by `delta` and slides it along [`Aabb`] and [`Obb`] faces.
@@ -153,6 +183,29 @@ pub fn slide_sphere_solids(
     spheres: &[Sphere],
     capsules: &[Capsule],
 ) -> Vec3 {
+    slide_sphere_solids_observed(
+        center,
+        radius,
+        delta,
+        aabbs,
+        obbs,
+        spheres,
+        capsules,
+        &mut |_| {},
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slide_sphere_solids_observed(
+    center: Vec3,
+    radius: f32,
+    delta: Vec3,
+    aabbs: &[Aabb],
+    obbs: &[Obb],
+    spheres: &[Sphere],
+    capsules: &[Capsule],
+    on_contact: &mut impl FnMut(SphereSlideContact),
+) -> Vec3 {
     if !center.is_finite() || !delta.is_finite() {
         return center;
     }
@@ -166,7 +219,7 @@ pub fn slide_sphere_solids(
         spheres,
         capsules,
     };
-    let mut position = resolve_penetration(center, radius, &solids);
+    let mut position = resolve_penetration(center, radius, &solids, on_contact);
     if !position.is_finite() {
         return center;
     }
@@ -177,7 +230,9 @@ pub fn slide_sphere_solids(
             remaining = Vec3::ZERO;
             break;
         }
-        let Some(hit) = first_hit(position, radius, remaining, &solids) else {
+        let Some(hit) =
+            first_hit(position, radius, remaining, &solids).map(|hit| report_hit(hit, on_contact))
+        else {
             position += remaining;
             remaining = Vec3::ZERO;
             break;
@@ -206,7 +261,8 @@ pub fn slide_sphere_solids(
     // if the rest is clear. A tangent that still meets a shape later stays
     // put, so the sphere does not tunnel through the next solid.
     if remaining.length_squared() > TIME_SLOP * TIME_SLOP {
-        match first_hit(position, radius, remaining, &solids) {
+        match first_hit(position, radius, remaining, &solids).map(|hit| report_hit(hit, on_contact))
+        {
             None => position += remaining,
             Some(hit) if hit.t <= TIME_SLOP => {
                 let into = remaining.dot(hit.normal);
@@ -214,7 +270,9 @@ pub fn slide_sphere_solids(
                     remaining -= hit.normal * into;
                 }
                 if remaining.length_squared() > TIME_SLOP * TIME_SLOP
-                    && first_hit(position, radius, remaining, &solids).is_none()
+                    && first_hit(position, radius, remaining, &solids)
+                        .map(|hit| report_hit(hit, on_contact))
+                        .is_none()
                 {
                     position += remaining;
                 }
@@ -283,6 +341,29 @@ pub fn slide_spheres_solids(
     spheres: &[Sphere],
     capsules: &[Capsule],
 ) -> Vec3 {
+    slide_spheres_solids_observed(
+        centers,
+        radius,
+        delta,
+        aabbs,
+        obbs,
+        spheres,
+        capsules,
+        &mut |_| {},
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn slide_spheres_solids_observed(
+    centers: &[Vec3],
+    radius: f32,
+    delta: Vec3,
+    aabbs: &[Aabb],
+    obbs: &[Obb],
+    spheres: &[Sphere],
+    capsules: &[Capsule],
+    on_contact: &mut impl FnMut(SphereSlideContact),
+) -> Vec3 {
     if !delta.is_finite() || centers.iter().any(|center| !center.is_finite()) {
         return Vec3::ZERO;
     }
@@ -290,8 +371,9 @@ pub fn slide_spheres_solids(
         return delta;
     }
     if let [center] = centers {
-        return slide_sphere_solids(*center, radius, delta, aabbs, obbs, spheres, capsules)
-            - *center;
+        return slide_sphere_solids_observed(
+            *center, radius, delta, aabbs, obbs, spheres, capsules, on_contact,
+        ) - *center;
     }
 
     let solids = SlideSolids {
@@ -300,7 +382,7 @@ pub fn slide_spheres_solids(
         spheres,
         capsules,
     };
-    let mut translation = resolve_group_penetration(centers, radius, &solids);
+    let mut translation = resolve_group_penetration(centers, radius, &solids, on_contact);
     if !translation.is_finite() {
         return Vec3::ZERO;
     }
@@ -310,7 +392,9 @@ pub fn slide_spheres_solids(
         if remaining.length_squared() <= TIME_SLOP * TIME_SLOP {
             return translation;
         }
-        let Some(hit) = first_group_hit(centers, translation, radius, remaining, &solids) else {
+        let Some(hit) = first_group_hit(centers, translation, radius, remaining, &solids)
+            .map(|hit| report_hit(hit, on_contact))
+        else {
             return translation + remaining;
         };
         let t = hit.t.clamp(0.0, 1.0);
@@ -321,11 +405,76 @@ pub fn slide_spheres_solids(
     // Never apply a leftover based only on one member's clear path, even
     // after a zero-time contact or a numerically tiny projection.
     if remaining.length_squared() > TIME_SLOP * TIME_SLOP
-        && first_group_hit(centers, translation, radius, remaining, &solids).is_none()
+        && first_group_hit(centers, translation, radius, remaining, &solids)
+            .map(|hit| report_hit(hit, on_contact))
+            .is_none()
     {
         translation += remaining;
     }
     translation
+}
+
+/// Slides the same group as [`slide_spheres_solids`], streaming selected contacts.
+///
+/// Returns exactly the same shared translation. The callback adds no internal
+/// allocation, buffering, sorting or deduplication; repeated contacts can occur.
+/// It runs synchronously in solver order. Store events in caller-owned storage
+/// if needed. Only selected contacts are reported, not every simultaneous hit
+/// or a final overlap manifold. A tangent touch alone emits no sweep event.
+///
+/// Sweeps choose the earliest exact time, then the normal with the most negative
+/// dot product with the current motion. Exact ties keep the earlier sample,
+/// then AABB/OBB/sphere/capsule, then slice index (and the primitive's existing
+/// face ordering). Initial recovery chooses the largest squared correction;
+/// exact ties use the same sample/kind/index order. Only corrections actually
+/// applied emit `PushOut`, before any `Sweep`. Zero or negligible requested
+/// motion can therefore report push-outs but no sweeps; resting touches emit
+/// nothing. Invalid/free-move inputs emit nothing. Normals point out of solids
+/// in world space; interpreting a floor or head-on impact is caller policy.
+/// Final blocked clear-path probes emit sweeps even if the pass budget prevents
+/// moving to that contact. Single-sample behavior remains the legacy solver.
+///
+/// ```
+/// use macroquad::prelude::*;
+/// let wall = Aabb::from_center_size(Vec3::ZERO, vec3(1., 8., 8.));
+/// let mut contact = None;
+/// let moved = slide_spheres_solids_with_contacts(
+///     &[vec3(-2., 0., 0.)], 0.5, Vec3::X * 3., &[wall], &[], &[], &[],
+///     |event| contact = Some(event),
+/// );
+/// assert_eq!(moved, Vec3::X);
+/// let event = contact.unwrap();
+/// assert_eq!(event.solid_kind, SlideSolidKind::Aabb);
+/// assert_eq!(event.normal, -Vec3::X);
+/// ```
+#[allow(clippy::too_many_arguments)]
+pub fn slide_spheres_solids_with_contacts(
+    centers: &[Vec3],
+    radius: f32,
+    delta: Vec3,
+    aabbs: &[Aabb],
+    obbs: &[Obb],
+    spheres: &[Sphere],
+    capsules: &[Capsule],
+    mut on_contact: impl FnMut(SphereSlideContact),
+) -> Vec3 {
+    slide_spheres_solids_observed(
+        centers,
+        radius,
+        delta,
+        aabbs,
+        obbs,
+        spheres,
+        capsules,
+        &mut on_contact,
+    )
+}
+
+fn report_hit(hit: SlideHit, on_contact: &mut impl FnMut(SphereSlideContact)) -> SlideHit {
+    if let Some(contact) = hit.contact {
+        on_contact(contact);
+    }
+    hit
 }
 
 /// Project onto the intersection of the encountered outward half-spaces.
@@ -375,55 +524,32 @@ fn first_group_hit(
     solids: &SlideSolids<'_>,
 ) -> Option<SlideHit> {
     let mut best = None;
-    for center in centers {
+    for (sample_index, center) in centers.iter().enumerate() {
         consider(
             &mut best,
-            first_hit(*center + translation, radius, delta, solids),
+            first_hit(*center + translation, radius, delta, solids).map(|mut hit| {
+                hit.contact.as_mut().unwrap().sample_index = sample_index;
+                hit
+            }),
             delta,
         );
     }
     best
 }
 
-fn resolve_group_penetration(centers: &[Vec3], radius: f32, solids: &SlideSolids<'_>) -> Vec3 {
+fn resolve_group_penetration(
+    centers: &[Vec3],
+    radius: f32,
+    solids: &SlideSolids<'_>,
+    on_contact: &mut impl FnMut(SphereSlideContact),
+) -> Vec3 {
     let mut translation = Vec3::ZERO;
     for _ in 0..8 {
-        let mut best = None;
-        let mut best_len = 0.0;
-        for center in centers {
-            let center = *center + translation;
-            for aabb in solids.aabbs {
-                consider_push(
-                    &mut best,
-                    &mut best_len,
-                    push_out_aabb(center, radius, aabb),
-                );
-            }
-            for obb in solids.obbs {
-                consider_push(&mut best, &mut best_len, push_out_obb(center, radius, obb));
-            }
-            for sphere in solids.spheres {
-                consider_push(
-                    &mut best,
-                    &mut best_len,
-                    push_out_sphere(center, radius, sphere),
-                );
-            }
-            for capsule in solids.capsules {
-                consider_push(
-                    &mut best,
-                    &mut best_len,
-                    push_out_capsule(center, radius, capsule),
-                );
-            }
-        }
-        let Some(push) = best else {
+        let Some((push, contact)) = largest_push(centers, Some(translation), radius, solids) else {
             break;
         };
-        if best_len <= TIME_SLOP * TIME_SLOP || !push.is_finite() {
-            break;
-        }
         translation += push;
+        on_contact(contact);
     }
     translation
 }
@@ -435,55 +561,80 @@ struct SlideSolids<'a> {
     capsules: &'a [Capsule],
 }
 
-fn resolve_penetration(center: Vec3, radius: f32, solids: &SlideSolids<'_>) -> Vec3 {
-    let mut center = center;
+fn resolve_penetration(
+    mut center: Vec3,
+    radius: f32,
+    solids: &SlideSolids<'_>,
+    on_contact: &mut impl FnMut(SphereSlideContact),
+) -> Vec3 {
     for _ in 0..8 {
-        let mut best: Option<Vec3> = None;
-        let mut best_len = 0.0;
-        for aabb in solids.aabbs {
-            consider_push(
-                &mut best,
-                &mut best_len,
-                push_out_aabb(center, radius, aabb),
-            );
-        }
-        for obb in solids.obbs {
-            consider_push(&mut best, &mut best_len, push_out_obb(center, radius, obb));
-        }
-        for sphere in solids.spheres {
-            consider_push(
-                &mut best,
-                &mut best_len,
-                push_out_sphere(center, radius, sphere),
-            );
-        }
-        for capsule in solids.capsules {
-            consider_push(
-                &mut best,
-                &mut best_len,
-                push_out_capsule(center, radius, capsule),
-            );
-        }
-        let Some(push) = best else {
+        let Some((push, contact)) = largest_push(&[center], None, radius, solids) else {
             break;
         };
-        if best_len <= TIME_SLOP * TIME_SLOP || !push.is_finite() {
-            break;
-        }
         center += push;
+        on_contact(contact);
     }
     center
 }
 
-fn consider_push(best: &mut Option<Vec3>, best_len: &mut f32, push: Option<Vec3>) {
-    let Some(push) = push else {
-        return;
-    };
-    let len = push.length_squared();
-    if len > *best_len {
-        *best = Some(push);
-        *best_len = len;
+fn largest_push(
+    centers: &[Vec3],
+    translation: Option<Vec3>,
+    radius: f32,
+    solids: &SlideSolids<'_>,
+) -> Option<(Vec3, SphereSlideContact)> {
+    let mut best = None;
+    let mut best_len = 0.0;
+    for (sample_index, center) in centers.iter().enumerate() {
+        let center = translation.map_or(*center, |offset| *center + offset);
+        let mut consider = |push: Option<Vec3>, solid_kind, solid_index| {
+            if let Some(push) = push {
+                let len = push.length_squared();
+                if len > best_len {
+                    best_len = len;
+                    best = Some((
+                        push,
+                        SphereSlideContact {
+                            solid_kind,
+                            solid_index,
+                            sample_index,
+                            normal: push.as_dvec3().normalize().as_vec3(),
+                            phase: SphereSlidePhase::PushOut,
+                        },
+                    ));
+                }
+            }
+        };
+        for (index, solid) in solids.aabbs.iter().enumerate() {
+            consider(
+                push_out_aabb(center, radius, solid),
+                SlideSolidKind::Aabb,
+                index,
+            );
+        }
+        for (index, solid) in solids.obbs.iter().enumerate() {
+            consider(
+                push_out_obb(center, radius, solid),
+                SlideSolidKind::Obb,
+                index,
+            );
+        }
+        for (index, solid) in solids.spheres.iter().enumerate() {
+            consider(
+                push_out_sphere(center, radius, solid),
+                SlideSolidKind::Sphere,
+                index,
+            );
+        }
+        for (index, solid) in solids.capsules.iter().enumerate() {
+            consider(
+                push_out_capsule(center, radius, solid),
+                SlideSolidKind::Capsule,
+                index,
+            );
+        }
     }
+    best.filter(|(push, _)| best_len > TIME_SLOP * TIME_SLOP && push.is_finite())
 }
 
 fn push_out_aabb(center: Vec3, radius: f32, aabb: &Aabb) -> Option<Vec3> {
@@ -550,35 +701,48 @@ fn shortest_axis_push(center: Vec3, radius: f32, min: Vec3, max: Vec3) -> Vec3 {
 }
 
 fn first_hit(center: Vec3, radius: f32, delta: Vec3, solids: &SlideSolids<'_>) -> Option<SlideHit> {
-    let mut best: Option<SlideHit> = None;
-    for aabb in solids.aabbs {
-        if usable_aabb(aabb) {
-            consider(
-                &mut best,
-                cast_sphere_aabb(center, radius, delta, aabb),
-                delta,
+    let mut best = None;
+    let mut candidate = |hit: Option<SlideHit>, solid_kind, solid_index| {
+        let hit = hit.map(|hit| SlideHit {
+            contact: Some(SphereSlideContact {
+                solid_kind,
+                solid_index,
+                sample_index: 0,
+                normal: hit.normal,
+                phase: SphereSlidePhase::Sweep,
+            }),
+            ..hit
+        });
+        consider(&mut best, hit, delta);
+    };
+    for (index, solid) in solids.aabbs.iter().enumerate() {
+        if usable_aabb(solid) {
+            candidate(
+                cast_sphere_aabb(center, radius, delta, solid),
+                SlideSolidKind::Aabb,
+                index,
             );
         }
     }
-    for obb in solids.obbs {
-        consider(
-            &mut best,
-            cast_sphere_obb(center, radius, delta, obb),
-            delta,
+    for (index, solid) in solids.obbs.iter().enumerate() {
+        candidate(
+            cast_sphere_obb(center, radius, delta, solid),
+            SlideSolidKind::Obb,
+            index,
         );
     }
-    for sphere in solids.spheres {
-        consider(
-            &mut best,
-            cast_sphere_sphere(center, radius, delta, sphere),
-            delta,
+    for (index, solid) in solids.spheres.iter().enumerate() {
+        candidate(
+            cast_sphere_sphere(center, radius, delta, solid),
+            SlideSolidKind::Sphere,
+            index,
         );
     }
-    for capsule in solids.capsules {
-        consider(
-            &mut best,
-            cast_sphere_capsule(center, radius, delta, capsule),
-            delta,
+    for (index, solid) in solids.capsules.iter().enumerate() {
+        candidate(
+            cast_sphere_capsule(center, radius, delta, solid),
+            SlideSolidKind::Capsule,
+            index,
         );
     }
     best
@@ -748,7 +912,11 @@ fn cast_sphere_obb(center: Vec3, radius: f32, delta: Vec3, obb: &Obb) -> Option<
     if !normal.is_finite() {
         return None;
     }
-    Some(SlideHit { t: hit.t, normal })
+    Some(SlideHit {
+        t: hit.t,
+        normal,
+        contact: None,
+    })
 }
 
 fn cast_sphere_aabb(center: Vec3, radius: f32, delta: Vec3, aabb: &Aabb) -> Option<SlideHit> {
@@ -820,6 +988,7 @@ fn cast_face(
         }
     }
     Some(SlideHit {
+        contact: None,
         t,
         normal: axis_vector(axis, outward),
     })
@@ -859,7 +1028,11 @@ fn cast_corner(center: Vec3, radius: f32, delta: Vec3, corner: Vec3) -> Option<S
     if normal.length_squared() < 1e-8 || delta.dot(normal) >= -INTO_SLOP {
         return None;
     }
-    Some(SlideHit { t, normal })
+    Some(SlideHit {
+        t,
+        normal,
+        contact: None,
+    })
 }
 
 fn radial_entry_time(offset: Vec3, delta: Vec3, radius: f32) -> Option<f32> {
@@ -898,7 +1071,11 @@ fn accept_radial(
     if normal.length_squared() < 1e-8 || delta.dot(normal) >= -INTO_SLOP {
         return None;
     }
-    Some(SlideHit { t, normal })
+    Some(SlideHit {
+        t,
+        normal,
+        contact: None,
+    })
 }
 
 fn usable_sphere(sphere: &Sphere) -> bool {
