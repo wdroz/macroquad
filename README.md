@@ -171,7 +171,10 @@ capsule, or a sphere moving against either box type,
 `slide_sphere_solids` does the same against spheres and capsules.
 `CharacterController` adds AABB movement, ground handling and optional steps.
 `RigidBody` integrates caller-owned velocity and position with gravity and
-damping; it does not resolve collisions or own a physics world.
+damping. Its explicit `resolve_collision` step separates a touching/overlapping
+pair by inverse mass and applies a normal impulse with caller-chosen restitution;
+`resolve_static_obb` handles a sphere against a static oriented box. It does not
+own a physics world or prevent tunneling.
 [docs/3d-guide.md](docs/3d-guide.md) covers these helpers and application-owned
 motion against static shapes. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)
 is the export and loading tutorial, including `with_up_axis` and the

@@ -11,7 +11,9 @@
 //! returns one shared translation for a rigid group of equal-radius spheres.
 //! [`UniformGrid`] indexes caller-owned world bounds for overlap and ray candidates.
 //! [`RigidBody`] integrates caller-owned velocity and position with gravity and
-//! damping, with local [`RigidBodyShape`] geometry and no collision response.
+//! damping, with local [`RigidBodyShape`] geometry. Its explicit
+//! [`RigidBody::resolve_collision`] and [`RigidBody::resolve_static_obb`] methods
+//! add one checked discrete separation/impulse step.
 //! The 3D types are unitless
 //! and do not assume an up axis.
 //! [`CharacterController`] moves a caller-owned AABB with sliding, ground
@@ -120,7 +122,9 @@ pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};
 pub use rect::{Rect, RectOffset};
-pub use rigid_body::{RigidBody, RigidBodyError, RigidBodyMode, RigidBodyShape};
+pub use rigid_body::{
+    CollisionResponseError, RigidBody, RigidBodyError, RigidBodyMode, RigidBodyShape,
+};
 pub use slide::{slide_sphere, slide_sphere_solids, slide_spheres_solids};
 pub use sphere::Sphere;
 pub use sweep::SweepHit;

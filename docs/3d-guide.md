@@ -1586,7 +1586,7 @@ the original single sphere and a two-sphere hull with Space.
 ## Physics
 
 `RigidBody` in `math` and the prelude provides translation-only integration
-without a window or a physics world. It stores public `position`,
+and explicit pair collision response without a window or a physics world. It stores public `position`,
 `linear_velocity`, `mass`, `linear_damping`, `mode` and `shape` fields.
 `RigidBodyShape::Aabb(Aabb)` and `RigidBodyShape::Sphere(Sphere)` hold local
 geometry: their corners/centers are offsets from the body's world-space
@@ -1637,8 +1637,79 @@ uses `f64`, rounds the updated velocity to `f32`, then computes position;
 finite rounding/underflow is accepted. Subdividing time can change this
 semi-implicit Euler trajectory.
 
-Integration does not inspect solids, prevent tunneling, resolve contacts or
-apply restitution. Rotation, collision response and islands remain separate.
+Integration does not inspect solids or prevent tunneling. Call
+`a.resolve_collision(&mut b, restitution)` separately to resolve one current
+AABB/AABB, sphere/sphere or mixed pair. It returns the pre-correction
+`Some(Contact)` for overlaps and touches, or `None` for separated shapes.
+The contact normal points from `b` toward `a`; the contact point is diagnostic
+and does not introduce torque. Shape offsets are translated through
+`world_shape()` before querying.
+
+Positive-mass dynamic bodies share the penetration correction in proportion
+to inverse mass: a lighter body moves farther. A closing relative velocity
+receives an impulse along the contact normal, with no friction or tangential
+impulse. Resting and separating pairs receive no impulse, although an overlap
+is still separated. Restitution must be finite and in `[0, 1]`: `0` removes
+closing normal velocity and `1` gives an elastic normal bounce. Pass `0` when
+no bounce is wanted.
+
+Zero mass freezes all fields and its stored velocity is ignored by response.
+A positive-mass kinematic body also receives no correction or impulse, but its
+prescribed velocity participates in the relative velocity seen by a dynamic
+body. Two immovable bodies still report their contact and stay unchanged.
+This response policy does not change how `integrate` advances kinematic bodies.
+
+```rust
+use macroquad::prelude::*;
+
+let mut floor = RigidBody::new(
+    Vec3::ZERO,
+    RigidBodyShape::Aabb(Aabb::from_min_max(
+        vec3(-4.0, -1.0, -4.0), vec3(4.0, 0.0, 4.0),
+    )),
+    0.0,
+).unwrap();
+let mut ball = RigidBody::new(
+    vec3(0.0, 0.25, 0.0),
+    RigidBodyShape::Sphere(Sphere::new(Vec3::ZERO, 0.5)),
+    2.0,
+).unwrap();
+ball.linear_velocity = vec3(3.0, -2.0, 0.0);
+let before_floor = floor;
+let contact = ball.resolve_collision(&mut floor, 0.5).unwrap().unwrap();
+assert_eq!(contact.normal, Vec3::Y);
+assert_eq!(ball.position.y, 0.5);
+assert_eq!(ball.linear_velocity, vec3(3.0, 1.0, 0.0));
+assert_eq!(floor, before_floor);
+```
+
+`sphere_body.resolve_static_obb(&box_collider, restitution)` uses a separate
+world-space `Obb` collider and the same response rules, with a stationary
+immovable box. It supports sphere bodies only, preserving the existing
+`RigidBodyShape` variants. Select solid colliders explicitly; triggers should
+remain overlap queries.
+
+Response checks both bodies, including mass, damping, velocity and geometry,
+even for separated or immovable pairs. Errors leave every field of both
+bodies unchanged. The separate `CollisionResponseError` preserves the existing
+`RigidBodyError` variants and reports invalid restitution, invalid collider,
+unsupported shape and unusable contact arithmetic. Very large or tiny geometry
+can return `NumericalFailure` when the existing contact query's `f32`
+intermediates would overflow or lose a nonzero squared distance/radius to
+underflow. The existing contact queries themselves are unchanged. Finite
+rounding and underflow of the resulting body update are accepted, so a very
+small correction at a large coordinate may round away. See the methods'
+rustdoc for the numerical checks.
+
+The caller chooses integration order, candidate pairs and repeated passes.
+For many bodies, index their current world AABBs in `UniformGrid`, query
+candidate indices, and visit each unordered pair once per pass. Reinsert
+changed bounds or rebuild before querying the next updated configuration:
+the grid stores snapshots, and separation can create contacts with other
+bodies. It supplies candidates only; response still queries the actual shapes.
+One discrete pair step cannot prevent tunneling or guarantee a settled stack.
+Rotation, angular response, continuous solving and islands remain separate.
+
 A game can instead keep its own velocity and call `slide_sphere` for a sphere
 against boxes, or `slide_sphere_solids` when a solid is a sphere or a capsule.
 These slide helpers retain tangential motion and do not apply mass or gravity.
@@ -1762,8 +1833,8 @@ remain in the caller.
 `examples/character_controller.rs` is a self-contained playable sample with a
 thin wall, a low ceiling, ramps, rounded solids, five gold stair treads and a
 nonblocking trigger. T toggles a 0.25-unit step height; its HUD displays the
-step diagnostics. There is no capsule player, platform transport or rigid-body
-impulse response yet. Existing `slide_sphere_solids` and `Capsule` contact
+step diagnostics. The controller has no capsule player, platform transport or
+rigid-body impulse coupling. Existing `slide_sphere_solids` and `Capsule` contact
 queries remain useful for prototypes; capsule overlap tests alone do not
 provide continuous capsule movement.
 
