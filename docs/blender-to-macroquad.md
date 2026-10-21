@@ -30,7 +30,7 @@ let model = GltfModel::from_bytes(&bytes).expect("draw").with_up_axis(Vec3::Z);
 
 ## Mark colliders, triggers, and spawns
 
-Empties are the usual markers (Add → Empty → Plain Axes). The loader reads each node in two ways. Node extras win. A name suffix is the fallback when `mq_role` is absent.
+Empties are the usual markers (Add → Empty → Plain Axes). The loader reads each node in two ways. Recognized node extras win. A name suffix is the fallback when `mq_role` is absent, unrecognized, or not a string.
 
 Put custom properties on the **object**, not on the mesh data. The exporter writes object custom properties to the glTF node `extras` only when **Custom Properties** is included.
 
@@ -53,12 +53,16 @@ Put custom properties on the **object**, not on the mesh data. The exporter writ
 
 `GltfCollider::node` is an index into `GltfScene::nodes`, which is preorder of the default scene. It is not the index in the glTF file when some nodes were left out of the scene.
 
-The suffix compare is case-sensitive and must be the exact ending `_collider`, `_trigger`, or `_spawn`. `Crate_collider` matches `_collider`. `Player_Spawn` does not match `_spawn`. A matching empty still needs `mq_shape`, or a mesh, before it is emitted as a collider. Extras override a suffix: a node named `pad_collider` with `mq_role` set to `spawn` is a spawn, not a collider.
+The suffix compare is case-sensitive and accepts `_collider`, `_trigger`, or `_spawn`, followed optionally by one dot and one or more ASCII digits. `Crate_collider`, `Crate_collider.001`, and `patrol_spawn.001` match. `Player_Spawn`, `patrol_spawn.001.002`, `patrol_spawn.`, and `patrol_spawn.001x` do not. A matching empty still needs `mq_shape`, or a mesh, before it is emitted as a collider. Extras override a suffix: a node named `pad_collider.001` with `mq_role` set to `spawn` is a spawn, not a collider. Imported names retain the duplicate tail.
 
-Blender duplicates commonly receive a suffix such as `.001`:
-`player_spawn.001` no longer ends in `_spawn`. Set `mq_role = spawn` on the
-object to make that duplicate a spawn. Arbitrary properties such as `mq_tag`
-are not exposed by the current scene API. `GltfSpawn` has `node`, `name`, and
+Add a string custom property `mq_tag` to select a marker independently of its
+name: `scene.marker_tag(spawn.node) == Some("player")`. Tags are stored in
+`scene.marker_tags`, indexed by the same scene-local node indices as `scene.nodes`.
+Every loaded node has an entry, even without a marker role; a tag alone does
+not create a spawn or collider. Missing, nested, or non-string tags return
+`None`. Empty strings, case, whitespace, and Unicode are preserved. Nodes
+outside the loaded scene have no entries. Cloning or changing the up axis keeps
+the tags unchanged. `GltfSpawn` still has `node`, `name`, and
 `position`; use `scene.marker_rotation(spawn.node)` for its world rotation, or
 `scene.nodes[spawn.node].world` for the full matrix. The rotation includes its
 parents and any up-axis conversion applied to the scene. Choose the player's
@@ -99,14 +103,14 @@ Z-up coordinates for the following recipe; export converts them to Y-up.
 File → Export → glTF 2.0 (`.glb` / `.gltf`).
 
 1. **Format: glTF Binary (`.glb`)** when the game will draw the level. `GltfModel` only accepts a `.glb`. `GltfScene::from_bytes` also accepts a `.gltf` whose buffers are `data:` URIs. External `.bin` files are unsupported; an external image is an error when a loaded primitive samples it.
-2. **Include → Custom Properties**, so `mq_shape` and `mq_role` reach the node extras. Name suffixes still work if this box is unchecked.
+2. **Include → Custom Properties** (`export_extras=True` in Python), so `mq_shape`, `mq_role`, and `mq_tag` reach the node extras. Name suffixes still work if this box is unchecked.
 3. **Transform → +Y Up** stays checked.
 4. **Data → Mesh**: apply modifiers if the collider should see the modified surface, and export UVs, normals, and tangents when the mesh will be drawn or shaded. Leave the exporter's **Shape Keys** option enabled when the object has them (it sits under Mesh or Animation, depending on the Blender version). `GltfMorphData` reads the POSITION and NORMAL deltas. `GltfMorphModel` draws independently weighted instances of those shape keys. Tangent morphs are not evaluated.
 5. **Data → Material**: export materials, and keep images packed into the `.glb` (the exporter's automatic image mode). PNG, JPEG, and WebP are decoded. A WebP image uses `EXT_texture_webp`. A normal map and a metallic-roughness map are loaded with the draw model; occlusion is not.
 6. Leave Draco compression off. This loader does not decode it. Enable animation export for node TRS and shape-key weight clips. The optional `GltfAnimationData` sidecar supports LINEAR and STEP; CUBICSPLINE returns an explicit error, so bake unsupported curves to LINEAR keys when needed. Skinning remains unsupported.
 7. Do not export a camera or a light unless you want those nodes in the hierarchy. They are not special-cased.
 
-Custom property names are exactly `mq_shape` and `mq_role`, string values `box` / `sphere` / `capsule` and `collider` / `trigger` / `spawn`.
+Custom property names are exactly `mq_shape` and `mq_role`, string values `box` / `sphere` / `capsule` and `collider` / `trigger` / `spawn`. The optional `mq_tag` property is any string chosen by the game, such as `player` or `guard`.
 
 Export the file to `assets/room.glb` in your game project. Ensure the marker
 empties are included if exporting only selected objects. Keep the `.blend` as
@@ -655,5 +659,5 @@ a custom renderer, especially its transparency ordering and output-space limits.
 
 - `GltfScene::with_up_axis` does not change a `GltfModel` or a `GltfModelPose`, and those calls do not change the scene. Call all three with the same axis when the draw, the pose, and the markers should leave Y-up. A camera can instead keep `up: Vec3::Y` and skip them. That is what the examples do.
 - `GltfModel` still uploads its own GPU textures, and only from a `.glb`. Sampler wrap and filter stay on that draw path. `GltfScene` and `GltfMaterialMaps` do not turn their RGBA bytes into a `Texture2D`.
-- Skins, CUBICSPLINE interpolation, clip blending, tangent morphs and shader-based morphing are not implemented. Optional LINEAR/STEP node TRS and weight clips use GltfAnimationData and GltfAnimationPlayer. `GltfMorphData` evaluates POSITION/NORMAL shape-key deltas on the CPU; `GltfMorphModel` uploads changed instances and exposes their current retained chunks. It does not construct deformed normal-map/GGX tangent buffers. Ordinary `GltfModel` drawing remains undeformed. `GltfNodePose` replaces one node's world matrix for drawing, and `GltfHierarchyPose` edits local transforms so descendants follow. `collider_shape` returns a collider in those worlds; the stored collider list and the spawn points stay at rest. `submit_part` and `submit_retained_part` still apply an extra matrix to baked coordinates and do not read that rest pose. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Full PBR (image-based lighting, occlusion, shadows, transmission) is not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) and `submit_shaded` samples them. Material passes and lighting are opt-in; ordinary `draw` calls still use the current material. A name such as `player_spawn.001` is still not a suffix spawn, and a custom `mq_tag` is still not stored.
+- Skins, CUBICSPLINE interpolation, clip blending, tangent morphs and shader-based morphing are not implemented. Optional LINEAR/STEP node TRS and weight clips use GltfAnimationData and GltfAnimationPlayer. `GltfMorphData` evaluates POSITION/NORMAL shape-key deltas on the CPU; `GltfMorphModel` uploads changed instances and exposes their current retained chunks. It does not construct deformed normal-map/GGX tangent buffers. Ordinary `GltfModel` drawing remains undeformed. `GltfNodePose` replaces one node's world matrix for drawing, and `GltfHierarchyPose` edits local transforms so descendants follow. `collider_shape` returns a collider in those worlds; the stored collider list and the spawn points stay at rest. `submit_part` and `submit_retained_part` still apply an extra matrix to baked coordinates and do not read that rest pose. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Full PBR (image-based lighting, occlusion, shadows, transmission) is not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) and `submit_shaded` samples them. Material passes and lighting are opt-in; ordinary `draw` calls still use the current material.
 - `assets/room.glb` is the file you export in this tutorial, not a checked-in asset. The triangle and checkerboard files are the small fixtures in this repository. The historical Marble Maze and Cinder Court game rounds are documented in the roadmap; their games and level assets are not distributed here.

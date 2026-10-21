@@ -64,12 +64,15 @@
 //! Colliders, triggers, and spawn points come from the nodes that were loaded.
 //! Node `extras` are preferred: `mq_shape` is `box`, `sphere`, or `capsule`,
 //! and `mq_role` is `collider`, `trigger`, or `spawn`. When `mq_role` is
-//! absent, a name ending in `_collider`, `_trigger`, or `_spawn` supplies the
-//! role. That ending is case-sensitive: `Crate_collider` is a collider role
-//! and `Player_Spawn` is not a spawn. An empty with a role but no `mq_shape`
-//! and no mesh is still not emitted as a collider. A spawn stores the world
+//! absent or unrecognized, a name ending in `_collider`, `_trigger`, or `_spawn`
+//! supplies the role, optionally followed by one `.<digits>` Blender duplicate
+//! tail (ASCII digits). That ending is case-sensitive: `Crate_collider.001` is
+//! a collider role and `Player_Spawn` is not a spawn. An empty with a role but
+//! no `mq_shape` and no mesh is still not emitted as a collider. A spawn stores the world
 //! translation and the node name, and ignores `mq_shape`. Use
 //! [`GltfScene::marker_rotation`] with its node index for world-space facing.
+//! A string `mq_tag` in node extras is available through
+//! [`GltfScene::marker_tag`] without changing the marker's role or name.
 //!
 //! ```
 //! use macroquad::gltf::GltfScene;
@@ -179,6 +182,13 @@ pub struct GltfScene {
     pub colliders: Vec<GltfCollider>,
     /// Spawn points, in node preorder.
     pub spawns: Vec<GltfSpawn>,
+    /// Optional string `mq_tag` values, indexed exactly like [`Self::nodes`].
+    ///
+    /// Every loaded node has an entry, including nodes without a marker role.
+    /// Tags do not create markers. Missing or non-string values are [`None`];
+    /// empty strings are preserved. If editing the node list, keep this list
+    /// aligned with it. Prefer [`Self::marker_tag`] for checked lookup.
+    pub marker_tags: Vec<Option<String>>,
 }
 
 /// One node in a [`GltfScene`].
@@ -632,6 +642,7 @@ impl GltfScene {
                 images: Vec::new(),
                 colliders: Vec::new(),
                 spawns: Vec::new(),
+                marker_tags: Vec::new(),
             });
         };
 
@@ -660,6 +671,7 @@ impl GltfScene {
             images: Vec::new(),
             colliders: Vec::new(),
             spawns: Vec::new(),
+            marker_tags: Vec::new(),
         };
         let mut state = LoadState {
             buffers: &buffers,
@@ -672,6 +684,35 @@ impl GltfScene {
             append_node(&mut loaded, &root, None, Mat4::IDENTITY, &mut state)?;
         }
         Ok(loaded)
+    }
+
+    /// Returns a loaded node's string `mq_tag` from its top-level extras.
+    ///
+    /// `node` indexes [`Self::nodes`], as [`GltfSpawn::node`] and
+    /// [`GltfCollider::node`] do, rather than the document's node array. A tag
+    /// is independent of the node's role; it neither creates a marker nor
+    /// changes suffix recognition. Tags are case-sensitive, are not trimmed,
+    /// and retain empty strings. Missing nodes, missing tags, non-string tags,
+    /// and tags nested inside another extras object return [`None`]. Cloning
+    /// or applying [`Self::with_up_axis`] preserves these values.
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfScene;
+    ///
+    /// let scene = GltfScene::from_bytes(
+    ///     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[
+    ///         {"name":"patrol_spawn.001","extras":{"mq_tag":"guard"}}
+    ///     ]}"#,
+    /// ).unwrap();
+    /// let guard = scene.spawns.iter()
+    ///     .find(|spawn| scene.marker_tag(spawn.node) == Some("guard"))
+    ///     .unwrap();
+    /// assert_eq!(guard.name.as_deref(), Some("patrol_spawn.001"));
+    /// assert_eq!(scene.marker_tag(usize::MAX), None);
+    /// ```
+    pub fn marker_tag(&self, node: usize) -> Option<&str> {
+        self.nodes.get(node)?;
+        self.marker_tags.get(node)?.as_deref()
     }
 
     /// Returns a node's world-space rotation, including its parents' transforms.
@@ -923,6 +964,7 @@ fn append_node(
         world,
         mesh,
     });
+    loaded.marker_tags.push(extras_field(node, "mq_tag"));
     record_marker(loaded, node, index);
 
     let children: Vec<gltf::Node<'_>> = node.children().collect();
@@ -1267,6 +1309,14 @@ fn role_word(value: Option<&str>) -> Option<MarkerRole> {
 }
 
 fn suffix_role(name: &str) -> Option<MarkerRole> {
+    let name = match name.rsplit_once('.') {
+        Some((base, digits))
+            if !digits.is_empty() && digits.bytes().all(|digit| digit.is_ascii_digit()) =>
+        {
+            base
+        }
+        _ => name,
+    };
     if name.ends_with("_collider") {
         Some(MarkerRole::Collider)
     } else if name.ends_with("_trigger") {
@@ -1857,18 +1907,31 @@ impl<'a> JsonCursor<'a> {
             'r' => Some('\r'),
             't' => Some('\t'),
             'u' => {
-                let mut hex = String::new();
-                for _ in 0..4 {
-                    let ch = self.bump()?;
-                    if !ch.is_ascii_hexdigit() {
+                let first = self.unicode_escape()?;
+                let codepoint = if (0xd800..=0xdbff).contains(&first) {
+                    if self.bump()? != '\\' || self.bump()? != 'u' {
                         return None;
                     }
-                    hex.push(ch);
-                }
-                char::from_u32(u32::from_str_radix(&hex, 16).ok()?)
+                    let second = self.unicode_escape()?;
+                    if !(0xdc00..=0xdfff).contains(&second) {
+                        return None;
+                    }
+                    0x10000 + ((first - 0xd800) << 10) + (second - 0xdc00)
+                } else {
+                    first
+                };
+                char::from_u32(codepoint)
             }
             _ => None,
         }
+    }
+
+    fn unicode_escape(&mut self) -> Option<u32> {
+        let mut codepoint = 0;
+        for _ in 0..4 {
+            codepoint = (codepoint << 4) | self.bump()?.to_digit(16)?;
+        }
+        Some(codepoint)
     }
 
     fn skip_value(&mut self) -> bool {

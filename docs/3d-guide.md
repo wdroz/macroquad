@@ -291,6 +291,34 @@ macroquad application and uploads textures while producing drawable chunks.
 The two calls parse independently. Their `with_up_axis` helpers must use the
 same axis before converting the draw model to retained geometry.
 
+Marker roles prefer recognized `mq_role` extras, then case-sensitive name
+endings `_collider`, `_trigger`, and `_spawn`. One optional `.<digits>` Blender
+duplicate tail is accepted (ASCII digits), so `patrol_spawn.001` is a spawn;
+`patrol_spawn.001.002` and `Patrol_Spawn.001` are not suffix matches. The full
+name is retained. To select markers independently of Blender object names,
+set a string `mq_tag` custom property and enable `export_extras`:
+
+```rust
+use macroquad::gltf::GltfScene;
+
+let scene = GltfScene::from_bytes(
+    br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[
+        {"name":"patrol_spawn.001","extras":{"mq_tag":"guard"}}
+    ]}"#,
+).unwrap();
+let guard = scene.spawns.iter()
+    .find(|spawn| scene.marker_tag(spawn.node) == Some("guard"))
+    .unwrap();
+assert_eq!(guard.name.as_deref(), Some("patrol_spawn.001"));
+```
+
+`marker_tag` reads `scene.marker_tags`, aligned with the loaded `scene.nodes`
+array. Missing/non-string/nested tags and missing node indices return `None`;
+empty strings, whitespace, case and Unicode are preserved. Tags are available
+for all loaded nodes and do not create a role or alter a shape. Clone and
+up-axis conversion preserve them. `GltfSpawn` and `GltfCollider` retain their
+existing fields.
+
 For a spawn or another marker, read its world orientation with
 `scene.marker_rotation(node)`. The index is the scene-local `GltfNode` index,
 such as `spawn.node`; it is not necessarily the node index in the source file.
