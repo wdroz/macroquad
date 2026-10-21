@@ -442,6 +442,9 @@ to f32, so a step smaller than local f32 resolution can leave the value unchange
 
 For opted-in sliders, nonfinite values/endpoints, nonascending ranges and missing,
 nonfinite or nonpositive steps disable all input without changing caller data.
+If the label and numeric field leave no finite positive track width, the track
+skips pointer input and Tab traversal. Its numeric field remains editable when
+otherwise enabled; reserve enough width for a visible track in compact layouts.
 `enabled(false)` also disables both Tab stops, numeric editing and dragging.
 The separate inset track outline defaults to blue and can use `focus_color`;
 fully clipped controls do not enter traversal. After pointer dragging, an opted-in

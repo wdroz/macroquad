@@ -24,6 +24,7 @@ pub struct Menu {
     pub rect: Rect,
     pub legacy_rect: Rect,
     pub clipped: bool,
+    pub track_width: Option<f32>,
 }
 
 impl Menu {
@@ -41,6 +42,7 @@ impl Menu {
             rect: Rect::default(),
             legacy_rect: Rect::default(),
             clipped: false,
+            track_width: None,
         }
     }
 
@@ -110,9 +112,13 @@ impl Menu {
     }
 
     fn slider(&mut self, ui: &mut macroquad::ui::Ui) {
+        let label_width = self
+            .track_width
+            .map_or(100., |w| ui.available_width() - 50. - w);
         widgets::Slider::new(SLIDER, self.range.clone())
             .keyboard_focus(true)
             .keyboard_step(self.step)
+            .label_width(label_width)
             .enabled(self.enabled)
             .focus_color(YELLOW)
             .label("Volume")
@@ -281,6 +287,39 @@ pub async fn run() -> Menu {
     settle(&mut m).await;
     assert_eq!(m.value, 0.5, "disabled numeric field preserves value");
     m.enabled = true;
+    // Label/editbox reservations can exhaust compact layouts. An absent track
+    // must neither register nor respond, but its numeric field still works.
+    for width in [0., -4., f32::NEG_INFINITY, f32::NAN] {
+        m.track_width = Some(width);
+        m.value = 0.5;
+        settle(&mut m).await;
+        root_ui().set_input_focus(SLIDER);
+        press(&mut m, UiKey::End, false).await;
+        assert_eq!(m.value, 0.5, "unusable track must preserve value");
+        assert_ne!(root_ui().focused_widget(), Some(SLIDER));
+        root_ui().clear_input_focus();
+        press(&mut m, UiKey::Tab, false).await;
+        assert_eq!(root_ui().focused_widget(), Some(hash!(SLIDER, "editbox")));
+        press(&mut m, UiKey::Tab, false).await;
+        assert_eq!(root_ui().focused_widget(), Some(CHECK));
+        let rect = Rect::new(m.rect.x, m.rect.y, 0., m.rect.h);
+        drag(&mut m, rect).await;
+        assert_eq!(m.value, 0.5, "unusable track ignores pointer dragging");
+        root_ui().set_input_focus(hash!(SLIDER, "editbox"));
+        root_ui().key_down(UiKey::A, false, true);
+        m.draw();
+        next_frame().await;
+        root_ui().key_up(UiKey::A);
+        for ch in "0.25".chars() {
+            root_ui().char_event(ch, false, false);
+        }
+        settle(&mut m).await;
+        assert_eq!(
+            m.value, 0.25,
+            "numeric editing survives exhausted track width"
+        );
+    }
+    m.track_width = None;
     // Restore a predictable live menu after all automated assertions.
     m.value = 0.5;
     m.modal_value = 0.5;

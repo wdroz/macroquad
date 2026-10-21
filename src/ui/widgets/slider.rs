@@ -56,7 +56,9 @@ impl<'a> Slider<'a> {
     /// f32 rounding; steps smaller than f32 resolution may leave values unchanged.
     /// Invalid/nonascending ranges, nonfinite data, or an invalid step while
     /// opted in disable all input and preserve caller data. Legacy calls retain
-    /// their pointer dragging and numeric editing behavior.
+    /// their pointer dragging and numeric editing behavior. If layout leaves no
+    /// finite positive track width, track input and its Tab stop are skipped;
+    /// the numeric field remains usable when otherwise enabled.
     ///
     /// ```no_run
     /// use macroquad::{prelude::*, ui::{hash, root_ui, widgets}};
@@ -125,6 +127,11 @@ impl<'a> Slider<'a> {
 
         let label_width = self.label_width.unwrap_or(100.);
         let slider_width = size.x - editbox_width - label_width;
+        let track_available = slider_width.is_finite() && slider_width > 0.;
+        // The handle's hit padding does not make an exhausted track usable.
+        // Keep drawing coordinates finite and avoid dividing by zero/reversing
+        // the pointer mapping when label/editbox reservations consume the row.
+        let slider_width = if track_available { slider_width } else { 0. };
         let margin = 5.;
 
         let mut temp_string = context
@@ -162,7 +169,7 @@ impl<'a> Slider<'a> {
 
         let slider_start_x = editbox_width + pos.x + margin;
         let track_rect = Rect::new(slider_start_x - 4., pos.y, slider_width + 8., 20.);
-        let visible = context.keyboard_visible(track_rect);
+        let visible = track_available && context.keyboard_visible(track_rect);
         let interaction_allowed = enabled
             && context.keyboard_eligible
             && visible
