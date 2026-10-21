@@ -1955,3 +1955,34 @@ draw_plane_wires(ground, Vec3::ZERO, 4.0, GREEN);
 ## Feature flags
 
 The collision types above are always compiled. Parsing and drawing a glTF file require the `gltf` feature, which is not a default feature. See the [Blender tutorial](blender-to-macroquad.md).
+
+## Heightfield terrain
+
+`Heightfield::new(columns, rows, heights, scale, origin)` owns a regular row-major
+height grid with default Y up. `with_up(..., up)` normalizes an explicit up vector.
+The column axis projects +X onto its horizontal plane (projecting +Z instead when
+`abs(up.x) > 0.9` after normalization); the row axis is column cross up.
+`horizontal_axes()` exposes both. `scale.x`/`.z` are positive horizontal spacings,
+`.y` is a signed height multiplier, and origin is the zero-height first sample.
+
+```rust
+use macroquad::prelude::*;
+let terrain = Heightfield::with_up(2, 2, vec![0.0, 1.0, 1.0, 2.0],
+    Vec3::ONE, Vec3::ZERO, Vec3::Z).unwrap();
+let height = terrain.sample_height(0.25, 0.5).unwrap();
+let (u, v) = terrain.horizontal_axes();
+let surface = terrain.origin() + u * 0.25 + v * 0.5 + terrain.up() * height;
+assert!(terrain.overlaps_aabb(&Aabb::from_center_size(surface, Vec3::splat(0.01))));
+assert!(terrain.ray_intersect(&Ray::new(surface + Vec3::Z, -Vec3::Z)).is_some());
+```
+
+Sampling takes horizontal distances relative to origin, includes the outer edges
+rounded to f32, and returns scaled height along up. It uses the same two planar
+triangles per cell as collision, split from (column+1,row) to (column,row+1),
+rather than bilinear interpolation. Outside/non-finite samples miss. Construction
+rejects invalid dimensions, inputs or unrepresentable extents/vertices.
+`mesh()` exposes the immutable world-space triangles; ray indices are
+`2 * (row * (columns-1) + column) + half`, with half zero below the diagonal.
+Ray units, exact ties and numerical limits follow `TriangleMesh`; AABB overlaps
+include surface touches but do not treat terrain as a solid volume below ground.
+No controller response or acceleration structure is added.
