@@ -17,6 +17,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | Video | `video_texture` (`video` feature) | Play/pause, synchronized soundtrack, and a reusable frame texture |
 | Input | `cursor_capture` | Pointer-capture state, browser denial and unlock, desktop grab |
 | Browser host | `canvas_host` | Density, framebuffer budgets, and a requested frame-rate cap |
+| Rounded panels | `rounded_panels`, `rounded_panels_check` | Filled radius-clamped panels and shared native/WebGL single-alpha-coverage regression; see the [UI and 2D guide](../docs/ui-2d-guide.md#draw-a-rounded-panel) |
 | Existing UI/2D samples | `camera`, `camera_transformations`, `texture`, `ui`, `ui_skins`, `platformer` | World/HUD cameras, texture drawing, widgets/skins, tile maps and platformer collisions; see the [UI and 2D guide](../docs/ui-2d-guide.md) for current limitations |
 
 Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).
@@ -52,12 +53,23 @@ cargo run --features gltf --example gltf_animation_check
 cargo run --features video --example video_texture -- path/to/clip.mp4
 cargo run --example cursor_capture
 cargo run --example canvas_host
+cargo run --example rounded_panels
+cargo run --example rounded_panels_check
 ```
 
 These commands run from the fork root and open a window. To compile a sample
 without opening a window, use `cargo build --example <name>` with the same
 feature flags and omit runtime arguments after `--`. Pure collision and scene-loader tests can run without graphics;
 rendering and texture uploads need a graphics context.
+
+`rounded_panels_check` exports `rounded_panels_status` (0 pending, 1 passed,
+2 panic), `rounded_panels_pixels` and `rounded_panels_dpi_milli` for browser
+inspection. Build with
+`cargo build --target wasm32-unknown-unknown --example rounded_panels_check`,
+place the resulting WASM beside
+`rounded_panels_check.html`, and serve the repository root. It checks pixels
+on an offscreen target and then draws a translucent panel on the default
+window camera; no assets or optional features are required.
 
 ## `character_controller`
 

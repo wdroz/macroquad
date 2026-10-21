@@ -48,6 +48,119 @@ pub fn draw_rectangle(x: f32, y: f32, w: f32, h: f32, color: Color) {
     context.gl.geometry(&vertices, &indices);
 }
 
+/// Draws a filled rounded rectangle with top-left corner `[x, y]` and size `[w, h]`.
+///
+/// Like [`draw_rectangle`], coordinates use the current camera's space: logical
+/// window pixels with the default camera, or world coordinates with a custom
+/// camera. This helper does not change the camera, material or clip state.
+///
+/// A finite `radius <= 0` produces square corners. Positive radii are clamped to
+/// half the smaller dimension. Non-finite coordinates, dimensions or radius,
+/// non-positive dimensions, and bounds that overflow, collapse or invert the
+/// tessellation at `f32` precision draw nothing. Invalid calls do not change renderer state.
+///
+/// Each quarter-circle uses eight line segments. A single triangle fan
+/// fills the shape without overlapping triangle interiors, so translucent fills
+/// have uniform coverage instead of darker seams. As with the other shape
+/// helpers, edge antialiasing depends on the active framebuffer's multisampling.
+/// This is a fill only; it does not style the built-in UI widgets.
+///
+/// ```no_run
+/// use macroquad::prelude::*;
+/// # async fn example() {
+/// draw_rectangle_rounded(20., 20., 240., 100., 12., Color::new(0.1, 0.2, 0.4, 0.5));
+/// # }
+/// ```
+pub fn draw_rectangle_rounded(x: f32, y: f32, w: f32, h: f32, radius: f32, color: Color) {
+    let Some((vertices, indices)) = rounded_rectangle_geometry(x, y, w, h, radius, color) else {
+        return;
+    };
+    let context = get_context();
+    context.gl.texture(None);
+    context.gl.draw_mode(DrawMode::Triangles);
+    context.gl.geometry(&vertices, &indices);
+}
+
+// The shared perimeter vertices make every internal edge exact on both sides.
+// Cardinal endpoints are explicit rather than independently evaluated trig
+// expressions, including when clamping creates a capsule or a circle.
+fn rounded_rectangle_geometry(
+    x: f32,
+    y: f32,
+    w: f32,
+    h: f32,
+    radius: f32,
+    color: Color,
+) -> Option<([Vertex; 37], [u16; 108])> {
+    if ![x, y, w, h, radius].iter().all(|v| v.is_finite()) || w <= 0. || h <= 0. {
+        return None;
+    }
+    let right = x + w;
+    let bottom = y + h;
+    if !right.is_finite() || !bottom.is_finite() || right <= x || bottom <= y {
+        return None;
+    }
+    let radius = radius.max(0.).min(w * 0.5).min(h * 0.5);
+    let center = vec2(x + w * 0.5, y + h * 0.5);
+    let mut vertices = [Vertex::new(center.x, center.y, 0., 0.5, 0.5, color); 37];
+    let mut indices = [0; 108];
+    for (corner, (cx, cy, sx, sy)) in [
+        (right - radius, y + radius, 1., -1.),
+        (right - radius, bottom - radius, 1., 1.),
+        (x + radius, bottom - radius, -1., 1.),
+        (x + radius, y + radius, -1., -1.),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        for step in 0..=8 {
+            // Walk clockwise in screen coordinates, starting on the top edge.
+            let angle_step = if corner % 2 == 0 { step } else { 8 - step };
+            let (sin, cos) = match angle_step {
+                0 => (0., 1.),
+                8 => (1., 0.),
+                _ => (angle_step as f32 * std::f32::consts::FRAC_PI_2 / 8.).sin_cos(),
+            };
+            let px = if angle_step == 8 {
+                if sx > 0. {
+                    right
+                } else {
+                    x
+                }
+            } else {
+                cx + sx * radius * sin
+            };
+            let py = if angle_step == 0 {
+                if sy > 0. {
+                    bottom
+                } else {
+                    y
+                }
+            } else {
+                cy + sy * radius * cos
+            };
+            let index = corner * 9 + step;
+            vertices[index + 1] = Vertex::new(px, py, 0., (px - x) / w, (py - y) / h, color);
+            indices[index * 3..index * 3 + 3].copy_from_slice(&[
+                0,
+                (index + 1) as u16,
+                ((index + 1) % 36 + 1) as u16,
+            ]);
+        }
+    }
+    // Very large origins with small dimensions can round corner centers past
+    // each other. Reject inverted fan sectors instead of blending overlapping
+    // triangles. f64 arithmetic also keeps this validation safe near f32::MAX.
+    for edge in 0..36 {
+        let a = vertices[edge + 1].position.as_dvec3() - vertices[0].position.as_dvec3();
+        let b = vertices[(edge + 1) % 36 + 1].position.as_dvec3() - vertices[0].position.as_dvec3();
+        if a.x * b.y - a.y * b.x < 0. {
+            return None;
+        }
+    }
+    Some((vertices, indices))
+}
+
 /// Draws a rectangle outline with its top-left corner at `[x, y]` with size `[w, h]` (width going to
 /// the right, height going down), with a given line `thickness` and `color`.
 pub fn draw_rectangle_lines(x: f32, y: f32, w: f32, h: f32, thickness: f32, color: Color) {
@@ -415,4 +528,164 @@ pub fn draw_arc(
     }
 
     context.gl.geometry(&verticies, &indicies);
+}
+
+#[cfg(test)]
+mod rounded_rectangle_tests {
+    use super::*;
+    use crate::color::colors::WHITE;
+
+    fn cross(a: Vec2, b: Vec2, c: Vec2) -> f64 {
+        let ab = (b - a).as_dvec2();
+        let ac = (c - a).as_dvec2();
+        ab.x * ac.y - ab.y * ac.x
+    }
+
+    fn points(vertices: &[Vertex; 37]) -> Vec<Vec2> {
+        vertices.iter().map(|v| v.position.truncate()).collect()
+    }
+
+    fn area(vertices: &[Vertex; 37], indices: &[u16; 108]) -> f64 {
+        let points = points(vertices);
+        indices
+            .chunks_exact(3)
+            .map(|t| {
+                cross(
+                    points[t[0] as usize],
+                    points[t[1] as usize],
+                    points[t[2] as usize],
+                ) * 0.5
+            })
+            .sum()
+    }
+
+    #[test]
+    fn rounded_rectangle_rejects_invalid_geometry_without_a_window() {
+        for args in [
+            (0., 0., 0., 20., 4.),
+            (0., 0., 20., 0., 4.),
+            (0., 0., -1., 20., 4.),
+            (0., 0., 20., -1., 4.),
+            (f32::NAN, 0., 20., 20., 4.),
+            (0., f32::INFINITY, 20., 20., 4.),
+            (0., 0., f32::INFINITY, 20., 4.),
+            (0., 0., 20., f32::NAN, 4.),
+            (0., 0., 20., 20., f32::NAN),
+            (0., 0., 20., 20., f32::INFINITY),
+            (0., 0., 20., 20., f32::NEG_INFINITY),
+            (f32::MAX, 0., f32::MAX, 20., 4.),
+            (0., f32::MAX, 20., f32::MAX, 4.),
+            (1e20, 0., 1., 20., 4.),
+            (0., 1e20, 20., 1., 4.),
+            (1e8, 0., 10., 10., 5.),
+            (0., 1e8, 10., 10., 5.),
+        ] {
+            let (x, y, w, h, r) = args;
+            assert!(rounded_rectangle_geometry(x, y, w, h, r, WHITE).is_none());
+            // An invalid public call must return before acquiring GPU context.
+            draw_rectangle_rounded(x, y, w, h, r, WHITE);
+        }
+    }
+
+    #[test]
+    fn rounded_rectangle_zero_and_negative_radii_are_square() {
+        let (vertices, indices) = rounded_rectangle_geometry(-5., 3., 24., 18., 0., WHITE).unwrap();
+        assert!((area(&vertices, &indices) - 24. * 18.).abs() < 1e-6);
+        let (negative, _) = rounded_rectangle_geometry(-5., 3., 24., 18., -50., WHITE).unwrap();
+        assert_eq!(points(&vertices), points(&negative));
+        for point in points(&vertices).into_iter().skip(1) {
+            assert!(point.x == -5. || point.x == 19.);
+            assert!(point.y == 3. || point.y == 21.);
+        }
+    }
+
+    #[test]
+    fn rounded_rectangle_clamps_radius_for_capsules_and_circles() {
+        for (w, h) in [(80., 20.), (20., 80.), (20., 20.)] {
+            let r = f32::min(w, h) * 0.5;
+            let (clamped, indices) = rounded_rectangle_geometry(0., 0., w, h, r, WHITE).unwrap();
+            let (oversized, _) = rounded_rectangle_geometry(0., 0., w, h, f32::MAX, WHITE).unwrap();
+            assert_eq!(points(&clamped), points(&oversized));
+            // Exact area of four inscribed eight-segment quarter circles,
+            // plus the remaining straight rectangular area.
+            let expected = f64::from(w * h)
+                - (4. - 16. * (std::f64::consts::PI / 16.).sin()) * f64::from(r * r);
+            assert!((area(&clamped, &indices) - expected).abs() < 0.001);
+        }
+    }
+
+    #[test]
+    fn rounded_rectangle_fan_is_convex_bounded_and_nonoverlapping() {
+        for (w, h, r) in [
+            (80., 50., 8.),
+            (20., 20., 10.),
+            (80., 20., 99.),
+            (20., 80., 99.),
+            (80., 50., 0.),
+        ] {
+            let (vertices, indices) = rounded_rectangle_geometry(-7., 11., w, h, r, WHITE).unwrap();
+            let points = points(&vertices);
+            for p in &points {
+                assert!(p.x >= -7. && p.x <= -7. + w && p.y >= 11. && p.y <= 11. + h);
+            }
+            for triangle in indices.chunks_exact(3) {
+                assert!(
+                    cross(
+                        points[triangle[0] as usize],
+                        points[triangle[1] as usize],
+                        points[triangle[2] as usize]
+                    ) >= 0.
+                );
+            }
+            for i in 0..36 {
+                assert!(
+                    cross(
+                        points[i + 1],
+                        points[(i + 1) % 36 + 1],
+                        points[(i + 2) % 36 + 1]
+                    ) >= -0.0001
+                );
+            }
+            // Offset sample grid avoids deliberately shared fan edges. No
+            // sample may lie strictly inside more than one triangle.
+            let mut covered = 0;
+            for ix in 0..43 {
+                for iy in 0..37 {
+                    let p = vec2(
+                        -7. + (ix as f32 + 0.31) / 43. * w,
+                        11. + (iy as f32 + 0.23) / 37. * h,
+                    );
+                    let count = indices
+                        .chunks_exact(3)
+                        .filter(|t| {
+                            let (a, b, c) = (
+                                points[t[0] as usize],
+                                points[t[1] as usize],
+                                points[t[2] as usize],
+                            );
+                            cross(a, b, p) > 1e-5 && cross(b, c, p) > 1e-5 && cross(c, a, p) > 1e-5
+                        })
+                        .count();
+                    assert!(count <= 1, "overlap at {p:?}");
+                    covered += count;
+                }
+            }
+            assert!(covered > 1000);
+        }
+    }
+
+    #[test]
+    fn rounded_rectangle_preserves_color_and_normalized_uvs() {
+        let color = Color::new(0.2, 0.4, 0.6, 0.5);
+        let (vertices, indices) =
+            rounded_rectangle_geometry(20., -40., 100., 50., 12., color).unwrap();
+        for vertex in vertices {
+            assert_eq!(vertex.color, <[u8; 4]>::from(color));
+            assert!(
+                vertex.uv.x >= 0. && vertex.uv.x <= 1. && vertex.uv.y >= 0. && vertex.uv.y <= 1.
+            );
+            assert_eq!(vertex.position.z, 0.);
+        }
+        assert!(indices.iter().all(|i| *i < 37));
+    }
 }

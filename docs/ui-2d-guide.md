@@ -103,9 +103,39 @@ position must follow your layout each frame; movable windows remember their
 user-controlled position after appearing. Built-in groups/windows clip their
 own UI commands. This does not expose a general nested clipping scope for
 ordinary `draw_text`/`draw_texture_ex` calls. That scope, explicit padding/gap
-helpers and filled rounded panels are still roadmap items. Test compact menus
+helpers are still roadmap items. Test compact menus
 at 390 x 400 as well as desktop sizes; the existing showcase is not a guarantee
 of responsive application layout.
+
+## Draw a rounded panel
+
+`draw_rectangle_rounded(x, y, width, height, radius, color)` draws a filled
+panel in the current camera's coordinates. With the default camera these are
+logical window pixels; with a custom camera they are world units. Return to
+`set_default_camera()` before drawing a screen-space HUD.
+
+```rust,no_run
+use macroquad::prelude::*;
+
+draw_rectangle_rounded(16., 16., 280., 100., 12., Color::new(0.1, 0.2, 0.4, 0.5));
+draw_text("Paused", 32., 60., 28., WHITE);
+```
+
+Finite nonpositive radii give square corners; positive radii clamp to half
+the smaller dimension. Nonfinite inputs, nonpositive dimensions and bounds
+that overflow, collapse or invert the tessellation at `f32` precision draw
+nothing. Eight segments per
+quarter-circle form a convex fan with no overlapping triangle interiors:
+translucent fills have a single layer across the interior. Edge antialiasing
+depends on framebuffer multisampling. The helper preserves the active camera,
+material and clip; it has the same texture-reset behavior as `draw_rectangle`.
+It does not add an outline or change built-in widget skins.
+
+Run `cargo run --example rounded_panels` to inspect adjustable radii and
+transparency. `rounded_panels_check` shares the native pixel regression and
+can also run on WebGL through its accompanying HTML host. The fixture checks
+transparent and opaque target coverage, square/clamped radii, invalid inputs
+and ordered textured/shape drawing.
 
 ## Wrap and draw text explicitly
 
