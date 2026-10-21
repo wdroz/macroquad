@@ -77,6 +77,19 @@ bottom-left origin; these helpers convert its origin to the surface's top-left
 space. A viewport changes where the image is drawn, not the camera zoom.
 Window DPI does not scale render-texture pixels.
 
+Choose the conversion path that matches the surface you actually drew:
+
+| Task | Conversion path |
+| --- | --- |
+| Pick in a directly drawn window camera | `mouse_position_physical()` → `camera.target_to_world` |
+| Put a logical HUD label over a world point in that window | `camera.world_to_target` → `physical_to_logical` |
+| Pick in a displayed render texture | `mouse_position_logical()` → `window_to_render_target` → `camera.target_to_world` |
+| Put a logical HUD label over that render texture | `camera.world_to_target` → `render_target_to_window` |
+
+Use the same camera configuration for drawing and conversion. Changing the
+surface size in a `_with_size` call does not select an offscreen camera or
+change its Y orientation; the camera's `render_target` field still does that.
+
 For direct window picking, pass `mouse_position_physical()` to
 `target_to_world`; convert `world_to_target` results with `physical_to_logical`
 when placing a logical HUD. The `_with_size(point, target_size)` alternatives
@@ -97,9 +110,9 @@ display quads need a caller-owned mapping.
 
 ```rust,no_run
 use macroquad::prelude::*;
-use macroquad::camera::window_to_render_target;
 
 let target = render_target(320, 180);
+let target_size = target.texture.size();
 let camera = Camera2D {
     render_target: Some(target.clone()),
     rotation: 27.,
@@ -107,11 +120,11 @@ let camera = Camera2D {
     ..Camera2D::from_display_rect(Rect::new(0., 0., 320., 180.))
 };
 // Recompute this rectangle whenever the logical window size changes.
-let scale = (screen_width() / 320.).min(screen_height() / 180.);
-let size = vec2(320., 180.) * scale;
+let scale = (screen_width() / target_size.x).min(screen_height() / target_size.y);
+let size = target_size * scale;
 let display = Rect::new((screen_width() - size.x) * 0.5,
                         (screen_height() - size.y) * 0.5, size.x, size.y);
-let picked = window_to_render_target(mouse_position_logical(), vec2(320., 180.),
+let picked = window_to_render_target(mouse_position_logical(), target_size,
                                      display, false, true)
     .and_then(|point| camera.target_to_world(point));
 set_camera(&camera);
@@ -123,7 +136,20 @@ if let Some(point) = picked {
 set_default_camera();
 draw_texture_ex(&target.texture, display.x, display.y, WHITE,
     DrawTextureParams { dest_size: Some(size), flip_y: true, ..Default::default() });
+// The label is ordinary logical-window drawing over the displayed world point.
+if let Some(label) = camera.world_to_target(vec2(210., 62.))
+    .and_then(|point| render_target_to_window(point, target_size, display, false, true))
+{
+    draw_text("Sprite", label.x, label.y - 12., 20., WHITE);
+}
 ```
+
+Create the target once, keep it with the camera, and repeat the mapping/drawing
+part each frame. Recompute the letterbox rectangle after resize. Display-mapping
+helpers reject the outer letterbox bars, but do not know the camera's viewport;
+if only a sub-viewport should be interactive, test that target-pixel rectangle
+before unprojecting. Camera projection/unprojection itself deliberately
+extrapolates outside it.
 
 Run `cargo run --example camera_target` and click the cyan sprite after resizing
 between 390 x 400 and desktop dimensions. Space flips the displayed Y axis,
@@ -141,6 +167,11 @@ Keep IDs stable and unique for stateful windows, groups and editboxes, using
 `macroquad::ui::hash` (or your own `u64` IDs). Repeated generated widgets need an
 item-specific hash input. Existing button calls retain their pointer behavior. Add a stable `.id(id)` to
 opt a button into keyboard focus, shared with editboxes as described below.
+
+Borrow `root_ui()` once while building a menu, then use the `&mut Ui` supplied
+to each contents closure. Calling `root_ui()` again while that borrow is live
+causes a runtime borrow panic. End the borrow before `next_frame().await`;
+the next frame processes input and completes the deferred UI drawing.
 
 The existing building blocks include:
 
@@ -190,7 +221,8 @@ widgets::Window::new(hash!("settings"), vec2(12., 12.), size)
             .padding(RectOffset::new(12., 12., 10., 10.))
             .gap(vec2(0., 8.)));
         let width = ui.available_width();
-        widgets::Button::new("Resume").size(vec2(width, 36.)).ui(ui);
+        widgets::Button::new("Resume").id(hash!("resume"))
+            .size(vec2(width, 36.)).ui(ui);
         widgets::Group::new(hash!("options"), ui.available_size())
             .layout(Layout::Vertical)
             .content_layout(LayoutSettings::new(Layout::Vertical)
@@ -199,6 +231,7 @@ widgets::Window::new(hash!("settings"), vec2(12., 12.), size)
             .ui(ui, |ui| {
                 for option in 0..12 {
                     widgets::Button::new(format!("Option {}", option + 1))
+                        .id(hash!("option", option))
                         .size(vec2(ui.available_width(), 32.)).ui(ui);
                 }
             });
@@ -230,6 +263,25 @@ remain valid. Arithmetic saturates to finite values. Caller-selected spaces
 remain unchanged: use logical window units for a default-camera HUD, or world
 units for custom world drawing. No constraint solver or retained widget tree
 is introduced.
+
+This GPU-free example reserves two custom HUD buttons, so the same geometry
+can drive drawing and pointer hit testing:
+
+```rust
+use macroquad::prelude::*;
+use macroquad::ui::{Layout, LayoutCursor, LayoutSettings};
+
+let mut row = LayoutCursor::new(Rect::new(16., 16., 280., 40.),
+    LayoutSettings::new(Layout::Horizontal).gap(vec2(8., 0.)));
+let back = row.allocate(vec2(80., 40.));
+let next = row.allocate_width(40.);
+assert_eq!(next, Rect::new(104., 16., 192., 40.));
+assert!(back.contains(vec2(20., 20.)));
+```
+
+`LayoutCursor` only allocates rectangles. Custom drawing still needs its own
+clipping, input handling and keyboard focus; use widgets when those built-in
+behaviors are needed.
 
 Run `cargo run --example responsive_layout` and resize to 390 x 400. The
 pause/settings example uses wrapped text, an oversized scroll group and a
@@ -276,6 +328,11 @@ skin without changing existing `Skin` or `Style` struct literals.
 `Ui::focused_widget()` reports the current ID, and existing `set_input_focus`
 and `clear_input_focus` let the caller choose or clear it.
 
+Use the button's returned `bool` as the activation signal. Do not also handle
+Enter/Space as the same application's menu action: a global `is_key_pressed`
+shortcut is separate from UI routing. Gate gameplay shortcuts while a menu or
+modal owns input, and keep a visible focus indicator when customizing colors.
+
 Use `Ui::modal(id, position, size, |ui| { ... })` when a confirmation needs an
 explicit position. This uses the same existing single-modal path as
 `widgets::Popup`; nested modals are not supported. Submit the modal while it
@@ -285,6 +342,38 @@ opened it does not activate its first button. Closing restores the prior
 control when it is still present and enabled. Underlying controls remain
 inactive while the modal is active. Positions and sizes use the active UI's
 coordinates, logical window units for `root_ui`.
+
+Keep the open state outside the frame's UI construction. The following
+function can be called each frame after the opener sets `open`; its return
+value carries the confirmed action back to the application:
+
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::ui::{hash, widgets, Layout, LayoutSettings, Ui};
+
+fn confirm_reset(ui: &mut Ui, open: &mut bool) -> bool {
+    if !*open {
+        return false;
+    }
+    let (reset, cancel) = ui.modal(hash!("reset-modal"), vec2(24., 70.),
+        vec2(300., 110.), |ui| {
+            ui.set_layout(LayoutSettings::new(Layout::Vertical)
+                .padding(RectOffset::new(12., 12., 12., 12.))
+                .gap(vec2(0., 8.)));
+            let reset = widgets::Button::new("Reset")
+                .id(hash!("reset-confirm"))
+                .size(vec2(ui.available_width(), 32.)).ui(ui);
+            let cancel = widgets::Button::new("Cancel")
+                .id(hash!("reset-cancel"))
+                .size(vec2(ui.available_width(), 32.)).ui(ui);
+            (reset, cancel)
+        });
+    if reset || cancel {
+        *open = false; // stop submitting the modal next frame
+    }
+    reset
+}
+```
 
 Run `cargo run --example keyboard_buttons` for a settings menu with an
 editbox, disabled save state and a reset confirmation. The native/WebGL
@@ -368,6 +457,13 @@ its clip, sampler ownership and normal ordering. No `get_internal_gl` call is
 needed for a custom document viewport. Zoom, pan and hit testing remain the
 application's responsibility.
 
+A render clip does not suppress input. Intersect custom hitboxes with the
+visible viewport before accepting a click, and convert the pointer into the
+same space as the hitbox. Use logical input for a window-space document or the
+[displayed-target mapping](#pick-a-displayed-render-target) for an offscreen
+document. A built-in `Group` handles its own widget clipping and hit testing;
+it does not clip ordinary draw calls placed inside its contents closure.
+
 Run `cargo run --example scoped_clipping` for a scrolling document with nested
 image/text clipping and a HUD. `scoped_clipping_check` shares the native GPU
 regression; its HTML host runs the same checks on WebGL, including actual
@@ -414,6 +510,17 @@ For validated frame metadata, use `SpriteRegion` from
 rectangle's offset inside it. Dimensions and offsets use original source
 pixels, with X right and Y down. Empty, nonfinite, out-of-sheet regions and
 inconsistent trimmed bounds return `SpriteRegionError`.
+
+| Stored sheet data | Constructor | Frame size before drawing |
+| --- | --- | --- |
+| Equal-sized cells without gaps | `SpriteRegion::from_grid` | Cell size |
+| Arbitrary complete frame rectangles | `SpriteRegion::new` | Source rectangle size |
+| Frames with transparent margins removed | `SpriteRegion::trimmed` | Explicit original frame size |
+
+The source rectangle locates pixels **on the sheet**. The trim offset and pivot
+locate them **inside the original frame**; they do not include the source
+rectangle's sheet origin. Construct regions when loading sheet metadata, then
+reuse them when selecting or drawing frames.
 
 ```rust,no_run
 use macroquad::experimental::animation::{SpriteRegion, SpriteRegionDrawParams};

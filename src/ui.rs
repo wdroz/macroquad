@@ -1184,6 +1184,35 @@ impl Ui {
     /// activation key is consumed. Submit the popup after its opener; only one
     /// popup may be active, and nested modals are unsupported. Coordinates use
     /// the active UI's units, normally logical window pixels.
+    ///
+    /// Keep `open` in application state and call a function like this each frame.
+    /// The callback's return value can carry a choice out of the popup.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// use macroquad::ui::{hash, root_ui, widgets, Layout, LayoutSettings};
+    /// fn confirmation(open: &mut bool) {
+    ///     let mut ui = root_ui();
+    ///     if widgets::Button::new("Show confirmation")
+    ///         .id(hash!("confirmation-opener")).ui(&mut ui)
+    ///     {
+    ///         *open = true;
+    ///     }
+    ///     if *open {
+    ///         let close = ui.modal(hash!("confirmation"), vec2(30., 60.),
+    ///             vec2(260., 90.), |ui| {
+    ///                 ui.set_layout(LayoutSettings::new(Layout::Vertical)
+    ///                     .padding(RectOffset::new(12., 12., 12., 12.)));
+    ///                 widgets::Button::new("Close")
+    ///                     .id(hash!("confirmation-close"))
+    ///                     .size(vec2(ui.available_width(), 32.)).ui(ui)
+    ///             });
+    ///         if close {
+    ///             *open = false; // omit the modal on the next frame
+    ///         }
+    ///     }
+    /// }
+    /// ```
     pub fn modal<R>(
         &mut self,
         id: Id,
@@ -1236,6 +1265,22 @@ impl Ui {
     /// scroll oversized columns vertically. Use nested groups for mixed
     /// rows/columns instead of `same_line`.
     /// Coordinates use the active UI's units (logical window units for root UI).
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// use macroquad::ui::{hash, root_ui, widgets, Layout, LayoutSettings};
+    /// let mut ui = root_ui();
+    /// widgets::Window::new(hash!("settings-window"), vec2(12., 12.), vec2(280., 160.))
+    ///     .movable(false).titlebar(false).ui(&mut ui, |ui| {
+    ///         ui.set_layout(LayoutSettings::new(Layout::Vertical)
+    ///             .padding(RectOffset::new(12., 12., 12., 12.))
+    ///             .gap(vec2(0., 8.)));
+    ///         widgets::Button::new("Resume").id(hash!("resume"))
+    ///             .size(vec2(ui.available_width(), 36.)).ui(ui);
+    ///         widgets::Button::new("Settings").id(hash!("settings"))
+    ///             .size(vec2(ui.available_width(), 36.)).ui(ui);
+    ///     });
+    /// ```
     pub fn set_layout(&mut self, settings: LayoutSettings) {
         let context = self.get_active_window_context();
         let scrollbar = context.window.vertical_scroll_bar_width;

@@ -42,6 +42,28 @@ impl Group {
 
     /// Configure child flow, padding and gaps independently of this group's
     /// placement in its parent. Existing clipping, scrolling and skins apply.
+    /// Rebuild the group with its current size each frame; scroll state is
+    /// retained by its stable ID. This is equivalent to calling
+    /// [`Ui::set_layout`] at the start of its contents closure.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// use macroquad::ui::{hash, root_ui, widgets, Layout, LayoutSettings};
+    /// let mut ui = root_ui();
+    /// widgets::Group::new(hash!("options"), vec2(260., 140.))
+    ///     .layout(Layout::Vertical) // this group's placement in its parent
+    ///     .content_layout(LayoutSettings::new(Layout::Vertical)
+    ///         .padding(RectOffset::new(8., 8., 8., 8.))
+    ///         .gap(vec2(0., 6.)))
+    ///     .ui(&mut ui, |ui| {
+    ///         for option in 0..12 {
+    ///             widgets::Button::new(format!("Option {option}"))
+    ///                 .id(hash!("option", option))
+    ///                 .size(vec2(ui.available_width(), 32.))
+    ///                 .ui(ui);
+    ///         }
+    ///     });
+    /// ```
     pub fn content_layout(self, settings: LayoutSettings) -> Group {
         Group {
             content_layout: Some(settings),

@@ -21,6 +21,23 @@ pub enum LayoutAlign {
 /// Built-in groups scroll oversized columns vertically; horizontal overflow
 /// requires caller handling. `Free` positions are relative to padding.
 /// These values replace the skin's cursor margin, not widget skin margins.
+///
+/// [`LayoutAlign`] affects the cross axis: horizontal placement in a column,
+/// vertical placement in a row. Select the flow from the available width;
+/// the settings do not choose responsive breakpoints for the application.
+///
+/// ```
+/// use macroquad::prelude::*;
+/// use macroquad::ui::{Layout, LayoutAlign, LayoutCursor, LayoutSettings};
+/// let settings = LayoutSettings::new(Layout::Vertical)
+///     .padding(RectOffset::new(12., 12., 8., 8.))
+///     .gap(vec2(0., 6.))
+///     .align(LayoutAlign::Center);
+/// let mut column = LayoutCursor::new(Rect::new(0., 0., 240., 100.), settings);
+/// assert_eq!(column.allocate(vec2(100., 24.)), Rect::new(70., 8., 100., 24.));
+/// assert_eq!(column.allocate_width(24.), Rect::new(12., 38., 216., 24.));
+/// assert_eq!(column.content_size(), vec2(240., 70.));
+/// ```
 #[derive(Clone, Debug)]
 pub struct LayoutSettings {
     layout: Layout,
@@ -106,6 +123,8 @@ fn add(a: f32, b: f32) -> f32 {
 }
 
 impl LayoutCursor {
+    /// Start an empty layout in `area`, whose origin and size use the caller's
+    /// coordinate space. No clipping, scrolling, drawing or hit testing is added.
     pub fn new(area: Rect, mut settings: LayoutSettings) -> Self {
         settings.padding = RectOffset::new(
             nonnegative(settings.padding.left),
@@ -152,6 +171,8 @@ impl LayoutCursor {
         }
     }
 
+    /// The X component of [`Self::available_size`]; rows consume it as children
+    /// are allocated, while columns retain their padded inner width.
     pub fn available_width(&self) -> f32 {
         self.available_size().x
     }

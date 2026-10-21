@@ -54,6 +54,22 @@ impl<'a> Button<'a> {
     /// visible controls in submission order, applying the result next frame.
     /// Fully clipped controls are skipped; scroll to reveal them first. Enter and
     /// Space activate once per press. Buttons without an ID remain pointer-only.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// use macroquad::ui::{hash, root_ui, widgets};
+    /// let can_save = true;
+    /// let mut ui = root_ui();
+    /// if widgets::Button::new("Save")
+    ///     .id(hash!("save-action"))
+    ///     .enabled(can_save)
+    ///     .focus_color(YELLOW)
+    ///     .size(vec2(180., 32.))
+    ///     .ui(&mut ui)
+    /// {
+    ///     // Handle this activation once; no separate Enter handler is needed.
+    /// }
+    /// ```
     pub fn id(self, id: Id) -> Self {
         Self {
             id: Some(id),

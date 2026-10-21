@@ -1,8 +1,8 @@
 # Examples added on this fork
 
 The other files in this directory are the upstream macroquad samples. This
-page lists this fork's collision, camera, glTF, retained geometry, material
-regression, and video examples. The `gltf` feature enables the glTF loaders;
+page lists this fork's collision, camera, UI, sprite regions, glTF, retained
+geometry, material regression, and video examples. The `gltf` feature enables the glTF loaders;
 `video` independently enables video playback.
 
 | Area | Examples | What to inspect |
@@ -64,6 +64,10 @@ cargo run --example cursor_capture
 cargo run --example canvas_host
 cargo run --example rounded_panels
 cargo run --example rounded_panels_check
+cargo run --example scoped_clipping
+cargo run --example scoped_clipping_check
+cargo run --example responsive_layout
+cargo run --example responsive_layout_check
 cargo run --example keyboard_buttons
 cargo run --example keyboard_buttons_check
 ```
@@ -110,6 +114,44 @@ place the resulting WASM beside
 `rounded_panels_check.html`, and serve the repository root. It checks pixels
 on an offscreen target and then draws a translucent panel on the default
 window camera; no assets or optional features are required.
+
+## UI and 2D learning path
+
+Start with `rounded_panels` for immediate drawing, then `scoped_clipping`
+for a scrolling document whose images and text share a nested clip. The
+scope restores the HUD clip afterward. Select the camera first and clear the
+surface outside the scope; built-in UI groups clip their own deferred widgets.
+
+`responsive_layout` demonstrates a padded settings column, wrapped text,
+scrollable oversized content and a separate action row. Resize to 390 x 400,
+scroll to the final setting, and check that Resume and Apply remain reachable.
+`keyboard_buttons` adds stable IDs, an editbox, disabled actions and a
+confirmation modal. Try Tab/Shift+Tab, a held Enter or Space, and canceling the
+modal to return focus to its opener. These are UI examples: an application's
+pause flag must separately gate world input and simulation.
+
+Next, `camera_target` maps clicks through a displayed render texture into a
+rotated 2D world; `sprite_regions` draws checked source regions while keeping
+the visible pivot fixed through trimming and flips. Change frames manually
+with Space. This example does not implement the queued deterministic sprite
+animation clock. The [UI and 2D guide](../docs/ui-2d-guide.md) connects these
+APIs, coordinate spaces and current animation limitations.
+
+Each of these demos has a matching `_check` example with a shared native/WebGL
+fixture. Run the native fixture with `cargo run --example <name>_check`. For
+WebGL, build and serve the matching HTML host over HTTP, for example:
+
+```sh
+cargo build --target wasm32-unknown-unknown --example scoped_clipping_check
+```
+
+Copy `target/wasm32-unknown-unknown/debug/examples/scoped_clipping_check.wasm`
+to `examples/scoped_clipping_check.wasm`, serve the fork root, and open
+`examples/scoped_clipping_check.html`. Substitute `responsive_layout`,
+`keyboard_buttons`, `camera_target` or `sprite_regions` for the other hosts.
+The paired HTML files load this checkout's JavaScript bundle. Use actual
+window resizing and input after the pixel checks, and inspect at both browser
+DPR 1 and 2; compiling WASM alone does not verify rendering or input.
 
 ## `character_controller`
 

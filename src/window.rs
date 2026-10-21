@@ -45,6 +45,9 @@ pub fn clear_background(color: Color) {
 /// Use synchronous drawing only: do not advance a frame inside the closure.
 /// Deferred built-in UI widgets retain their own clipping and are drawn later,
 /// outside this scope. Background clears and raw backend calls are not clipped.
+/// Clipping restricts rendering only: intersect custom pointer hitboxes with
+/// the visible content rectangle yourself. Built-in groups manage their own
+/// widget hit testing; see [`crate::ui::widgets::Group::content_layout`].
 ///
 /// ```no_run
 /// use macroquad::prelude::*;

@@ -236,6 +236,34 @@ impl SpriteRegion {
     /// Returns an error for nonfinite inputs, nonpositive destination sizes or
     /// unrepresentable resulting f32 geometry. The returned source remains in
     /// original sheet pixels, so ordinary texture atlas remapping is preserved.
+    /// Unlike [`Self::draw`], this method cannot check the texture dimensions.
+    ///
+    /// This asymmetric trim moves across the anchor when mirrored; the source
+    /// rectangle and anchor stay the same:
+    ///
+    /// ```
+    /// use macroquad::experimental::animation::{SpriteRegion, SpriteRegionDrawParams};
+    /// use macroquad::prelude::*;
+    ///
+    /// let frame = SpriteRegion::trimmed(
+    ///     vec2(64.0, 32.0), Rect::new(24.0, 0.0, 8.0, 16.0),
+    ///     vec2(24.0, 24.0), vec2(4.0, 8.0),
+    /// ).unwrap().with_pivot(vec2(12.0, 24.0)).unwrap();
+    /// let anchor = vec2(100.0, 160.0);
+    /// let params = SpriteRegionDrawParams {
+    ///     dest_size: Some(vec2(48.0, 48.0)), // Full frame, including missing margins.
+    ///     ..Default::default()
+    /// };
+    /// let (left, normal) = frame.draw_params(anchor, params).unwrap();
+    /// let (right, mirrored) = frame.draw_params(anchor, SpriteRegionDrawParams {
+    ///     flip_x: true, ..params
+    /// }).unwrap();
+    /// assert_eq!(left, vec2(84.0, 128.0));
+    /// assert_eq!(right, vec2(100.0, 128.0));
+    /// assert_eq!(normal.dest_size, Some(vec2(16.0, 32.0)));
+    /// assert_eq!(normal.source, mirrored.source);
+    /// assert_eq!(mirrored.pivot, Some(anchor));
+    /// ```
     pub fn draw_params(
         &self,
         anchor: Vec2,
@@ -325,6 +353,22 @@ impl SpriteRegion {
     /// Dimensions must match [`Self::sheet_size`]; the texture stays caller-owned.
     /// No commands are submitted on validation failure. This call requires an
     /// initialized graphics context, just like ordinary texture drawing.
+    ///
+    /// ```no_run
+    /// use macroquad::experimental::animation::{SpriteRegion, SpriteRegionDrawParams};
+    /// use macroquad::prelude::*;
+    ///
+    /// // Create/load textures once, then reuse their checked regions each frame.
+    /// let image = Image::gen_image_color(32, 16, SKYBLUE);
+    /// let sheet = Texture2D::from_image(&image);
+    /// let frame = SpriteRegion::from_grid(sheet.size(), vec2(16.0, 16.0), 1, 0)
+    ///     .unwrap().with_pivot(vec2(8.0, 16.0)).unwrap();
+    /// frame.draw(&sheet, vec2(100.0, 160.0), WHITE, SpriteRegionDrawParams {
+    ///     dest_size: Some(vec2(32.0, 32.0)),
+    ///     flip_x: true,
+    ///     ..Default::default()
+    /// }).unwrap();
+    /// ```
     pub fn draw(
         &self,
         texture: &Texture2D,

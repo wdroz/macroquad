@@ -19,7 +19,8 @@ Imported levels continue in [Retained geometry](#retained-geometry), [Resource d
 For animated levels, continue with [Playing glTF clips](#playing-gltf-clips)
 and the [per-frame update order](#update-order-for-an-animated-level). The
 [UI and 2D guide](ui-2d-guide.md) covers the existing menu, camera and sprite
-building blocks alongside these 3D paths.
+building blocks alongside these 3D paths. For a combined frame, see
+[Draw a HUD over a level](#draw-a-hud-over-a-level).
 
 ## Retained geometry
 
@@ -930,6 +931,50 @@ the application needs to retry. Already captured node poses and retained-model
 clones remain snapshots; fetch them again after an update for current drawing
 and collision queries. Unchanged morph weights avoid geometry uploads, while
 changed weights still evaluate and upload synchronously.
+
+## Draw a HUD over a level
+
+Finish the world's material pass before switching to the default material and
+camera for a window HUD. Clear the background before drawing the world;
+`clear_background` clears the surface even inside a clip scope. A clip bounds
+immediate drawing, while built-in widgets queue their own drawing for frame
+completion. Use a UI group for scrolling widgets and `with_clip_rect` for
+custom text or images.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn draw_frame(camera: &Camera3D) {
+clear_background(BLACK);
+set_camera(camera);
+draw_cube(Vec3::ZERO, Vec3::ONE, None, BLUE);
+// Finish any GltfMaterialFrame here, before selecting the HUD camera.
+gl_use_default_material();
+set_default_camera();
+let log = Rect::new(12.0, 48.0, (screen_width() - 24.0).max(0.0), 72.0);
+with_clip_rect(log, || {
+    draw_rectangle(log.x, log.y, log.w, log.h, Color::new(0.0, 0.0, 0.0, 0.6));
+    draw_text("Goal: reach the beacon", log.x + 8.0, log.y + 24.0, 20.0, WHITE);
+});
+draw_text("Mission", 12.0, 30.0, 24.0, WHITE); // previous clip is restored
+# }
+```
+
+Window HUD rectangles and `mouse_position_logical()` use logical pixels.
+`with_clip_rect` uses texture pixels when a render target is active; select
+the camera and target before entering it and keep them fixed until it returns.
+`Camera2D::world_to_target` instead always returns physical surface pixels.
+For a minimap drawn into a texture, follow the
+[displayed-target picking recipe](ui-2d-guide.md#pick-a-displayed-render-target)
+to map a logical window click into target pixels and then world coordinates.
+The legacy screen methods retain their window-sized behavior.
+
+Build menus with [layout helpers](ui-2d-guide.md#size-rows-columns-and-scrolling-settings)
+and [stable button IDs](ui-2d-guide.md#make-buttons-usable-from-the-keyboard).
+Borrow `root_ui()` once for that UI block and release the borrow before
+`next_frame().await`. A modal contains built-in UI focus and pointer input; the
+application still gates world input, movement and animation while paused.
+For example, skip `GltfAnimationPlayer::advance` during a pause. Custom HUD
+drawing inside `with_clip_rect` does not automatically clip deferred widgets.
 
 ## Logical and physical input
 

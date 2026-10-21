@@ -1,5 +1,11 @@
 //! 2D and 3D camera.
 //!
+//! [`Camera2D::target_to_world`] converts physical drawing-surface pixels into
+//! world positions. For an offscreen texture displayed in a logical window
+//! rectangle, first use [`window_to_render_target`]; use the inverse helpers
+//! to place window-space overlays. The legacy `screen_to_world` and
+//! `world_to_screen` methods keep their window-size convention.
+//!
 //! [`Camera3D::screen_to_ray`] unprojects a screen point into a world
 //! [`Ray`]. [`Camera3D::frustum`] extracts the six inward
 //! planes of that same view-projection.
@@ -220,6 +226,23 @@ impl Camera2D {
     /// [`window_to_render_target`] first. Window DPI does not scale texture pixels.
     /// Invalid/unavailable surfaces, singular cameras and nonfinite values return
     /// `None`. Legacy [`Self::screen_to_world`] remains unchanged.
+    ///
+    /// Direct window picking uses physical input; the HUD returns to logical units:
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    ///
+    /// let camera = Camera2D::from_display_rect(Rect::new(0.0, 0.0, 320.0, 180.0));
+    /// if let Some(world) = camera.target_to_world(mouse_position_physical()) {
+    ///     set_camera(&camera);
+    ///     draw_circle(world.x, world.y, 3.0, RED);
+    /// }
+    /// set_default_camera();
+    /// if let Some(pixel) = camera.world_to_target(vec2(160.0, 90.0)) {
+    ///     let label = physical_to_logical(pixel);
+    ///     draw_text("Center", label.x, label.y, 20.0, BLACK);
+    /// }
+    /// ```
     pub fn target_to_world(&self, point: Vec2) -> Option<Vec2> {
         self.target_to_world_with_size(point, self.target_pixel_size()?)
     }
@@ -330,6 +353,22 @@ pub fn window_to_render_target(
 /// texture return `None`, including world projections outside its bounds.
 /// Boundaries are included; invalid dimensions/rectangles and nonfinite values
 /// return `None`. This pure helper does not depend on the window DPI.
+///
+/// ```
+/// use macroquad::prelude::*;
+///
+/// let target_size = vec2(320.0, 180.0);
+/// let display = Rect::new(40.0, 70.0, 640.0, 360.0);
+/// // These flags match the full texture's draw_texture_ex call.
+/// let marker = render_target_to_window(
+///     vec2(80.0, 45.0), target_size, display, true, true,
+/// ).unwrap();
+/// assert_eq!(marker, vec2(520.0, 160.0));
+/// assert_eq!(
+///     window_to_render_target(marker, target_size, display, true, true),
+///     Some(vec2(80.0, 45.0)),
+/// );
+/// ```
 pub fn render_target_to_window(
     point: Vec2,
     target_size: Vec2,

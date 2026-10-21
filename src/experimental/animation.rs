@@ -1,8 +1,14 @@
-//! Animation management
+//! Sprite-sheet metadata and the existing frame-clock animation player.
 //!
-//! To create custom animation and use it you will need an image that can be represented as tiles.
-//! Each tile contains specific frame of animation.
-//! Every specific animation should be placed in separate row.
+//! [`SpriteRegion`] validates explicit rectangles, grid cells and trimmed frames
+//! without owning a texture. It places a caller-selected pivot at a fixed drawing
+//! anchor, including through flips and rotation. [`SpriteRegionDrawParams`] scales
+//! the whole untrimmed frame; [`SpriteRegion::draw`] uses ordinary texture drawing.
+//!
+//! [`AnimatedSprite`] selects equal-sized cells with one animation per sheet row.
+//! Its existing [`update`](AnimatedSprite::update) reads the global frame clock,
+//! loops and advances at most once per call. Region validation does not change
+//! that timing or add a one-shot/elapsed-time player.
 //!
 //! # Examples
 //! Let's say we have an image of our character where every frame is 15x20 rect and we have this animations:
@@ -55,6 +61,7 @@
 //!         next_frame().await;
 //!     }
 //! }
+//! ```
 
 use crate::{
     math::{vec2, Rect, Vec2},
@@ -96,6 +103,12 @@ pub struct AnimatedSprite {
 }
 
 impl AnimatedSprite {
+    /// Stores equal-sized tile dimensions and row-based animation descriptions.
+    ///
+    /// This constructor does not validate them: supply positive tile dimensions,
+    /// a nonempty animation slice, positive frame counts/FPS and a sufficiently
+    /// large texture. Use [`SpriteRegion`] to validate a returned source rectangle
+    /// against the texture dimensions before drawing it.
     pub fn new(
         tile_width: u32,
         tile_height: u32,
@@ -113,9 +126,11 @@ impl AnimatedSprite {
         }
     }
 
-    /// Choose animation to display
+    /// Chooses an animation by index, retaining the accumulated time.
     ///
-    /// **Note:** the animations is not reset when switching, for this use [set_frame][Self::set_frame]
+    /// The frame index is reduced modulo the new animation's frame count.
+    /// [`Self::set_frame`] can select its first frame, but does not reset time.
+    /// The index must exist and its frame count must be positive.
     pub fn set_animation(&mut self, animation: usize) {
         self.current_animation = animation;
 
@@ -128,20 +143,30 @@ impl AnimatedSprite {
         self.current_animation
     }
 
-    /// Set specific frame for animation
+    /// Sets a frame index without resetting the accumulated time.
+    ///
+    /// Supply an index below the current animation's frame count. This method
+    /// does not validate it; [`Self::frame`] reports the corresponding rectangle.
     pub fn set_frame(&mut self, frame: u32) {
         self.frame = frame;
     }
 
-    /// Returns whether the last frame is being displayed
+    /// Returns whether the last frame is being displayed, not whether playback completed.
+    ///
+    /// Playback loops; this is not a one-shot completion flag.
     pub fn is_last_frame(&self) -> bool {
         let animation = &self.animations[self.current_animation];
         self.frame == animation.frames - 1
     }
 
-    /// Update current frame
+    /// Advances the looping player using [`get_frame_time`].
     ///
-    /// Switches to the next frame every `1. / current_animation.fps` seconds
+    /// While [`Self::playing`] is true, time accumulates until it is strictly
+    /// greater than `1. / fps`. This call advances at most one frame and discards
+    /// the remainder when advancing, even after a long tick. Pausing retains
+    /// accumulated time. The frame index is reduced modulo the clip length on
+    /// every call, including while paused. This is not deterministic elapsed-time
+    /// playback; call it once per application frame with valid animation data.
     pub fn update(&mut self) {
         let animation = &self.animations[self.current_animation];
 

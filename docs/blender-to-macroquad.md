@@ -318,6 +318,30 @@ moving platforms remain separate work. See the
 [3D guide](3d-guide.md) and `CharacterController` rustdoc for the movement
 contract and a complete example.
 
+## Add a mission log or pause menu
+
+The level loop above switches to `set_default_camera()` before drawing its
+HUD. Keep that boundary when adding a menu. If the world uses a custom
+material, finish its pass and call `gl_use_default_material()` first. The
+[combined world/HUD recipe](3d-guide.md#draw-a-hud-over-a-level) shows a clipped
+mission log with ordinary text and shapes; it needs no raw renderer access.
+
+Use logical window pixels for the HUD and `mouse_position_logical()` for its
+custom hitboxes. Select the camera before a synchronous `with_clip_rect`
+scope, and draw unclipped headings or controls after the scope. Built-in UI
+groups provide their own scrolling and clipping; a custom drawing scope does
+not enclose their deferred commands.
+
+For a pause/settings panel, use `LayoutSettings` to reserve a scrollable
+content group and a reachable action row, then give each keyboard-operable
+`Button` a stable `.id(hash!("action-name"))`. The
+[UI and 2D guide](ui-2d-guide.md#make-buttons-usable-from-the-keyboard) shows
+Tab traversal and a confirmation modal that restores the opener's focus.
+Keep the pause flag in the game: skip player movement, world shortcuts and
+animation advancement while paused, but continue drawing the level and UI.
+Borrow `root_ui()` once per UI block and release it before awaiting the next
+frame. These UI additions do not require Blender exports or new level markers.
+
 ## Move one imported object
 
 `model.draw` and `draw_culled` submit every chunk with the current material.
@@ -596,6 +620,7 @@ cargo run --features gltf --example gltf_material_check
 cargo run --features gltf --example gltf_shading
 cargo run --features gltf --example gltf_pose_check
 cargo run --features gltf --example gltf_morph_check
+cargo run --features gltf --example gltf_animation_check
 ```
 
 With no path, `gltf_textured` shows the checkerboard. A path is loaded with
