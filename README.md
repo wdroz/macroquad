@@ -471,3 +471,7 @@ rejects invalid dimensions, inputs or unrepresentable extents/vertices.
 Ray units, exact ties and numerical limits follow `TriangleMesh`; AABB overlaps
 include surface touches but do not treat terrain as a solid volume below ground.
 No controller response or acceleration structure is added.
+
+`DistanceJoint` corrects the distance between two rigid-body origins with caller-chosen
+position/velocity fractions and inverse-mass weighting. The caller chooses step order
+and repetitions; zero rest length also damps all relative velocity.

@@ -477,7 +477,7 @@ impl RigidBody {
         Ok(Some(contact))
     }
 
-    fn response_inverse_mass(&self) -> f64 {
+    pub(super) fn response_inverse_mass(&self) -> f64 {
         if self.is_static() || self.mode == RigidBodyMode::Kinematic {
             0.0
         } else {
@@ -485,7 +485,7 @@ impl RigidBody {
         }
     }
 
-    fn response_velocity(&self) -> glam::DVec3 {
+    pub(super) fn response_velocity(&self) -> glam::DVec3 {
         if self.is_static() {
             glam::DVec3::ZERO
         } else {
@@ -525,7 +525,7 @@ impl RigidBody {
         Ok(candidate)
     }
 
-    fn validate(&self) -> Result<(), RigidBodyError> {
+    pub(super) fn validate(&self) -> Result<(), RigidBodyError> {
         if !self.mass.is_finite() || self.mass < 0.0 {
             return Err(RigidBodyError::InvalidMass);
         }

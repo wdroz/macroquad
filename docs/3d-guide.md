@@ -2016,3 +2016,39 @@ retain nonzero subnormal directions. The grid and octree share double-precision
 slab predicates and their conservative rounding limits at extreme scales.
 Check the actual shapes after selecting candidates. This does not add a physics
 world, mesh acceleration or a measured performance claim.
+
+
+### Distance joints
+
+`DistanceJoint::new(rest_length)` creates a caller-stepped constraint between
+`RigidBody::position` origins, available in math/the prelude without a window.
+After integrating bodies, call `joint.solve(&mut a, &mut b)`. Both public
+correction fractions default to 0.2 and must be in `0..=1`. Each call removes
+that fraction of distance error and relative radial speed, for compression
+as well as extension, without changing tangential speed or adding velocity
+from the position correction. Fractions apply per call, independent of time.
+
+```rust
+use macroquad::prelude::*;
+let shape = RigidBodyShape::Sphere(Sphere::new(Vec3::ZERO, 0.1));
+let mut anchor = RigidBody::new(Vec3::ZERO, shape, 0.0).unwrap();
+let mut bob = RigidBody::new(Vec3::Y * 4.0, shape, 1.0).unwrap();
+let joint = DistanceJoint::new(2.0).unwrap();
+joint.solve(&mut anchor, &mut bob).unwrap();
+assert!((bob.position.y - 3.6).abs() < 1e-6);
+```
+
+Dynamic bodies share correction by inverse mass. Static bodies stay fixed and
+their stored velocity is ignored; positive-mass kinematic anchors stay unchanged
+but contribute prescribed velocity. Immovable pairs are validated no-ops.
+Coincident origins with positive rest length use world +X from the first to the
+second argument; this ambiguous case depends on argument order. Zero rest length
+corrects the full displacement and all relative velocity, including at coincidence.
+
+Settings and both bodies are validated on every call, even with zero correction.
+Any error leaves both bodies unchanged, including if only the second proposed
+world shape overflows. Arithmetic uses f64 and accepts finite f32 rounding and
+underflow, which can leave residual error. Refresh spatial bounds after movement.
+No local attachment offsets, angular joints, automatic collision filtering,
+continuous solving or world ownership are supplied. Pair order and repetition
+count affect the result; networks have no convergence or stability guarantee.

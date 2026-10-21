@@ -13,7 +13,8 @@
 //! [`TriangleMesh`] caches triangle bounds for indexed ray hits and surface overlaps.
 //! [`UniformGrid`] and immutable [`Octree`] index caller-owned world bounds for overlap and ray candidates.
 //! [`RigidBody`] integrates caller-owned velocity and position with gravity and
-//! damping, with local [`RigidBodyShape`] geometry. Its explicit
+//! damping, with local [`RigidBodyShape`] geometry. [`DistanceJoint`] supplies
+//! an explicit inverse-mass-weighted constraint between two body origins. The bodies' explicit
 //! [`RigidBody::resolve_collision`] and [`RigidBody::resolve_static_obb`] methods
 //! add one checked discrete separation/impulse step.
 //! The 3D types are unitless
@@ -97,6 +98,7 @@ mod capsule;
 mod character;
 mod circle;
 mod contact;
+mod distance_joint;
 mod frustum;
 mod heightfield;
 mod obb;
@@ -122,6 +124,7 @@ pub use character::{
 };
 pub use circle::Circle;
 pub use contact::Contact;
+pub use distance_joint::{DistanceJoint, DistanceJointError};
 pub use frustum::Frustum;
 pub use heightfield::Heightfield;
 pub use obb::Obb;
