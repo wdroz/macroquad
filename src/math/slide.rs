@@ -4,6 +4,7 @@
 //! a floor already counts as overlapping. [`slide_sphere`] treats that touch
 //! as a surface to slide on. The caller does not pass a smaller radius.
 //! [`slide_sphere_solids`] is the same move against spheres and capsules too.
+//! [`slide_spheres_solids`] moves a rigid group with one shared translation.
 
 use glam::{vec3, Vec3};
 
@@ -222,6 +223,203 @@ pub fn slide_sphere_solids(
         }
     }
     position
+}
+
+/// Slides equal-radius spheres as one rigid group against static solids.
+///
+/// `centers` and `delta` are in world coordinates. The result is a **shared
+/// translation**, including any initial push-out, not a new center. Add it
+/// once to the owning body's position or to every center. All members advance
+/// to the earliest collision of any member, then share the remaining tangent.
+/// Their separation stays fixed; independent slide results are never averaged.
+/// Spheres in the group may overlap each other and do not collide with each
+/// other. Yaw, rotation, gravity and trigger detection remain in the caller.
+///
+/// Pairwise touch and push-out rules are those of [`slide_sphere_solids`], with
+/// the same real radius and the same invalid-solid handling. Each push-out
+/// pass chooses the largest penetration correction across every member and
+/// applies it to the entire group. Equal corrections keep the earlier center,
+/// then AABBs, OBBs, spheres and capsules in slice order. Eight such passes
+/// bound overlap recovery; an impossible or crowded arrangement may remain
+/// overlapping. Motion uses four sweep/slide passes and a final clear-path
+/// check, retaining encountered contact planes so a later slide cannot push
+/// another member back through an earlier face. Complex arrangements may stop
+/// conservatively when that budget is exhausted.
+///
+/// An empty `centers` slice or a negative/non-finite `radius` permits the free
+/// `delta`. Any non-finite center or delta instead returns zero translation.
+/// A single center returns the displacement from [`slide_sphere_solids`].
+///
+/// # Example
+///
+/// Two spheres stand in for a hull: the leading sphere stops both at a wall,
+/// while floor contact keeps the sideways motion.
+///
+/// ```
+/// use macroquad::prelude::*;
+///
+/// let floor = Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(20.0, 1.0, 20.0));
+/// let wall = Aabb::from_center_size(vec3(3.0, 1.0, 0.0), vec3(1.0, 4.0, 20.0));
+/// let centers = [vec3(-1.0, 0.5, 0.0), vec3(1.0, 0.5, 0.0)];
+/// let moved = slide_spheres_solids(
+///     &centers, 0.5, vec3(4.0, -0.25, 1.0), &[floor, wall], &[], &[], &[],
+/// );
+/// assert!((moved - vec3(1.0, 0.0, 1.0)).length() < 1e-4);
+/// let next = centers.map(|center| center + moved);
+/// assert!((next[1] - next[0] - (centers[1] - centers[0])).length() < 1e-4);
+/// ```
+pub fn slide_spheres_solids(
+    centers: &[Vec3],
+    radius: f32,
+    delta: Vec3,
+    aabbs: &[Aabb],
+    obbs: &[Obb],
+    spheres: &[Sphere],
+    capsules: &[Capsule],
+) -> Vec3 {
+    if !delta.is_finite() || centers.iter().any(|center| !center.is_finite()) {
+        return Vec3::ZERO;
+    }
+    if centers.is_empty() || !radius.is_finite() || radius < 0.0 {
+        return delta;
+    }
+    if let [center] = centers {
+        return slide_sphere_solids(*center, radius, delta, aabbs, obbs, spheres, capsules)
+            - *center;
+    }
+
+    let solids = SlideSolids {
+        aabbs,
+        obbs,
+        spheres,
+        capsules,
+    };
+    let mut translation = resolve_group_penetration(centers, radius, &solids);
+    if !translation.is_finite() {
+        return Vec3::ZERO;
+    }
+    let mut remaining = delta;
+    let mut planes = [Vec3::ZERO; 4];
+    for pass in 0..planes.len() {
+        if remaining.length_squared() <= TIME_SLOP * TIME_SLOP {
+            return translation;
+        }
+        let Some(hit) = first_group_hit(centers, translation, radius, remaining, &solids) else {
+            return translation + remaining;
+        };
+        let t = hit.t.clamp(0.0, 1.0);
+        translation += remaining * t;
+        planes[pass] = hit.normal;
+        remaining = group_tangent(remaining * (1.0 - t), &planes[..=pass]);
+    }
+    // Never apply a leftover based only on one member's clear path, even
+    // after a zero-time contact or a numerically tiny projection.
+    if remaining.length_squared() > TIME_SLOP * TIME_SLOP
+        && first_group_hit(centers, translation, radius, remaining, &solids).is_none()
+    {
+        translation += remaining;
+    }
+    translation
+}
+
+/// Project onto the intersection of the encountered outward half-spaces.
+/// The nearest feasible vector is on a face, a two-plane crease, or the
+/// origin. Checking all candidates avoids sequential projections adding a
+/// component back into a previously encountered (non-orthogonal) plane.
+fn group_tangent(delta: Vec3, planes: &[Vec3]) -> Vec3 {
+    // Rotated normals are only approximately unit length. Use their squared
+    // length and wider intermediates so a long projected tangent does not
+    // appear to enter its own plane through rounding.
+    let delta = delta.as_dvec3();
+    let feasible = |candidate: glam::DVec3| {
+        planes
+            .iter()
+            .all(|normal| candidate.dot(normal.as_dvec3()) >= -f64::from(INTO_SLOP))
+    };
+    if feasible(delta) {
+        return delta.as_vec3();
+    }
+    let mut best = glam::DVec3::ZERO;
+    let mut best_score = 0.0;
+    let mut consider = |candidate: glam::DVec3| {
+        // Minimize |candidate - delta|² without its common |delta|² term.
+        // Keeping that term can round a tiny valid tangent to a tie with zero.
+        let score = 2.0 * delta.dot(candidate) - candidate.length_squared();
+        if score > best_score && candidate.is_finite() && feasible(candidate) {
+            best = candidate;
+            best_score = score;
+        }
+    };
+    for (i, normal) in planes.iter().enumerate() {
+        let normal = normal.as_dvec3();
+        consider(delta - normal * (delta.dot(normal) / normal.length_squared()));
+        for other in &planes[..i] {
+            let crease = normal.cross(other.as_dvec3()).normalize_or_zero();
+            consider(crease * delta.dot(crease));
+        }
+    }
+    best.as_vec3()
+}
+
+fn first_group_hit(
+    centers: &[Vec3],
+    translation: Vec3,
+    radius: f32,
+    delta: Vec3,
+    solids: &SlideSolids<'_>,
+) -> Option<SlideHit> {
+    let mut best = None;
+    for center in centers {
+        consider(
+            &mut best,
+            first_hit(*center + translation, radius, delta, solids),
+            delta,
+        );
+    }
+    best
+}
+
+fn resolve_group_penetration(centers: &[Vec3], radius: f32, solids: &SlideSolids<'_>) -> Vec3 {
+    let mut translation = Vec3::ZERO;
+    for _ in 0..8 {
+        let mut best = None;
+        let mut best_len = 0.0;
+        for center in centers {
+            let center = *center + translation;
+            for aabb in solids.aabbs {
+                consider_push(
+                    &mut best,
+                    &mut best_len,
+                    push_out_aabb(center, radius, aabb),
+                );
+            }
+            for obb in solids.obbs {
+                consider_push(&mut best, &mut best_len, push_out_obb(center, radius, obb));
+            }
+            for sphere in solids.spheres {
+                consider_push(
+                    &mut best,
+                    &mut best_len,
+                    push_out_sphere(center, radius, sphere),
+                );
+            }
+            for capsule in solids.capsules {
+                consider_push(
+                    &mut best,
+                    &mut best_len,
+                    push_out_capsule(center, radius, capsule),
+                );
+            }
+        }
+        let Some(push) = best else {
+            break;
+        };
+        if best_len <= TIME_SLOP * TIME_SLOP || !push.is_finite() {
+            break;
+        }
+        translation += push;
+    }
+    translation
 }
 
 struct SlideSolids<'a> {

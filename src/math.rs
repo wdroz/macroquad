@@ -7,7 +7,9 @@
 //! against a static [`Aabb`], [`Obb`], [`Sphere`] or [`Capsule`], or a moving [`Sphere`]
 //! against either box. [`slide_sphere`] moves a sphere along
 //! [`Aabb`] and [`Obb`] faces. [`slide_sphere_solids`] does the same and also
-//! slides against [`Sphere`] and [`Capsule`] solids. The 3D types are unitless
+//! slides against [`Sphere`] and [`Capsule`] solids. [`slide_spheres_solids`]
+//! returns one shared translation for a rigid group of equal-radius spheres.
+//! The 3D types are unitless
 //! and do not assume an up axis.
 //! [`CharacterController`] moves a caller-owned AABB with sliding, ground
 //! snapping and slope limits, using an explicit caller-supplied up direction.
@@ -23,6 +25,8 @@
 //!   a full movement delta; [`SweepHit::t`] is a fraction of that delta.
 //! - [`slide_sphere_solids`] returns a resolved center against static solids.
 //!   The caller owns velocity, gravity, ground state, and trigger detection.
+//! - [`slide_spheres_solids`] returns a shared translation for several sphere
+//!   centers, keeping their separation fixed while sliding the entire group.
 //! - [`CharacterController::move_body`] returns the moved AABB, clipped velocity
 //!   and final ground state against explicitly selected [`CharacterSolids`].
 //! - [`Frustum`] tests visibility bounds; its intersection tests are conservative
@@ -109,7 +113,7 @@ pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};
 pub use rect::{Rect, RectOffset};
-pub use slide::{slide_sphere, slide_sphere_solids};
+pub use slide::{slide_sphere, slide_sphere_solids, slide_spheres_solids};
 pub use sphere::Sphere;
 pub use sweep::SweepHit;
 pub use triangle::Triangle;

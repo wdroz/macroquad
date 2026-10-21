@@ -9,7 +9,8 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 `CharacterController` provides kinematic AABB movement with sliding, ground
 snapping, slope limits and opt-in stair stepping. The caller owns the body,
 velocity and gravity; there is no rigid-body world. `Contact`, `SweepHit`,
-`slide_sphere` and `slide_sphere_solids` remain available for custom response.
+`slide_sphere`, `slide_sphere_solids` and `slide_spheres_solids` remain available
+for custom response.
 The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting,
 loading, drawing and moving through a marked level. The
 [example index](../examples/README.md) lists runnable samples.
@@ -1440,9 +1441,56 @@ Keep triggers out of all four solid slices. A glTF collider's `trigger` flag
 belongs to `GltfCollider`, not `GltfColliderShape`; the shape query alone cannot
 distinguish a goal from a wall. After moving, test triggers separately with
 `overlaps_sphere`. The [Blender tutorial](blender-to-macroquad.md) demonstrates
-that split. Slide helpers return a center only, with no contact list, grounded
-state, velocity update, step climbing, or slope limit. Use the explicit sweep
-and contact queries when a response also needs a hit normal.
+that split. The single-sphere helpers return a center only, with no contact
+list, grounded state, velocity update, step climbing, or slope limit. Use the
+explicit sweep and contact queries when a response also needs a hit normal.
+
+### Rigid groups of spheres
+
+`slide_spheres_solids(centers, radius, delta, aabbs, obbs, spheres, capsules)`
+takes world-space centers with one shared radius and returns one world-space
+**translation**, including any initial push-out. Add it once to the owning
+object's position, or add the same value to every center. All members advance
+to the earliest hit by any member, then share the remaining slide. Their
+separation stays fixed. Contact planes are retained for the move so sliding
+at a later contact cannot point back into an earlier one. Averaging independent
+`slide_sphere_solids` results could move the leading member through a wall; it
+does not produce this result.
+
+```rust
+use macroquad::math::{slide_spheres_solids, Aabb, vec3};
+
+let floor = Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(20.0, 1.0, 20.0));
+let wall = Aabb::from_center_size(vec3(3.5, 1.0, 0.0), vec3(1.0, 4.0, 20.0));
+let mut hull = [vec3(-1.0, 0.5, 0.0), vec3(1.0, 0.5, 0.0)];
+let separation = hull[1] - hull[0];
+let translation = slide_spheres_solids(
+    &hull, 0.5, vec3(4.0, -0.25, 2.0), &[floor, wall], &[], &[], &[],
+);
+for center in &mut hull {
+    *center += translation;
+}
+assert!((translation - vec3(1.5, 0.0, 2.0)).length() < 1e-4);
+assert!((hull[1] - hull[0] - separation).length() < 1e-4);
+```
+
+Touching a floor keeps its tangent, and initial penetration uses the same
+per-solid push direction as `slide_sphere_solids`. Each push moves the whole
+group and the next pass checks all members again. Members do not collide with
+each other. Push-out and sliding use bounded passes; an impossible fit or
+crowded initial overlap can remain unresolved, and complex contacts can stop
+the motion conservatively. Pass only solids, and test triggers separately for
+each translated sphere.
+
+An empty center slice or a negative/non-finite radius permits the free `delta`.
+A non-finite delta or any non-finite center returns zero translation instead.
+Invalid static shapes are ignored as in the single-sphere helper. The caller
+owns velocity, gravity and orientation. This function solves translation only;
+yaw or other rotation needs a separate collision check before changing the
+member offsets.
+
+The [`slide_solids` example](../examples/README.md#slide_solids) switches between
+the original single sphere and a two-sphere hull with Space.
 
 ## Physics
 

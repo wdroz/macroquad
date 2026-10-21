@@ -8,7 +8,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Area | Examples | What to inspect |
 | --- | --- | --- |
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
-| Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, sphere slide against all four solid shapes; additional full-AABB body sweep fixtures are in the CPU tests |
+| Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, single-sphere and rigid two-sphere slide against boxes, spheres and capsules; additional full-AABB body sweep fixtures are in the CPU tests |
 | Character movement | `character_controller` | Caller-owned AABB, solid-only sweeps, jumping, ceiling/wall sliding, ground snap, slope limits and optional stair stepping with diagnostics |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
@@ -267,7 +267,20 @@ their synthetic headless fixtures live in `tests/aabb_obb_sweep.rs`,
 
 ## `slide_solids`
 
-Moves a sphere with the arrow keys. `slide_sphere_solids` slides it on a floor `Aabb`, past a `Sphere` rock, and around a vertical `Capsule` column. A step that only touches a solid keeps going. The sphere turns red when the step is shortened. Escape quits.
+Move with the arrow keys; Space switches between a single sphere and a rigid
+two-sphere hull and resets the position. R also resets. The hull is selected
+at startup. `slide_sphere_solids` keeps its original single-center result;
+`slide_spheres_solids` returns one translation for both hull centers. A wall
+stops the whole hull while its separation and floor tangent remain. The floor
+and wall use `Aabb`s, with a `Sphere` rock and a vertical `Capsule` column. A
+step that only touches a solid keeps going. Red indicates shortened horizontal motion.
+Escape quits.
+
+For several spheres fixed to one object, the
+[rigid-group guide](../docs/3d-guide.md#rigid-groups-of-spheres) demonstrates
+`slide_spheres_solids`: apply its single translation to the whole group so a
+wall stops every member together while floor tangents and separation remain.
+The CPU tests also cover initial push-out and multiple member contacts.
 
 ## `picking_ray`
 
