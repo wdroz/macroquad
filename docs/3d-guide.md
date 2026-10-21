@@ -6,9 +6,15 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 
 `draw_cube` / `draw_cube_wires` take a center and a **full** size. `Aabb::from_center_size` uses that same pair. `Obb::half_extents` is half of that full size. `Capsule` `a` and `b` are the inner segment, so the hull extends `radius` past each end.
 
-There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, `slide_sphere`, and `slide_sphere_solids` are queries a game uses to write those itself. The physics and character sections below are application code. The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting, loading, drawing, and moving through a marked level. The [example index](../examples/README.md) lists runnable samples.
+`CharacterController` provides kinematic AABB movement with sliding, ground
+snapping and slope limits. The caller owns the body, velocity and gravity;
+there is no rigid-body world or stair stepping. `Contact`, `SweepHit`,
+`slide_sphere` and `slide_sphere_solids` remain available for custom response.
+The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting,
+loading, drawing and moving through a marked level. The
+[example index](../examples/README.md) lists runnable samples.
 
-Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission, [optional basic lighting](#optional-basic-lighting), and shaded normal/roughness maps. [Replacing an imported node pose](#replacing-an-imported-node-pose), [Editing an imported hierarchy](#editing-an-imported-hierarchy), [CPU morph data and evaluation](#cpu-morph-data-and-evaluation), and [Drawing independent morph instances](#drawing-independent-morph-instances) cover moving a baked node and drawing shape keys. Collision queries start at [Ray hits](#ray-hits). Gravity and a capsule standing on a floor are the application samples in [Physics](#physics) and [Character movement](#character-movement). Mouse look uses [Logical and physical input](#logical-and-physical-input) and [Pointer capture](#pointer-capture). Browser density and frame-rate caps are in [Browser canvas budgets](#browser-canvas-budgets).
+Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission, [optional basic lighting](#optional-basic-lighting), and shaded normal/roughness maps. [Replacing an imported node pose](#replacing-an-imported-node-pose), [Editing an imported hierarchy](#editing-an-imported-hierarchy), [CPU morph data and evaluation](#cpu-morph-data-and-evaluation), and [Drawing independent morph instances](#drawing-independent-morph-instances) cover moving a baked node and drawing shape keys. Collision queries start at [Ray hits](#ray-hits). Caller-owned gravity and supported AABB movement are in [Physics](#physics) and [Character movement](#character-movement). Mouse look uses [Logical and physical input](#logical-and-physical-input) and [Pointer capture](#pointer-capture). Browser density and frame-rate caps are in [Browser canvas budgets](#browser-canvas-budgets).
 
 For animated levels, continue with [Playing glTF clips](#playing-gltf-clips)
 and the [per-frame update order](#update-order-for-an-animated-level). The
@@ -1416,27 +1422,76 @@ Rejecting a whole step with `overlaps` sticks a sphere that is only touching a f
 
 ## Character movement
 
-There is no character controller. `on_ground`, slope limits, and step offsets are not library fields. `Capsule` is a possible body shape, but no current sweep or slide moves a capsule. `slide_sphere_solids` moves a sphere against a static capsule. The moving-shape sweep queries are `Aabb::sweep`, `Aabb::sweep_obb`, `Aabb::sweep_sphere`, `Aabb::sweep_capsule`, `Sphere::sweep_aabb`, and `Sphere::sweep_obb`. These cover one translating AABB against static AABBs, OBBs, spheres and capsules; character sliding, grounding and stepping remain separate work.
+`CharacterController::move_body` takes a world-space `Aabb`, velocity, elapsed
+time and `CharacterSolids`, and returns a `CharacterMotion`: the moved body,
+clipped velocity, `on_ground` and optional world-space `ground_normal`. The body
+keeps its full dimensions and world-axis alignment. Static AABBs, OBBs,
+spheres and capsules use the completed full-body sweeps; the moving shape is
+always an AABB. All APIs are in `math` and the prelude, without a window.
 
-A capsule standing on a floor is a `Contact` with an upward normal and a penetration of `0`. That is the ground test. A wall's normal fails the upward check, so the same query does not treat a wall as a floor. A slope limit is the cutoff on `normal.y` in this function; the library does not store one.
+The caller supplies gravity and rebuilds its desired movement each step.
+`CharacterController` contains only settings: `up` (normalized internally),
+`max_slope_angle` in radians, `ground_snap_distance` and `max_iterations`.
+The defaults are +Y, 45 degrees, 0.1 world units and eight passes. A non-Y up
+direction does not rotate the axis-aligned body. Invalid settings, bounds,
+velocity or elapsed time leave the body unchanged and ungrounded.
 
 ```rust
-use macroquad::math::{Aabb, Capsule, vec3};
+use macroquad::math::{Aabb, CharacterController, CharacterMotion, CharacterSolids, Vec3, vec3};
 
-fn on_ground(body: &Capsule, floor: &Aabb) -> bool {
-    let Some(contact) = body.contact_aabb(floor) else {
-        return false;
-    };
-    contact.normal.y > 0.7 && contact.penetration < 0.05
+fn step_player(
+    previous: CharacterMotion, horizontal_wish: Vec3, jump: bool,
+    solids: CharacterSolids<'_>, dt: f32,
+) -> CharacterMotion {
+    // This sample uses Y-up. Rebuild horizontal movement and preserve falling
+    // velocity. A ramp's previous upward tangent is not a new jump request.
+    let mut velocity = horizontal_wish;
+    velocity.y = if previous.on_ground { 0.0 } else { previous.velocity.y };
+    if previous.on_ground && jump { velocity.y = 5.5; }
+    velocity.y -= 9.8 * dt;
+    CharacterController::default().move_body(previous.body, velocity, dt, solids)
 }
+
+let floor = Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(20.0, 1.0, 20.0));
+let previous = CharacterMotion {
+    body: Aabb::from_center_size(vec3(0.0, 0.9, 0.0), vec3(0.6, 1.8, 0.6)),
+    velocity: Vec3::ZERO, on_ground: true, ground_normal: Some(Vec3::Y),
+};
+let solids = CharacterSolids { aabbs: &[floor], ..Default::default() };
+let moved = step_player(previous, Vec3::X * 2.0, false, solids, 1.0 / 60.0);
+assert!(moved.on_ground);
+assert!(moved.body.center().x > 0.0);
 ```
 
-Wish velocity is still the caller's. A capsule moved with `offset` and checked
-only at the endpoint can tunnel through a thin wall. Rejecting every overlap
-also blocks a resting touch on the floor. The sample ground test reports one
-contact; it does not supply a robust capsule movement solver. A sphere-based
-prototype can use `slide_sphere_solids` today. Ground state, stairs, ceilings,
-slopes, and a continuous capsule controller remain application responsibilities.
+Movement projects the untraveled displacement along blocking normals and keeps
+previously encountered planes, so floor strafing survives a wall contact and
+corners cannot reintroduce motion into an earlier wall. Walkable slopes may
+turn horizontal motion into an upward tangent. Steeper upward faces block that
+climb; falling can slide downhill. Vertical faces are never ground.
+
+Grounding checks the **final** body, including after walking off a ledge. A
+downward probe stops at the first solid and snaps only onto a walkable face
+within `ground_snap_distance`; it cannot pass through an unwalkable slope to
+find a floor below. Zero snap distance still recognizes touching support. A
+positive input velocity along `up` skips snapping and grounding so jumping
+detaches immediately. Consequently, build the desired grounded movement
+before each call instead of treating a previous ramp tangent as a jump. Set
+snap distance to zero while falling when only ordinary landings should attach.
+
+Construct `CharacterSolids` from **solid-only** slices. Imported triggers must
+be excluded when collecting those slices, then queried after movement with
+overlap queries. Initial overlaps are recovered deepest first using a bounded
+number of passes; an unresolved overlap leaves the recovered body ungrounded
+and prevents an unchecked movement. Exhausted slide passes discard the
+unresolved displacement. The existing sweep tolerances still apply; this is
+not a general penetration or rigid-body solver.
+
+`examples/character_controller.rs` is a self-contained playable sample with a
+thin wall, a low ceiling, ramps, rounded solids and a nonblocking trigger.
+There is no stair stepping, capsule player, platform transport or rigid-body
+impulse response yet. Existing `slide_sphere_solids` and `Capsule` contact
+queries remain useful for prototypes; capsule overlap tests alone do not
+provide continuous capsule movement.
 
 ## Drawing
 

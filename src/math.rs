@@ -9,6 +9,8 @@
 //! [`Aabb`] and [`Obb`] faces. [`slide_sphere_solids`] does the same and also
 //! slides against [`Sphere`] and [`Capsule`] solids. The 3D types are unitless
 //! and do not assume an up axis.
+//! [`CharacterController`] moves a caller-owned AABB with sliding, ground
+//! snapping and slope limits, using an explicit caller-supplied up direction.
 //! `docs/3d-guide.md` walks through them.
 //!
 //! Choose a query by what the caller needs:
@@ -19,6 +21,8 @@
 //!   a full movement delta; [`SweepHit::t`] is a fraction of that delta.
 //! - [`slide_sphere_solids`] returns a resolved center against static solids.
 //!   The caller owns velocity, gravity, ground state, and trigger detection.
+//! - [`CharacterController::move_body`] returns the moved AABB, clipped velocity
+//!   and final ground state against explicitly selected [`CharacterSolids`].
 //! - [`Frustum`] tests visibility bounds; its intersection tests are conservative
 //!   culling queries and do not replace collision tests.
 //!
@@ -48,8 +52,9 @@
 //! candidates with the same starting body and delta, select the earliest
 //! hit, and apply `delta * hit.t`. [`SweepHit::point`] is a contact position,
 //! not the moving body's new center. Keep trigger overlap checks separate.
-//! Repeated sliding, initial-overlap recovery, gravity, ground detection,
-//! slope limits and stair stepping remain the caller's responsibility.
+//! [`CharacterController`] adds repeated sliding, bounded overlap recovery,
+//! grounding and slope limits over these queries. Gravity and stair stepping
+//! remain the caller's responsibility.
 //!
 //! ```
 //! use macroquad::math::{Aabb, Capsule, Obb, Quat, Sphere, Vec3, vec3};
@@ -73,6 +78,7 @@ pub use glam::*;
 
 mod aabb;
 mod capsule;
+mod character;
 mod circle;
 mod contact;
 mod frustum;
@@ -89,6 +95,7 @@ mod triangle;
 
 pub use aabb::{Aabb, RayHit};
 pub use capsule::Capsule;
+pub use character::{CharacterController, CharacterMotion, CharacterSolids};
 pub use circle::Circle;
 pub use contact::Contact;
 pub use frustum::Frustum;

@@ -9,6 +9,7 @@ regression, and video examples. The `gltf` feature enables the glTF loaders;
 | --- | --- | --- |
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, sphere slide against all four solid shapes; additional full-AABB body sweep fixtures are in the CPU tests |
+| Character movement | `character_controller` | Caller-owned AABB, solid-only sweeps, jumping, ceiling/wall sliding, ground snap and slope limits; no stair stepping |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
 | Imported levels | `gltf_textured`, `gltf_retained`, `gltf_pollable`, `gltf_materials`, `gltf_material_check`, `gltf_shading`, `gltf_pose_check`, `gltf_morph_check`, `gltf_animation_check` | Immediate/retained GLB draw, staged loading, opt-in shading, pose/morph instances and caller-timed transform/weight clip pixel fixtures |
@@ -31,6 +32,7 @@ cargo run --example capsule_overlap
 cargo run --example sweep_hit
 cargo run --example sweep_obb
 cargo run --example slide_solids
+cargo run --example character_controller
 cargo run --example picking_ray
 cargo run --example frustum_cull
 cargo run --example debug_draw
@@ -56,6 +58,17 @@ These commands run from the fork root and open a window. To compile a sample
 without opening a window, use `cargo build --example <name>` with the same
 feature flags and omit runtime arguments after `--`. Pure collision and scene-loader tests can run without graphics;
 rendering and texture uploads need a graphics context.
+
+## `character_controller`
+
+Arrows/WASD move a box character; Space jumps, P pauses and R resets. The
+caller supplies gravity, velocity and the world-space AABB to
+`CharacterController::move_body`. A thin wall, low ceiling, two differently
+sloped OBB ramps, a sphere and a capsule exercise all four static solid paths.
+The final support normal is drawn in red. The blue trigger is queried after
+movement and omitted from `CharacterSolids`, so it never blocks the body.
+Stair stepping and moving platforms remain separate work. See
+[Character movement](../docs/3d-guide.md#character-movement) for the API flow.
 
 ## `font_atlas_lifetime`
 

@@ -296,6 +296,23 @@ gate can supply its current `hierarchy.collider_shape(&scene, collider)` in
 place of the stored `collider.shape`; that is still one query against a static
 snapshot, not a moving-platform solver.
 
+For repeated kinematic movement, `CharacterController::move_body` combines the
+body sweeps with sliding, ground snapping and a slope limit. Build
+`CharacterSolids { aabbs: &aabbs, obbs: &obbs, spheres: &spheres,
+capsules: &capsules }` from the four **trigger-filtered** arrays above. The
+controller cannot identify trigger roles from those shape slices; keep trigger
+overlap queries separate. Pass a world-space `Aabb`, caller-owned velocity and
+elapsed time, then retain the returned `CharacterMotion::body` and `velocity`.
+Its `on_ground` and optional `ground_normal` describe support at the final pose.
+
+Choose `up` to match the loaded scene, set `max_slope_angle` in radians and
+`ground_snap_distance` in world units. The body remains aligned to the world
+axes regardless of `up`. Apply gravity in the game; positive input velocity
+along `up` skips grounding and snapping for takeoff. Stair stepping, capsule
+players and moving platforms remain separate work. See the
+[3D guide](3d-guide.md) and `CharacterController` rustdoc for the movement
+contract and a complete example.
+
 ## Move one imported object
 
 `model.draw` and `draw_culled` submit every chunk with the current material.
