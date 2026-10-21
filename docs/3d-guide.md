@@ -1401,6 +1401,42 @@ assert!(back.is_none());
 
 `Ray::closest_triangle` matches the other slice queries.
 
+### Triangle mesh surfaces
+
+`TriangleMesh::new(Vec<Triangle>)` owns finite world-space corners and caches
+tight per-triangle and overall AABBs. It returns `None` for non-finite corners;
+an empty mesh is valid, with `aabb() == None`. `triangles()` and
+`triangle_bounds()` are immutable slices in original index order. Build a new
+mesh when geometry moves or changes; no renderer, glTF import, rigid-body
+shape variant or automatic collision response is involved.
+
+```rust
+use macroquad::prelude::*;
+
+let ramp = Triangle::new(Vec3::ZERO, vec3(2.0, 0.0, 2.0), vec3(0.0, 2.0, 2.0));
+let mesh = TriangleMesh::new(vec![ramp]).unwrap();
+let hit = mesh.ray_intersect(&Ray::new(vec3(0.5, 0.5, 5.0), -Vec3::Z * 2.0)).unwrap();
+assert_eq!(hit.index, 0);
+assert_eq!(hit.hit.t, 2.0);
+assert!(mesh.overlaps_aabb(&Aabb::from_center_size(vec3(0.5, 0.5, 1.0), Vec3::splat(0.1))));
+assert!(mesh.overlaps_sphere(&Sphere::new(vec3(0.5, 0.5, 1.0), 0.1)));
+```
+
+The ray result reuses `ClosestHit`: `index` identifies the original triangle,
+exact ties keep the first index, and `hit.t` is distance only for a unit ray
+direction. It delegates to the existing two-sided triangle ray query, including
+winding normals, zero-area misses and its floating-point limits. Ray queries
+scan the triangles directly to preserve that query's boundary behavior.
+
+Overlap queries first reject cached bounds, then test the surface using f64
+intermediates (triangle/box separating axes or sphere/surface distance). Touches
+count, including degenerate triangle segments and points. Non-finite or inverted
+boxes and non-finite/negative-radius spheres miss. These are surface queries:
+being wholly inside a closed mesh without touching a face does not overlap.
+All queries are linear scans, with no BVH, solid-volume test, sweep or mesh
+response solver. The pure non-axis-aligned fixture and query regressions live
+in `tests/triangle_mesh.rs` and run without a window.
+
 ## Oriented boxes
 
 `Obb` is a center, `half_extents`, and a rotation quaternion. A negative half extent is empty. Queries normalize a non-zero finite quaternion. A zero quaternion misses.

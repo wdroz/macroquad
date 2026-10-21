@@ -170,6 +170,9 @@ capsule, or a sphere moving against either box type,
 `slide_sphere` keeps the leftover motion along a face, and
 `slide_sphere_solids` does the same against spheres and capsules.
 `slide_spheres_solids` returns one shared translation for a fixed sphere hull.
+`TriangleMesh` owns finite world-space triangles with cached bounds, closest
+indexed ray hits and AABB/sphere surface overlaps. See the [3D guide](docs/3d-guide.md#triangle-mesh-surfaces).
+
 `UniformGrid` indexes caller-owned world bounds for candidate queries; its
 snapshots must be updated after movement. Sliding and initial recovery need
 [conservative candidate bounds](docs/3d-guide.md#candidate-bounds-for-sliding).
