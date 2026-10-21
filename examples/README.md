@@ -183,6 +183,36 @@ The paired HTML files load this checkout's JavaScript bundle. Use actual
 window resizing and input after the pixel checks, and inspect at both browser
 DPR 1 and 2; compiling WASM alone does not verify rendering or input.
 
+## CPU motion and marker recipes
+
+The [3D guide](../docs/3d-guide.md) starts with a choice of contact queries,
+constrained translation, character movement and explicit body response.
+`slide_solids` is the visual entry point for a fixed two-sphere hull. It applies
+one returned translation to all members; it is not a mass or impulse demo.
+Before adding a grid, read the
+[candidate-envelope recipe](../docs/3d-guide.md#candidate-bounds-for-sliding):
+deflection and initial push-out need more than the requested start/end bounds.
+
+`UniformGrid`, `RigidBody::integrate`, `resolve_collision` and
+`resolve_static_obb` have GPU-free recipes in the
+[grid](../docs/3d-guide.md#uniform-grid-candidates) and
+[physics](../docs/3d-guide.md#physics) sections. Pair response is discrete;
+the application owns time steps, solid/trigger filtering, pair order and bound
+updates. Run their maintained CPU regressions from the fork root:
+
+```sh
+cargo test --test rigid_slide --test uniform_grid --test rigid_body --test collision_response
+cargo test --features gltf --test gltf_markers
+```
+
+The [Blender tutorial](../docs/blender-to-macroquad.md#3-inspect-the-cpu-scene)
+checks emitted collider/spawn counts, a trigger's shape and marker tags before
+opening a window. A duplicated `_trigger.001` name still needs `mq_shape` for
+an empty, and exporting Custom Properties supplies that shape and its `mq_tag`.
+The tutorial's `assets/room.glb` is authored by the reader; no maintained room
+example or room asset is included yet. Existing `gltf_*` samples exercise the
+small checked-in fixtures listed below.
+
 ## `character_controller`
 
 Arrows/WASD move a box character; Space jumps, T toggles stepping, P pauses and R resets. The

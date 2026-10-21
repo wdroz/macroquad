@@ -20,6 +20,20 @@ pub enum RigidBodyShape {
 ///
 /// In either mode, zero mass makes the body static and leaves both position
 /// and velocity unchanged. Collision response is an explicit separate call.
+///
+/// ```
+/// use macroquad::prelude::*;
+/// let shape = RigidBodyShape::Sphere(Sphere::new(Vec3::ZERO, 0.5));
+/// let mut mover = RigidBody::new(Vec3::ZERO, shape, 1.0).unwrap();
+/// mover.mode = RigidBodyMode::Kinematic;
+/// mover.linear_velocity = Vec3::X * 2.0;
+/// mover.integrate(0.5, -Vec3::Y * 10.0).unwrap();
+/// assert_eq!(mover.position, Vec3::X); // Prescribed velocity; gravity is ignored.
+/// mover.mass = 0.0;
+/// let before = mover;
+/// mover.integrate(0.5, -Vec3::Y * 10.0).unwrap();
+/// assert_eq!(mover, before); // Zero mass also preserves the stored velocity.
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RigidBodyMode {
     /// Apply gravity before damping and translation.
@@ -76,6 +90,21 @@ impl std::error::Error for RigidBodyError {}
 ///
 /// Every error leaves both bodies unchanged. The existing [`RigidBodyError`]
 /// remains the error type for construction and integration.
+///
+/// Validation also runs for separated pairs, so an invalid coefficient is
+/// reported even when no contact would need a response.
+///
+/// ```
+/// use macroquad::prelude::*;
+/// let shape = RigidBodyShape::Sphere(Sphere::new(Vec3::ZERO, 0.5));
+/// let mut a = RigidBody::new(Vec3::ZERO, shape, 1.0).unwrap();
+/// let mut b = RigidBody::new(Vec3::X * 10.0, shape, 1.0).unwrap();
+/// let before = (a, b);
+/// assert_eq!(a.resolve_collision(&mut b, 2.0),
+///     Err(CollisionResponseError::InvalidRestitution));
+/// assert_eq!((a, b), before);
+/// assert_eq!(a.resolve_collision(&mut b, 0.0), Ok(None));
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CollisionResponseError {
     /// A body field or its proposed result failed the usual body validation.
@@ -200,6 +229,16 @@ impl RigidBody {
     /// Checks position, local shape, and overflow of translated coordinates;
     /// velocity, mass and damping are irrelevant to this query and not checked.
     /// Neither the local shape nor the position is modified.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let local = Sphere::new(Vec3::Y, 0.5);
+    /// let body = RigidBody::new(Vec3::X * 3.0,
+    ///     RigidBodyShape::Sphere(local), 1.0).unwrap();
+    /// assert_eq!(body.world_shape().unwrap(),
+    ///     RigidBodyShape::Sphere(Sphere::new(vec3(3.0, 1.0, 0.0), 0.5)));
+    /// assert_eq!(body.shape, RigidBodyShape::Sphere(local));
+    /// ```
     pub fn world_shape(&self) -> Result<RigidBodyShape, RigidBodyError> {
         if !self.position.is_finite() {
             return Err(RigidBodyError::InvalidPosition);

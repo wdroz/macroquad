@@ -250,6 +250,12 @@ pub fn slide_sphere_solids(
 /// `delta`. Any non-finite center or delta instead returns zero translation.
 /// A single center returns the displacement from [`slide_sphere_solids`].
 ///
+/// If using [`super::UniformGrid`] to select solids, query an envelope that
+/// covers the whole group and possible deflection, not just the straight start
+/// and end bounds. A path-length expansion can cover slide motion; initial
+/// overlap recovery can move farther, so recover against the complete solid
+/// set before relying on a reduced candidate set. Exclude triggers as usual.
+///
 /// # Example
 ///
 /// Two spheres stand in for a hull: the leading sphere stops both at a wall,

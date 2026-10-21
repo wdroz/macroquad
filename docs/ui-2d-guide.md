@@ -481,7 +481,9 @@ clips, queued texture lifetime, clipped text and deferred built-in UI.
 breaks for a maximum width. Draw its result with `draw_multiline_text` or
 `draw_multiline_text_ex`, and measure it with `measure_multiline_text`.
 `draw_text` uses a baseline position; the first multiline baseline is the Y
-you pass. Use the same font and scale for wrapping, measuring and drawing.
+you pass. Use the same font, font size and scale for wrapping, measuring and
+drawing, including a custom UI label's skin. Measuring at one size and drawing
+at another can clip lines even when the enclosing layout rectangle is correct.
 These operations need a running macroquad context for font textures.
 
 ```rust,no_run
@@ -613,11 +615,31 @@ Completion does not change the caller's `playing` flag. `reset()` and `seek()`
 also preserve it, so resetting a completed player resumes only if it is playing.
 `elapsed()` is the wrapped loop position or the clamped one-shot position;
 `duration()` is the frame count divided by FPS. Each instance owns its clock.
+Choose the operation by the state change you want:
+
+| Action | Operation | Result |
+| --- | --- | --- |
+| Pause and resume | Change `playing` | Keep the current frame and fractional progress |
+| Restart the selected clip | `reset()` | Rewind and clear completion; preserve `playing` and playback mode |
+| Jump to an absolute clip time | `seek(seconds)` | Wrap a loop or clamp a one-shot, even while paused |
+| Select a clip and start it fresh | `set_animation(index)`, then `reset()` | Explicitly discard the previous clip's progress |
+| Replay a completed one-shot | `reset()`, then set `playing = true` | Start again with the same one-shot policy |
+
 The legacy `set_animation` retains the frame modulo the new length and the
 fractional seconds; `set_frame` retains fractional seconds. Both clear
 completion. Changing FPS can leave excess fractional seconds pending until the
 next playing update, so `elapsed()` is temporarily unnormalized after that
 legacy operation. Prefer `reset` or `seek` for an explicit timeline position.
+Validate a selected clip index before passing it to `set_animation`; an invalid
+index panics without changing the player. `set_frame` is an unchecked legacy
+setter, so supply a frame below the selected clip's length. Checked construction
+validates animation metadata, while `SpriteRegion` validates the resulting
+source rectangle against the actual sheet dimensions before drawing.
+
+Advance a player from one clock: call `update_with_delta` for caller time or
+`update` for frame time. Calling both in the same tick advances it twice.
+For repeatable playback, replay the same sequence of elapsed values and
+selection/seek operations; the timer does not choose fixed simulation steps.
 
 Run `cargo run --example sprite_animation` for independently timed loop/once
 players. Space plays/pauses, R resets, S seeks to 0.5 seconds and T supplies a
@@ -658,6 +680,12 @@ The frame has four responsibilities:
 
 Pause preserves the sprite's fractional clock. Resume continues it, while the
 modal's restart action resets the score and animation while staying paused.
+The shared scene captures `was_paused` before processing the menu and uses
+`was_paused || paused` afterward to block **both** world input and elapsed time.
+That blocks the opening and closing frames as well as frames spent in the modal.
+Resume starts advancement on the following frame, without replaying the time
+spent paused. Apply the same gate to a gameplay timer or 3D movement if one is
+added to the scene.
 Escape opens or closes the menu. Keep the `Texture2D` and
 render target in the scene instead of reloading them each frame. Region
 metadata and the animation player do not own textures; queued drawing retains

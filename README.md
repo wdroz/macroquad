@@ -169,6 +169,10 @@ is the fixture.
 capsule, or a sphere moving against either box type,
 `slide_sphere` keeps the leftover motion along a face, and
 `slide_sphere_solids` does the same against spheres and capsules.
+`slide_spheres_solids` returns one shared translation for a fixed sphere hull.
+`UniformGrid` indexes caller-owned world bounds for candidate queries; its
+snapshots must be updated after movement. Sliding and initial recovery need
+[conservative candidate bounds](docs/3d-guide.md#candidate-bounds-for-sliding).
 `CharacterController` adds AABB movement, ground handling and optional steps.
 `RigidBody` integrates caller-owned velocity and position with gravity and
 damping. Its explicit `resolve_collision` step separates a touching/overlapping
@@ -178,8 +182,14 @@ own a physics world or prevent tunneling.
 [docs/3d-guide.md](docs/3d-guide.md) covers these helpers and application-owned
 motion against static shapes. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)
 is the export and loading tutorial, including `with_up_axis` and the
-collider / trigger / spawn names. Bot-added examples are listed in
+collider / trigger / spawn names, explicit empty-marker shapes and loaded-marker
+checks. Fork examples and CPU recipes are listed in
 [examples/README.md](examples/README.md).
+
+String `mq_tag` properties are available through `GltfScene::marker_tag(node)`
+using loaded scene-local indices. Tags let a game select markers independently
+of Blender duplicate suffixes such as `_spawn.001`; a tag does not assign a
+role or provide an empty collider's shape. Enable Custom Properties on export.
 
 `GltfScene::marker_rotation(spawn.node)` supplies a normalized world rotation
 for an imported spawn, including parent rotation and `with_up_axis` conversion.

@@ -107,6 +107,20 @@ impl UniformGrid {
     /// boxes (planes, lines and points) are valid. Invalid bounds return `false`
     /// and leave any previous entry unchanged; corners are not normalized
     /// automatically. Very large valid bounds use the fallback described above.
+    ///
+    /// The grid stores a copy: refresh the same index after moving its object.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let mut grid = UniformGrid::new(2.0).unwrap();
+    /// let old_bounds = Aabb::from_center_size(Vec3::ZERO, Vec3::ONE);
+    /// assert!(grid.insert(7, old_bounds));
+    /// let new_bounds = Aabb::from_center_size(Vec3::X * 5.0, Vec3::ONE);
+    /// assert!(grid.insert(7, new_bounds));
+    /// assert_eq!(grid.len(), 1);
+    /// assert!(grid.query_aabb(&old_bounds).is_empty());
+    /// assert_eq!(grid.query_aabb(&new_bounds), vec![7]);
+    /// ```
     pub fn insert(&mut self, index: u32, bounds: Aabb) -> bool {
         if !valid_bounds(&bounds) {
             return false;
@@ -192,6 +206,16 @@ impl UniformGrid {
     /// Infinity is accepted only for the limit, not for a ray component. Finite
     /// queries use cells in the segment's bounding box; a large segment or full
     /// ray scans all stored bounds instead of walking unbounded empty cells.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let mut grid = UniformGrid::new(1.0).unwrap();
+    /// grid.insert(20, Aabb::from_center_size(Vec3::X * 2.0, Vec3::ONE));
+    /// grid.insert(3, Aabb::from_center_size(Vec3::X * 4.0, Vec3::ONE));
+    /// let ray = Ray::new(Vec3::ZERO, Vec3::X * 2.0);
+    /// assert_eq!(grid.query_ray(&ray, 1.0), vec![20]); // Ends at world X = 2.
+    /// assert_eq!(grid.query_ray(&ray, 2.0), vec![3, 20]); // Index order, not distance.
+    /// ```
     pub fn query_ray(&self, ray: &Ray, max_t: f32) -> Vec<u32> {
         if !ray.origin.is_finite() || !ray.direction.is_finite() || max_t.is_nan() || max_t < 0.0 {
             return Vec::new();

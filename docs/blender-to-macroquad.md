@@ -100,9 +100,9 @@ Z-up coordinates for the following recipe; export converts them to Y-up.
    mesh with only a role suffix.
 2. Add a Plain Axes empty at `(0, -2, 0.4)`, name it `goal_trigger`, set its
    **scale** to `(0.6, 0.6, 0.6)`, and add `mq_role = trigger`,
-   `mq_shape = sphere`. The resulting trigger has radius `0.6`.
+   `mq_shape = sphere`, and `mq_tag = goal`. The resulting trigger has radius `0.6`.
 3. Add a Plain Axes empty at `(0, 0, 0.4)`, name it `player_spawn`, and add
-   `mq_role = spawn`. This tutorial interprets its position as the center of
+   `mq_role = spawn` and `mq_tag = player`. This tutorial interprets its position as the center of
    a sphere of radius `0.4`, resting on the floor. The file stores no body size.
 4. Give the cubes simple opaque base-color materials. Empties have no draw
    geometry; the game below outlines the goal sphere itself.
@@ -112,7 +112,7 @@ Z-up coordinates for the following recipe; export converts them to Y-up.
 File → Export → glTF 2.0 (`.glb` / `.gltf`).
 
 1. **Format: glTF Binary (`.glb`)** when the game will draw the level. `GltfModel` only accepts a `.glb`. `GltfScene::from_bytes` also accepts a `.gltf` whose buffers are `data:` URIs. External `.bin` files are unsupported; an external image is an error when a loaded primitive samples it.
-2. **Include → Custom Properties** (`export_extras=True` in Python), so `mq_shape`, `mq_role`, and `mq_tag` reach the node extras. Name suffixes still work if this box is unchecked.
+2. **Include → Custom Properties** (`export_extras=True` in Python), so `mq_shape`, `mq_role`, and `mq_tag` reach the node extras. A name suffix alone can still assign a role if this box is unchecked, but it cannot supply the shape of an empty collider/trigger or its tag; the tutorial needs this option enabled.
 3. **Transform → +Y Up** stays checked.
 4. **Data → Mesh**: apply modifiers if the collider should see the modified surface, and export UVs, normals, and tangents when the mesh will be drawn or shaded. Leave the exporter's **Shape Keys** option enabled when the object has them (it sits under Mesh or Animation, depending on the Blender version). `GltfMorphData` reads the POSITION and NORMAL deltas. `GltfMorphModel` draws independently weighted instances of those shape keys. Tangent morphs are not evaluated.
 5. **Data → Material**: export materials, and keep images packed into the `.glb` (the exporter's automatic image mode). PNG, JPEG, and WebP are decoded. A WebP image uses `EXT_texture_webp`. A normal map and a metallic-roughness map are loaded with the draw model; occlusion is not.
@@ -132,15 +132,29 @@ Parsing bytes does not need a window. For a file embedded at compile time, use
 accepts the file's bytes so it also works with another loading mechanism.
 
 ```rust
-use macroquad::gltf::GltfScene;
+use macroquad::gltf::{GltfColliderShape, GltfScene};
 use macroquad::math::Sphere;
 # fn inspect(bytes: &[u8]) {
 let scene = GltfScene::from_bytes(bytes).expect("level");
 
+// Check the authoring contract before starting gameplay. These counts describe
+// this six-object tutorial scene; change them when authoring a different level.
+assert_eq!(scene.colliders.iter().filter(|c| !c.trigger).count(), 4);
+assert_eq!(scene.colliders.iter().filter(|c| c.trigger).count(), 1);
+assert_eq!(scene.spawns.len(), 1);
+assert_eq!(scene.marker_tags.len(), scene.nodes.len());
+let goal = scene.colliders.iter()
+    .find(|c| c.trigger && scene.marker_tag(c.node) == Some("goal"))
+    .expect("goal trigger: export its mq_shape and mq_tag");
+let GltfColliderShape::Sphere(goal_shape) = goal.shape else {
+    panic!("goal needs mq_shape = sphere");
+};
+assert!((goal_shape.radius - 0.6).abs() < 1e-5);
+
 let spawn = scene
     .spawns
     .iter()
-    .find(|spawn| spawn.name.as_deref() == Some("player_spawn"))
+    .find(|spawn| scene.marker_tag(spawn.node) == Some("player"))
     .expect("spawn");
 let body = Sphere::new(spawn.position, 0.4);
 
@@ -154,6 +168,12 @@ for collider in &scene.colliders {
 
 CPU parsing needs no graphics context and is suitable for tests. The floor is
 expected to overlap the resting player's sphere because touching counts.
+Checking only `scene.nodes` would miss an unrecognized marker: the empty can
+be present as a node while absent from `scene.colliders`. Assert the emitted
+role, shape and tag used by the game. Tags survive Blender's `.001` name tail,
+but they are not unique identifiers: duplicating a tagged object duplicates its
+tag too. When the game requires one player spawn, check that exactly one spawn
+has its tag rather than silently accepting the first of several.
 
 To preserve the facing direction of a spawn, rotate its empty in Blender before
 exporting. Reading only `spawn.position` loses that orientation. After loading
@@ -164,7 +184,7 @@ use macroquad::gltf::GltfScene;
 use macroquad::math::{Quat, Vec3};
 # fn player_pose(scene: &GltfScene) -> Option<(Vec3, Quat)> {
 let spawn = scene.spawns.iter()
-    .find(|spawn| spawn.name.as_deref() == Some("player_spawn"))?;
+    .find(|spawn| scene.marker_tag(spawn.node) == Some("player"))?;
 let rotation = scene.marker_rotation(spawn.node)?;
 // Choose the local forward axis used by the player's mesh or controller.
 let forward = rotation * -Vec3::Z;
@@ -200,7 +220,7 @@ async fn main() {
     let mut center = scene
         .spawns
         .iter()
-        .find(|spawn| spawn.name.as_deref() == Some("player_spawn"))
+        .find(|spawn| scene.marker_tag(spawn.node) == Some("player"))
         .map(|spawn| spawn.position)
         .expect("player_spawn");
     let (mut aabbs, mut obbs, mut spheres, mut capsules) =
@@ -337,11 +357,26 @@ world AABB under each collider's caller-chosen `u32` index, retain the mapping
 to `scene.colliders` yourself, and query by AABB or ray. Returned indices are
 unique and numerically sorted; they do not imply nearest-hit order or solid
 roles. Keep triggers separate and still test the original collider shape.
-Update the bounds after pose changes. A translating body's candidate box must
-enclose both its start and end bounds. See
+Update the bounds after pose changes. Enclosing the start and end bounds is
+enough for a straight sweep; sliding can deflect beyond that box. Use an envelope
+that also covers deflection, and handle initial overlap against the complete
+solid set before narrowing movement candidates. Steps and snapping need their
+additional paths covered as well. See
 [Uniform grid candidates](3d-guide.md#uniform-grid-candidates) for a complete
-example, replacement/rebuild semantics and invalid-input behavior. The loader
+example, [sliding bounds](3d-guide.md#candidate-bounds-for-sliding),
+replacement/rebuild semantics and invalid-input behavior. The loader
 and character controller do not create or own a grid automatically.
+
+For mass-based objects, `RigidBody` offers a separate integration and discrete
+pair-response path. Its AABB/sphere geometry is local to `body.position`;
+imported `GltfColliderShape` geometry is already in world space. Keep the imported
+shape at a zero body position, or explicitly convert it to local coordinates,
+so its translation is not applied twice. A sphere body can use
+`resolve_static_obb` directly for an imported world-space OBB. Capsule body
+response is not provided; keep capsule solids on the supported query/slide
+paths. Filter out triggers before any response and choose the application
+time step and pair order. The [physics guide](3d-guide.md#physics) explains
+static versus kinematic bodies, restitution and transactional errors.
 
 ## Add a mission log or pause menu
 

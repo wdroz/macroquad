@@ -73,12 +73,19 @@ use crate::{
 mod sprite_region;
 pub use sprite_region::{SpriteRegion, SpriteRegionDrawParams, SpriteRegionError};
 
-/// Specification of animation
+/// One row-based clip of equal-sized sprite-sheet cells.
+///
+/// The player checks nonzero frame count and FPS, but does not know the image
+/// dimensions. Use [`SpriteRegion`] to check a returned frame against the sheet.
 #[derive(Clone, Debug)]
 pub struct Animation {
+    /// Caller-facing label; selection uses the clip's index, not this name.
     pub name: String,
+    /// Zero-based row of cells, measured from the top of the sheet.
     pub row: u32,
+    /// Number of cells in this row, starting at column zero.
     pub frames: u32,
+    /// Frames per second; each cell is displayed for `1 / fps` seconds.
     pub fps: u32,
 }
 
@@ -245,6 +252,22 @@ impl AnimatedSprite {
     /// frame duration. Pause and playback mode are unchanged. Call [`Self::reset`]
     /// afterward to start the selected clip at time zero.
     ///
+    /// ```
+    /// use macroquad::experimental::animation::*;
+    /// let clips = [
+    ///     Animation { name: "idle".into(), row: 0, frames: 4, fps: 8 },
+    ///     Animation { name: "run".into(), row: 1, frames: 6, fps: 16 },
+    /// ];
+    /// let mut sprite = AnimatedSprite::new(16, 16, &clips, true);
+    /// sprite.update_with_delta(0.25).unwrap();
+    /// sprite.set_animation(1);
+    /// sprite.reset(); // Choose a fresh start instead of preserving progress.
+    /// assert_eq!(sprite.current_animation(), 1);
+    /// assert_eq!(sprite.current_frame(), 0);
+    /// assert_eq!(sprite.elapsed(), 0.0);
+    /// assert_eq!(sprite.duration(), 0.375);
+    /// ```
+    ///
     /// # Panics
     /// The index must exist. An invalid index leaves the player unchanged.
     pub fn set_animation(&mut self, animation: usize) {
@@ -386,6 +409,20 @@ impl AnimatedSprite {
     /// Selects looping or one-shot playback without restarting an in-progress
     /// clip. Switching a completed one-shot to looping wraps to frame zero.
     /// Pause state is preserved. Use [`Self::reset`] to explicitly restart.
+    ///
+    /// ```
+    /// use macroquad::experimental::animation::*;
+    /// let mut sprite = AnimatedSprite::new(8, 8, &[
+    ///     Animation { name: "spark".into(), row: 0, frames: 4, fps: 8 },
+    /// ], false);
+    /// sprite.set_playback(AnimationPlayback::Once);
+    /// sprite.seek(sprite.duration()).unwrap();
+    /// assert!(sprite.is_finished());
+    /// sprite.set_playback(AnimationPlayback::Loop);
+    /// assert_eq!(sprite.current_frame(), 0);
+    /// assert!(!sprite.is_finished());
+    /// assert!(!sprite.playing); // Changing the mode does not resume playback.
+    /// ```
     pub fn set_playback(&mut self, playback: AnimationPlayback) {
         self.playback = playback;
         if self.finished && playback == AnimationPlayback::Loop {

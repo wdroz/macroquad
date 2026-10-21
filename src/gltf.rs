@@ -716,6 +716,24 @@ impl GltfScene {
     /// assert_eq!(guard.name.as_deref(), Some("patrol_spawn.001"));
     /// assert_eq!(scene.marker_tag(usize::MAX), None);
     /// ```
+    ///
+    /// Empty collider/trigger nodes still need `mq_shape`. A role suffix and
+    /// tag are sufficient for selection only after the loader emits a marker.
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfScene;
+    /// let scene = GltfScene::from_bytes(
+    ///     br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0,1]}],"nodes":[
+    ///         {"name":"parcel_trigger.001","extras":{"mq_tag":"parcel"}},
+    ///         {"name":"parcel_trigger.002","extras":{"mq_tag":"parcel","mq_shape":"box"}}
+    ///     ]}"#,
+    /// ).unwrap();
+    /// assert_eq!(scene.marker_tag(0), Some("parcel")); // The tag alone is retained.
+    /// assert_eq!(scene.colliders.len(), 1); // Only the shaped empty emits a trigger.
+    /// let trigger = &scene.colliders[0];
+    /// assert!(trigger.trigger);
+    /// assert_eq!(scene.marker_tag(trigger.node), Some("parcel"));
+    /// ```
     pub fn marker_tag(&self, node: usize) -> Option<&str> {
         self.nodes.get(node)?;
         self.marker_tags.get(node)?.as_deref()

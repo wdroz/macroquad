@@ -11,6 +11,17 @@ snapping, slope limits and opt-in stair stepping. The caller owns the body,
 velocity and gravity; there is no rigid-body world. `Contact`, `SweepHit`,
 `slide_sphere`, `slide_sphere_solids` and `slide_spheres_solids` remain available
 for custom response.
+Choose the movement path according to the result you need:
+
+| Need | Public API | Caller responsibility |
+| --- | --- | --- |
+| Inspect a current overlap | Shape `contact` methods | Decide whether and how to move the shapes |
+| Constrain one requested translation against static solids | Sphere slide helpers, including `slide_spheres_solids` for a fixed hull | Own velocity, gravity and orientation; apply the returned position or translation as documented |
+| Move an AABB character with ground handling | `CharacterController` | Supply velocity, elapsed seconds, solids and optional step height |
+| Integrate a mass and exchange a normal impulse | `RigidBody::integrate`, then explicit pair response | Choose candidate pairs, response order and simulation time steps |
+
+`UniformGrid` can supply candidates for any of these paths. It stores bound
+snapshots and caller indices; it neither moves bodies nor dispatches contacts.
 The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting,
 loading, drawing and moving through a marked level. The
 [example index](../examples/README.md) lists runnable samples.
@@ -1287,8 +1298,31 @@ ray queries can also scan all entries. The finite ray path selects cells from
 its segment's enclosing AABB, then filters with a slab intersection. This is
 a small spatial index, without a BVH or mandatory physics world; no particular
 frame-time improvement is promised. Reinsert changed bounds, or rebuild, after
-moving shapes. For a translating body, query the union of its starting and
-ending AABBs, then use the existing full-body sweeps on the candidates.
+moving shapes. For one straight translation, query the union of its starting
+and ending AABBs, then use the existing full-body sweeps on the candidates.
+
+### Candidate bounds for sliding
+
+A slide can change direction after hitting a surface. Its path can leave the
+union of the requested start and end bounds, so that straight-sweep envelope
+is insufficient for `slide_sphere_solids` or `slide_spheres_solids`. At ordinary
+game scales, a conservative movement envelope expands the initial body's full
+AABB by the requested path length `delta.length()` in every direction, with
+an outward numerical margin. For a hull, include every sphere and its radius.
+Filter the returned indices into the shape slices that the slide function takes.
+
+Initial-overlap recovery is separate: a push-out can travel farther than the
+requested delta, including when that delta is zero. Recover against the complete
+solid set first, update the position and bounds, then query candidates around
+the recovered body. If overlap remains unresolved, keep the full-solid path
+instead of assuming the movement envelope bounds recovery. A simple game can
+use the full solid list throughout. Validate any application broadphase against
+that complete list for the level's movements, deflections and spawn overlaps.
+
+Stepping and ground snapping likewise need bounds covering their additional
+paths; the straight-sweep envelope alone is not a complete character-controller
+candidate policy. See [rigid sphere groups](#rigid-groups-of-spheres) and
+[character movement](#character-movement) for the underlying movement contracts.
 
 ## Frustum culling
 
@@ -1689,6 +1723,22 @@ immovable box. It supports sphere bodies only, preserving the existing
 `RigidBodyShape` variants. Select solid colliders explicitly; triggers should
 remain overlap queries.
 
+```rust
+use macroquad::prelude::*;
+
+let cover = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY);
+let mut ball = RigidBody::new(
+    vec3(1.25, 0.0, 0.0),
+    RigidBodyShape::Sphere(Sphere::new(Vec3::ZERO, 0.5)),
+    1.0,
+).unwrap();
+ball.linear_velocity = vec3(-2.0, 0.0, 3.0);
+let contact = ball.resolve_static_obb(&cover, 0.0).unwrap().unwrap();
+assert_eq!(contact.normal, Vec3::X); // box toward sphere, before correction
+assert_eq!(ball.position.x, 1.5);
+assert_eq!(ball.linear_velocity, vec3(0.0, 0.0, 3.0)); // tangent retained
+```
+
 Response checks both bodies, including mass, damping, velocity and geometry,
 even for separated or immovable pairs. Errors leave every field of both
 bodies unchanged. The separate `CollisionResponseError` preserves the existing
@@ -1709,6 +1759,15 @@ the grid stores snapshots, and separation can create contacts with other
 bodies. It supplies candidates only; response still queries the actual shapes.
 One discrete pair step cannot prevent tunneling or guarantee a settled stack.
 Rotation, angular response, continuous solving and islands remain separate.
+
+A typical application tick integrates its bodies, updates candidate bounds,
+resolves the selected solid pairs, then draws their corrected positions.
+Keep trigger queries separate. Choose a stable pair order for reproducibility;
+multiple discrete responses can depend on that order. Each call is transactional,
+but a whole tick is not: if a later response fails, successful earlier integration
+or response calls remain applied. A game that needs tick-wide rollback must
+save and restore its own body state. Substeps can reduce travel per tick, but
+they do not turn this API into continuous collision detection.
 
 A game can instead keep its own velocity and call `slide_sphere` for a sphere
 against boxes, or `slide_sphere_solids` when a solid is a sphere or a capsule.
