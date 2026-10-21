@@ -322,6 +322,18 @@ moving platforms remain separate work. See the
 [3D guide](3d-guide.md) and `CharacterController` rustdoc for the movement
 contract and a complete example.
 
+For a larger set of authored colliders, the optional use of `UniformGrid`
+can narrow the candidates before the shape queries above. Store a conservative
+world AABB under each collider's caller-chosen `u32` index, retain the mapping
+to `scene.colliders` yourself, and query by AABB or ray. Returned indices are
+unique and numerically sorted; they do not imply nearest-hit order or solid
+roles. Keep triggers separate and still test the original collider shape.
+Update the bounds after pose changes. A translating body's candidate box must
+enclose both its start and end bounds. See
+[Uniform grid candidates](3d-guide.md#uniform-grid-candidates) for a complete
+example, replacement/rebuild semantics and invalid-input behavior. The loader
+and character controller do not create or own a grid automatically.
+
 ## Add a mission log or pause menu
 
 The level loop above switches to `set_default_camera()` before drawing its

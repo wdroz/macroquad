@@ -1229,6 +1229,63 @@ assert_eq!(ray.origin, camera.position);
 assert!(ray.direction.dot(-Vec3::Z) > 0.999);
 ```
 
+## Uniform grid candidates
+
+`UniformGrid` keeps world-space AABB snapshots under caller-chosen `u32`
+indices. It is available without optional features through `math` and the
+prelude. The caller retains the shapes, trigger flags and gameplay state.
+Choose a finite positive cell size in the same units as the bounds. The grid
+indexes the inclusive cell range from `floor(min / cell_size)` through
+`floor(max / cell_size)`, including negative coordinates. Queries on cell
+faces, edges and corners include touches.
+
+```rust
+use macroquad::prelude::*;
+
+let mut grid = UniformGrid::new(2.0).unwrap();
+let wall = Aabb::from_min_max(vec3(1.0, -2.0, -2.0), vec3(5.0, 2.0, 2.0));
+assert!(grid.insert(42, wall)); // spans several cells, returned only once
+let probe = Aabb::from_min_max(Vec3::ZERO, vec3(1.0, 1.0, 1.0));
+assert_eq!(grid.query_aabb(&probe), vec![42]); // closed-boundary touch
+let ray = Ray::new(Vec3::ZERO, Vec3::X * 2.0);
+assert_eq!(grid.query_ray(&ray, 0.5), vec![42]); // endpoint at x = 1
+
+// Reinserting an index replaces its old bounds. Rebuild after a full update.
+let moved = Aabb::from_center_size(vec3(8.0, 0.0, 0.0), Vec3::ONE);
+assert_eq!(grid.rebuild([(42, moved), (7, probe)]), 2);
+assert_eq!(grid.query_aabb(&probe), vec![7]);
+grid.clear();
+assert!(grid.is_empty()); // cell size remains 2.0
+```
+
+Both queries return unique indices in ascending numeric order. They filter
+cell candidates against the stored AABBs, so sharing a cell alone is not a
+hit. Floating-point ray filtering can retain extra candidates at extreme
+coordinate scales. Bounds are still only a broadphase for an OBB, sphere, capsule or mesh:
+run the appropriate shape query on each candidate. Ray results are ordered
+by index, not distance; use the actual shape hits to choose the nearest one.
+The ray interval is closed, `0 <= t <= max_t`, for
+`origin + direction * t`. Direction need not be normalized: `max_t` is a
+world distance only for a unit direction. Positive infinity requests the
+whole forward ray. A zero direction or zero limit tests the origin.
+
+Construction rejects zero, negative or non-finite cell sizes. Bounds must
+be finite and ordered on every axis; point and flat boxes are valid.
+An invalid insertion returns `false` without replacing an existing entry.
+An invalid query returns an empty vector; ray origin/direction must be finite
+and the limit must be nonnegative and not NaN. `rebuild` first clears the grid,
+skips invalid entries and retains the last valid bounds for each repeated
+index; its return value is the final number of distinct entries.
+
+Large bounds and extreme coordinates remain queryable through a fallback
+scan instead of allocating an unbounded number of cells. Large or infinite
+ray queries can also scan all entries. The finite ray path selects cells from
+its segment's enclosing AABB, then filters with a slab intersection. This is
+a small spatial index, without a BVH or mandatory physics world; no particular
+frame-time improvement is promised. Reinsert changed bounds, or rebuild, after
+moving shapes. For a translating body, query the union of its starting and
+ending AABBs, then use the existing full-body sweeps on the candidates.
+
 ## Frustum culling
 
 `Camera3D::frustum` returns the six inward planes of the same view-projection

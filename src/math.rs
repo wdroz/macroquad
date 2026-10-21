@@ -9,6 +9,7 @@
 //! [`Aabb`] and [`Obb`] faces. [`slide_sphere_solids`] does the same and also
 //! slides against [`Sphere`] and [`Capsule`] solids. [`slide_spheres_solids`]
 //! returns one shared translation for a rigid group of equal-radius spheres.
+//! [`UniformGrid`] indexes caller-owned world bounds for overlap and ray candidates.
 //! The 3D types are unitless
 //! and do not assume an up axis.
 //! [`CharacterController`] moves a caller-owned AABB with sliding, ground
@@ -31,6 +32,8 @@
 //!   and final ground state against explicitly selected [`CharacterSolids`].
 //! - [`Frustum`] tests visibility bounds; its intersection tests are conservative
 //!   culling queries and do not replace collision tests.
+//! - [`UniformGrid`] returns unique caller indices whose stored bounds overlap
+//!   a box or ray segment; run shape queries on those broadphase candidates.
 //!
 //! ```
 //! use macroquad::math::{Aabb, Ray, vec3, Vec3};
@@ -99,6 +102,7 @@ mod sweep;
 mod sweep_capsule;
 mod sweep_obb;
 mod triangle;
+mod uniform_grid;
 
 pub use aabb::{Aabb, RayHit};
 pub use capsule::Capsule;
@@ -117,6 +121,7 @@ pub use slide::{slide_sphere, slide_sphere_solids, slide_spheres_solids};
 pub use sphere::Sphere;
 pub use sweep::SweepHit;
 pub use triangle::Triangle;
+pub use uniform_grid::UniformGrid;
 
 /// Roots of `|offset + delta * t| = radius`, in increasing order.
 ///
