@@ -314,7 +314,10 @@ impl GltfMorphData {
         primitive.evaluate(weights.unwrap_or(&node.weights))
     }
 
-    fn from_document(document: &gltf::Document, binary: Option<&[u8]>) -> Result<Self, GltfError> {
+    pub(crate) fn from_document(
+        document: &gltf::Document,
+        binary: Option<&[u8]>,
+    ) -> Result<Self, GltfError> {
         let buffers = load_buffers(document, binary)?;
         let mut data = Self {
             nodes: Vec::new(),

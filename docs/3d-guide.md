@@ -8,7 +8,7 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 
 There is no rigid-body world and no character controller in the library yet. `Contact`, `SweepHit`, `slide_sphere`, and `slide_sphere_solids` are queries a game uses to write those itself. The physics and character sections below are application code. The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting, loading, drawing, and moving through a marked level. The [example index](../examples/README.md) lists runnable samples.
 
-Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission, [optional basic lighting](#optional-basic-lighting), and shaded normal/roughness maps. [Replacing an imported node pose](#replacing-an-imported-node-pose), [Editing an imported hierarchy](#editing-an-imported-hierarchy), and [CPU morph data and evaluation](#cpu-morph-data-and-evaluation) cover moving a baked node and reading shape keys. Collision queries start at [Ray hits](#ray-hits). Gravity and a capsule standing on a floor are the application samples in [Physics](#physics) and [Character movement](#character-movement). Mouse look uses [Logical and physical input](#logical-and-physical-input) and [Pointer capture](#pointer-capture). Browser density and frame-rate caps are in [Browser canvas budgets](#browser-canvas-budgets).
+Imported levels continue in [Retained geometry](#retained-geometry), [Resource diagnostics](#resource-diagnostics), [Retiring unused render resources](#retiring-unused-render-resources), [Pollable glTF construction](#pollable-gltf-construction), [Loading and materials](#loading-and-materials), and [Opt-in glTF material passes](#opt-in-gltf-material-passes). That last section includes selected-part submission, [optional basic lighting](#optional-basic-lighting), and shaded normal/roughness maps. [Replacing an imported node pose](#replacing-an-imported-node-pose), [Editing an imported hierarchy](#editing-an-imported-hierarchy), [CPU morph data and evaluation](#cpu-morph-data-and-evaluation), and [Drawing independent morph instances](#drawing-independent-morph-instances) cover moving a baked node and drawing shape keys. Collision queries start at [Ray hits](#ray-hits). Gravity and a capsule standing on a floor are the application samples in [Physics](#physics) and [Character movement](#character-movement). Mouse look uses [Logical and physical input](#logical-and-physical-input) and [Pointer capture](#pointer-capture). Browser density and frame-rate caps are in [Browser canvas budgets](#browser-canvas-budgets).
 
 ## Retained geometry
 
@@ -372,9 +372,9 @@ load counts, not measured memory or per-frame GPU costs. `textures` counts
 base-color and emissive uploads only. Normal and metallic-roughness images,
 their UV selection and transforms, and tangents are retained by
 `GltfModel::from_bytes_with_material_maps` and `GltfMaterialMaps`.
-`submit_shaded` samples those maps. CPU morph evaluation is described below;
-GPU morph drawing, skinning, animation,
-environment lighting, shadows and transmission remain roadmap work.
+`submit_shaded` samples those maps. CPU morph evaluation and independent
+deforming draw instances are described below. Shader-based morphing, skinning,
+animation, environment lighting, shadows and transmission remain roadmap work.
 
 ## Opt-in glTF material passes
 
@@ -743,8 +743,75 @@ Positions and deltas stay in mesh-local coordinates. Apply the matching scene
 node's world matrix after evaluation, including any `with_up_axis` rotation.
 `transformed_bounds` encloses the evaluated vertices under a
 finite affine matrix, including reflection, nonuniform scale and shear. It does
-not update scene colliders or draw-model bounds. GPU morph instance drawing,
-tangent deltas, weight clips and skinning remain separate work.
+not update scene colliders or draw-model bounds. Use the drawing API below to
+keep deforming draw geometry and its bounds together. Tangent deltas, weight
+clips and skinning remain separate work.
+
+## Drawing independent morph instances
+
+`GltfMorphModel` loads the same embedded GLB materials and triangle-safe chunks
+as the ordinary draw loader, plus shared immutable mesh-local morph input and
+exact chunk-to-source vertex mappings. Construct it inside a running macroquad
+application. Each `instantiate()` starts with the node's authored default
+weights. Instances initially share the immutable default buffers and textures;
+changing one instance's weights gives its changed chunks new buffers.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn draw_faces(bytes: &[u8], face_node: usize, renderer: &mut GltfMaterialRenderer) -> Result<(), String> {
+let source = GltfMorphModel::from_bytes(bytes)?;
+let neutral = source.instantiate();
+let mut smiling = source.instantiate();
+smiling.set_weights(face_node, &[1.0])?;
+assert!(!smiling.set_weights(face_node, &[1.0])?); // no evaluation or upload
+let mut frame = renderer.begin(Vec3::Z * 5.0, -Vec3::Z)?;
+frame.set_lighting(Some(GltfLighting::default()))?;
+frame.submit_retained(neutral.model(), Mat4::from_translation(-Vec3::X))?;
+frame.submit_retained(smiling.model(), Mat4::from_translation(Vec3::X))?;
+frame.draw();
+# Ok(()) }
+```
+
+The node index is scene-local and must come from this source document. Supply
+exactly one finite weight per target, including target slots that contain only
+unsupported tangent deltas. Negative weights and extrapolation are allowed.
+`set_weights` returns `false` when the requested weights are unchanged. Invalid
+weights or failed evaluation leave the instance's weights and geometry intact.
+`source.data()` exposes the CPU evaluator; `source.pose()` supplies the matching
+rest pose for replacement-node or hierarchy transforms.
+`reset_weights(node)` restores that node's authored defaults.
+`source.with_up_axis(up)?` creates a converted source before instantiation;
+the original source and its existing instances keep their current axes.
+
+`instance.model()` is the current `RetainedGltfModel`. Its chunks contain the
+evaluated positions, normals, bounds and centers. Use their `world_bounds` or
+`posed_bounds` for culling and submit them to one material frame for global
+transparency sorting. Authored normals follow POSITION/NORMAL evaluation and
+the node's inverse transpose; missing base normals are generated from the
+deformed triangles. UV values and material factors stay unchanged; textures and
+rest data remain shared. This path supports existing diffuse material passes
+and custom shaders. It does not construct deformed tangent buffers for
+normal-map/GGX submissions.
+
+Update weights before borrowing the model for material collection. For an
+explicit snapshot, clone `instance.model()`: the clone shares its current
+immutable buffers. Later weight updates replace buffers instead of modifying
+that snapshot, so an already queued draw keeps its old geometry even when the
+instance is updated or dropped. Retained-resource collection frees old buffers
+after their queued references are released. Repeating the same weights or
+drawing an unchanged instance performs no geometry uploads. A change that
+affects only one node leaves other nodes' buffers shared.
+
+For staged construction use `GltfModelLoader::new_with_morph(bytes, settings)`,
+poll it as usual, then call `take_morph_model()` once at completion. Synchronous
+loading is `GltfMorphModel::from_bytes_with_settings`. These opt-in constructors
+retain the CPU rest arrays needed for later updates; ordinary `GltfModel`
+loading and existing public struct literals are unchanged. Updates evaluate and
+upload synchronously; taking the initial morph model also evaluates defaults and
+uploads all initial chunks synchronously. Neither operation provides a
+frame-time budget. Collider shapes and spawn markers are unaffected.
+Shader-based deformation, tangent morphs,
+weight clips and skinning are separate work.
 
 ## Logical and physical input
 

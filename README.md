@@ -64,6 +64,7 @@ cargo run --features gltf --example gltf_pollable
 cargo run --features gltf --example gltf_materials
 cargo run --features gltf --example gltf_shading
 cargo run --features gltf --example gltf_pose_check
+cargo run --features gltf --example gltf_morph_check
 ```
 
 `model.parts` exposes each mesh, source node/name, bounds, and surface metadata
@@ -87,8 +88,12 @@ with preallocated mip levels for Metal.
 
 The separate CPU-only `macroquad::gltf::GltfMorphData` sidecar imports
 POSITION/NORMAL morph deltas and default weights and evaluates explicit weights
-with deformed bounds. It does not change these draw methods; see the
-[morph evaluation guide](docs/3d-guide.md#cpu-morph-data-and-evaluation).
+with deformed bounds. `GltfMorphModel` opts into drawing those deformations:
+its instances share rest data and textures, and `set_weights` replaces only
+changed geometry while queued draws keep their previous buffers alive.
+`instance.model()` exposes the current retained chunks, normals and bounds for
+existing material, pose and culling APIs. Ordinary model loading stays unchanged.
+See the [morph guide](docs/3d-guide.md#drawing-independent-morph-instances).
 
 `GltfModel::from_bytes_with_pose` (or `GltfModelLoader::take_pose`) keeps the
 authored node matrices. `GltfNodePose::set_world` replaces one node's world

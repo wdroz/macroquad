@@ -254,6 +254,19 @@ sorted transparent descendants after parent depth changes. A passing run prints
 `GLTF_POSE_FIXTURE_PASS` and stays green. Without `gltf`, it prints a feature
 reminder and exits.
 
+## `gltf_morph_check`
+
+Requires `--features gltf`. It runs the generated GLB assertions shared with
+`tests/gltf_morph_draw.rs`. Two independently weighted instances reuse shared
+rest data and update their own retained geometry. The fixture checks authored
+defaults, split triangle chunks, evaluated and generated normals, reflection,
+deformed bounds/culling and transparency sorting, pose compatibility, repeated
+unchanged weights without uploads, and old queued geometry surviving replacement
+or drop. A passing native/WebGL run prints `GLTF_MORPH_FIXTURE_PASS` and stays
+green. Without `gltf`, it prints a feature reminder and exits. Shape keys are
+evaluated on the CPU; shader morphing, tangent morphs, clips and skinning are
+outside this example.
+
 ## `material_depth_check`
 
 An OpenGL/WebGL shader regression that exits after checking rendered pixels.

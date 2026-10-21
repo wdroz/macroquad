@@ -98,6 +98,7 @@ struct Prepared<'a> {
     textures: HashMap<usize, Texture2D>,
     material_parts: Vec<GltfPartMaterialMaps>,
     model: GltfModel,
+    morph: Option<super::morph::MorphLoadData>,
 }
 
 impl<'a> Prepared<'a> {
@@ -218,7 +219,30 @@ impl<'a> Prepared<'a> {
             textures: HashMap::new(),
             material_parts: Vec::new(),
             model,
+            morph: None,
         })
+    }
+
+    fn enable_morph(&mut self) -> Result<(), String> {
+        let data = crate::gltf::GltfMorphData::from_document(&self.document, Some(&self.binary))
+            .map_err(|error| error.to_string())?;
+        let indices = self
+            .scene
+            .meshes
+            .iter()
+            .map(|mesh| {
+                mesh.primitives
+                    .iter()
+                    .map(|primitive| primitive.indices.clone())
+                    .collect()
+            })
+            .collect();
+        self.morph = Some(super::morph::MorphLoadData {
+            data,
+            indices,
+            chunks: Vec::new(),
+        });
+        Ok(())
     }
 
     fn preflight(&self, index: usize, limits: GltfImageLimits) -> Result<(), String> {
@@ -333,6 +357,14 @@ impl<'a> Prepared<'a> {
         }
         let indices = winding_indices(&primitive.indices, world);
         for (vertices, indices, sources) in split_triangles(&vertices, &indices, limits)? {
+            if let Some(morph) = &mut self.morph {
+                morph.chunks.push(super::morph::MorphChunk {
+                    node: job.node,
+                    mesh: job.mesh,
+                    primitive: job.primitive,
+                    sources: sources.clone(),
+                });
+            }
             let mut min = Vec3::splat(f32::INFINITY);
             let mut max = Vec3::splat(f32::NEG_INFINITY);
             for vertex in &vertices {
@@ -406,7 +438,14 @@ impl<'a> Prepared<'a> {
         Ok(())
     }
 
-    fn finish(mut self) -> (GltfModel, GltfModelMaterialMaps, GltfModelPose) {
+    fn finish(
+        mut self,
+    ) -> (
+        GltfModel,
+        GltfModelMaterialMaps,
+        GltfModelPose,
+        Option<super::morph::MorphLoadData>,
+    ) {
         let pose = GltfModelPose::from_document(&self.scene, &self.document);
         if self.model.parts.is_empty() {
             self.model.bounds_min = Vec3::ZERO;
@@ -421,7 +460,7 @@ impl<'a> Prepared<'a> {
         let material_maps = GltfModelMaterialMaps {
             parts: self.material_parts,
         };
-        (self.model, material_maps, pose)
+        (self.model, material_maps, pose, self.morph)
     }
 }
 
@@ -470,6 +509,9 @@ pub struct GltfModelLoader<'a> {
     result: Option<GltfModel>,
     material_maps: Option<GltfModelMaterialMaps>,
     pose: Option<GltfModelPose>,
+    morph_requested: bool,
+    morph: Option<super::morph::MorphLoadData>,
+    morph_pose: Option<GltfModelPose>,
     error: Option<String>,
     _render_thread: PhantomData<Rc<()>>,
 }
@@ -496,9 +538,34 @@ impl<'a> GltfModelLoader<'a> {
             result: None,
             material_maps: None,
             pose: None,
+            morph_requested: false,
+            morph: None,
+            morph_pose: None,
             error: None,
             _render_thread: PhantomData,
         })
+    }
+
+    /// Opts into validated CPU morph inputs and exact chunk-to-source mapping.
+    ///
+    /// Parsing reuses the ordinary loader's document and embedded binary data.
+    /// Normal loading progress still covers texture/conversion work only; call
+    /// [`Self::take_morph_model`] at completion to evaluate defaults and upload
+    /// retained geometry synchronously. Ordinary [`Self::new`] has no morph
+    /// array or mapping retention. Taking the ordinary CPU model remains valid
+    /// and preserves its existing unmorphed behavior.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # async fn load(bytes: &[u8]) -> Result<GltfMorphModel, String> {
+    /// let mut loader = GltfModelLoader::new_with_morph(bytes, GltfLoadSettings::default())?;
+    /// while loader.poll()?.stage != GltfLoadStage::Complete { next_frame().await; }
+    /// # Ok(loader.take_morph_model()?.unwrap()) }
+    /// ```
+    pub fn new_with_morph(bytes: &'a [u8], settings: GltfLoadSettings) -> Result<Self, String> {
+        let mut loader = Self::new(bytes, settings)?;
+        loader.morph_requested = true;
+        Ok(loader)
     }
 
     /// Reads progress without performing any work.
@@ -531,6 +598,8 @@ impl<'a> GltfModelLoader<'a> {
             self.result = None;
             self.material_maps = None;
             self.pose = None;
+            self.morph = None;
+            self.morph_pose = None;
             self.progress = GltfLoadProgress::new(GltfLoadStage::Failed, 0);
             self.error = Some(error.clone());
             return Err(error);
@@ -544,7 +613,11 @@ impl<'a> GltfModelLoader<'a> {
             return Ok(());
         }
         if self.progress.stage == Parse && self.progress.completed == 0 {
-            self.prepared = Some(Prepared::new(self.bytes)?);
+            let mut prepared = Prepared::new(self.bytes)?;
+            if self.morph_requested {
+                prepared.enable_morph()?;
+            }
+            self.prepared = Some(prepared);
             self.progress.completed = 1;
             return Ok(());
         }
@@ -555,10 +628,12 @@ impl<'a> GltfModelLoader<'a> {
                 PreflightImages => GltfLoadProgress::new(LoadTextures, prepared.texture_jobs.len()),
                 LoadTextures => GltfLoadProgress::new(ConvertMeshes, prepared.primitive_jobs.len()),
                 ConvertMeshes => {
-                    let (model, maps, pose) = self.prepared.take().unwrap().finish();
+                    let (model, maps, pose, morph) = self.prepared.take().unwrap().finish();
                     self.result = Some(model);
                     self.material_maps = Some(maps);
+                    self.morph_pose = self.morph_requested.then(|| pose.clone());
                     self.pose = Some(pose);
+                    self.morph = morph;
                     GltfLoadProgress::new(Complete, 0)
                 }
                 _ => unreachable!(),
@@ -603,6 +678,8 @@ impl<'a> GltfModelLoader<'a> {
         self.result = None;
         self.material_maps = None;
         self.pose = None;
+        self.morph = None;
+        self.morph_pose = None;
         self.error = Some("glTF loading cancelled".into());
         self.progress = GltfLoadProgress::new(GltfLoadStage::Cancelled, 0);
     }
@@ -648,6 +725,49 @@ impl<'a> GltfModelLoader<'a> {
     /// ```
     pub fn take_pose(&mut self) -> Option<GltfModelPose> {
         self.pose.take()
+    }
+
+    /// Takes an opted-in load as a shared source for independent morph instances.
+    ///
+    /// Requires [`Self::new_with_morph`]. This consumes the untaken CPU model and
+    /// private morph sidecar, evaluates node defaults, validates every chunk,
+    /// then synchronously uploads all initial retained buffers. It may stall;
+    /// uploads are not divided among the preceding polls. Source images and
+    /// geometry errors follow ordinary loading and the CPU morph evaluator.
+    /// Existing public draw-model structs and ordinary take methods are unchanged.
+    ///
+    /// Pending, failed, cancelled or already-taken models return `Ok(None)`.
+    /// `take_pose` may be called before or afterwards. Taking maps is allowed,
+    /// but their tangent
+    /// geometry is not updated by morphs and must not be used as a deformed
+    /// shading sidecar. Errors release consumed resources through ordinary
+    /// retained/texture retirement.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # fn finish(loader: &mut GltfModelLoader<'_>) -> Result<(), String> {
+    /// if let Some(source) = loader.take_morph_model()? {
+    ///     source.instantiate().model().draw(Mat4::IDENTITY);
+    /// }
+    /// # Ok(()) }
+    /// ```
+    pub fn take_morph_model(&mut self) -> Result<Option<GltfMorphModel>, String> {
+        if !self.morph_requested {
+            return Err("glTF morph loading requires new_with_morph".into());
+        }
+        if self.result.is_none() {
+            return Ok(None);
+        }
+        let pose = self
+            .morph_pose
+            .take()
+            .ok_or("glTF morph pose was already taken")?;
+        let model = self.result.take().unwrap();
+        let input = self
+            .morph
+            .take()
+            .ok_or("glTF morph source was already taken")?;
+        GltfMorphModel::from_loaded(model, pose, input).map(Some)
     }
 }
 

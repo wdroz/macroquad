@@ -7,8 +7,8 @@
 //! normals and indices come from the fork's CPU scene loader. This module keeps
 //! material metadata so applications can use their own lighting shader. It does
 //! not implement full PBR, skins, animation clips, external image URIs, or GPU
-//! morph drawing. [`crate::gltf::GltfMorphData`] evaluates POSITION/NORMAL
-//! morph deltas on the CPU and does not change these draw methods.
+//! shader-based morph drawing. [`GltfMorphModel`] opts into CPU-evaluated morph
+//! instances with retained GPU snapshots; existing draw methods stay unchanged.
 //! `EXT_texture_webp` is resolved in memory; the input file is never changed.
 //! [`GltfModel::with_up_axis`] rotates the baked mesh with the same rule as
 //! [`crate::gltf::GltfScene::with_up_axis`].
@@ -112,6 +112,7 @@ mod loading;
 mod material;
 mod material_maps;
 mod material_warnings;
+mod morph;
 mod pose;
 mod shading;
 pub use crate::gltf::GltfImageLimits;
@@ -120,6 +121,7 @@ pub use loading::*;
 pub use material::*;
 pub use material_maps::*;
 pub use material_warnings::*;
+pub use morph::*;
 pub use pose::*;
 pub use shading::{
     gltf_tangent_frame, gltf_tangent_normal, shade_gltf_surface, GltfShadingModel, GltfShadingPart,
