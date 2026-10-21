@@ -3,6 +3,7 @@
 //! Instead it describes where the next widget will be placed
 //! if you do not explicitly set its position with Layout::Free.
 
+use super::{LayoutCursor, LayoutSettings};
 use crate::math::{Rect, Vec2};
 
 #[derive(Clone, Debug)]
@@ -51,6 +52,7 @@ pub struct Cursor {
     pub margin: f32,
     pub next_same_line: Option<f32>,
     pub max_row_y: f32,
+    explicit: Option<LayoutCursor>,
 }
 
 impl Cursor {
@@ -74,10 +76,12 @@ impl Cursor {
             area,
             next_same_line: None,
             max_row_y: 0.,
+            explicit: None,
         }
     }
 
     pub fn reset(&mut self) {
+        self.explicit = None;
         self.x = self.start_x;
         self.y = self.start_y;
         self.max_row_y = 0.;
@@ -93,7 +97,65 @@ impl Cursor {
             + Vec2::new(self.ident, 0.)
     }
 
+    pub fn set_layout(&mut self, settings: LayoutSettings, scrollbar_width: f32) {
+        let area = Rect::new(
+            0.,
+            0.,
+            (self.area.w - scrollbar_width).max(0.),
+            self.area.h.max(0.),
+        );
+        let cursor = LayoutCursor::new(area, settings);
+        let position = cursor.position();
+        self.x = position.x;
+        self.y = position.y;
+        self.next_same_line = None;
+        self.explicit = Some(cursor);
+    }
+
+    pub fn available_size(&self, scrollbar_width: f32) -> Vec2 {
+        self.explicit.as_ref().map_or_else(
+            || {
+                Vec2::new(
+                    (self.area.w - scrollbar_width - self.margin * 2. - self.ident).max(0.),
+                    (self.area.h - self.y - self.margin).max(0.),
+                )
+            },
+            |cursor| {
+                let size = cursor.available_size();
+                Vec2::new((size.x - self.ident).max(0.), size.y)
+            },
+        )
+    }
+
+    pub fn widget_width(&self, legacy_margin: f32) -> f32 {
+        self.explicit
+            .as_ref()
+            .map_or(self.area.w - legacy_margin - self.ident, |cursor| {
+                (cursor.available_width() - self.ident).max(0.)
+            })
+    }
+
     pub fn fit(&mut self, size: Vec2, mut layout: Layout) -> Vec2 {
+        if let Some(cursor) = &mut self.explicit {
+            let free = match layout {
+                Layout::Free(point) => Some(point),
+                _ => None,
+            };
+            let rect = cursor.allocate_widget(size, free, self.ident);
+            let extent = cursor.content_size();
+            self.scroll.inner_rect = self
+                .scroll
+                .inner_rect
+                .combine_with(Rect::new(0., 0., extent.x, extent.y));
+            let position = cursor.position();
+            self.x = position.x;
+            self.y = position.y;
+            self.next_same_line = None;
+            return Vec2::new(rect.x, rect.y)
+                + Vec2::new(self.area.x, self.area.y)
+                + self.scroll.scroll
+                + Vec2::new(self.ident, 0.);
+        }
         let res;
 
         if let Some(x) = self.next_same_line {

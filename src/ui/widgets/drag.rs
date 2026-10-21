@@ -90,7 +90,7 @@ impl<'a> Drag<'a> {
             &UiContent::Label(self.label.into()),
         );
         let size = vec2(
-            context.window.cursor.area.w - context.style.margin * 2. - context.window.cursor.ident,
+            context.window.cursor.widget_width(context.style.margin * 2.),
             label_size.y.max(22.),
         );
 

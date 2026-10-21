@@ -38,7 +38,7 @@ impl<'a, 'b, 'c> ComboBox<'a, 'b, 'c> {
         let line_height = context.style.label_style.font_size;
 
         let size = vec2(
-            context.window.cursor.area.w - context.style.margin * 2. - context.window.cursor.ident,
+            context.window.cursor.widget_width(context.style.margin * 2.),
             (line_height as f32 + 4.).max(19.),
         );
 

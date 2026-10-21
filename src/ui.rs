@@ -77,12 +77,14 @@ use std::collections::HashMap;
 mod cursor;
 mod input;
 mod key_repeat;
+mod layout;
 
 use cursor::Cursor;
 use input::Input;
 
 pub use cursor::Layout;
 use input::{InputCharacter, Key};
+pub use layout::{LayoutAlign, LayoutCursor, LayoutSettings};
 
 /// Is used to keep track of internal state of various widgets like [`widgets::Window`].
 /// These should be unique per window and ideally not change in between frames.
@@ -515,8 +517,11 @@ impl<'a> WindowContext<'a> {
     }
 
     pub fn register_click_intention(&mut self, rect: Rect) -> (bool, bool) {
-        *self.last_item_hovered =
-            self.input.window_active && rect.contains(self.input.mouse_position);
+        *self.last_item_hovered = self.input.window_active
+            && rect.contains(self.input.mouse_position)
+            && self.window.painter.clipping_zone.map_or(true, |clip| {
+                clip.w > 0. && clip.h > 0. && clip.contains(self.input.mouse_position)
+            });
         *self.last_item_clicked = *self.last_item_hovered && self.input.click_down();
 
         (*self.last_item_hovered, *self.last_item_clicked)
@@ -795,6 +800,15 @@ impl Ui {
             window.set_position(position);
         }
         window.size = size;
+        // Resizing an immediate window/group must update its layout viewport
+        // without replacing the cursor and losing its existing scroll state.
+        window.cursor.area.w =
+            (size.x - window.window_margin.left - window.window_margin.right).max(0.);
+        window.cursor.area.h =
+            (size.y - window.title_height - window.window_margin.top - window.window_margin.bottom)
+                .max(0.);
+        window.cursor.scroll.rect.w = window.cursor.area.w;
+        window.cursor.scroll.rect.h = window.cursor.area.h;
         window.want_close = false;
         window.active = true;
         window.painter.clipping_zone = parent_clip_rect;
@@ -1119,12 +1133,7 @@ impl Ui {
         if let Some((id, DragState::Dragging(orig))) = self.dragging {
             let window = &self.windows[&id];
 
-            self.render_window(
-                window,
-                self.input.mouse_position - orig,
-                draw_list,
-                &atlas,
-            );
+            self.render_window(window, self.input.mouse_position - orig, draw_list, &atlas);
         }
     }
 
@@ -1171,6 +1180,38 @@ impl Ui {
     pub fn same_line(&mut self, x: f32) {
         let context = self.get_active_window_context();
         context.window.same_line(x);
+    }
+
+    /// Opt in to explicit container padding, gap and child alignment.
+    ///
+    /// Call once, before submitting children, each frame in the active window
+    /// or group. This replaces its legacy cursor placement for that submission;
+    /// widget calls and skins remain the same. Explicit widget positions remain
+    /// free offsets, now measured from the padded content origin. Horizontal
+    /// rows do not wrap; select a column at a narrow width. Existing groups
+    /// scroll oversized columns vertically. Use nested groups for mixed
+    /// rows/columns instead of `same_line`.
+    /// Coordinates use the active UI's units (logical window units for root UI).
+    pub fn set_layout(&mut self, settings: LayoutSettings) {
+        let context = self.get_active_window_context();
+        let scrollbar = context.window.vertical_scroll_bar_width;
+        context.window.cursor.set_layout(settings, scrollbar);
+    }
+
+    /// Available size for the next child in the active window/group, excluding
+    /// configured padding and a visible vertical scrollbar. Oversized content
+    /// can still be submitted and reached through existing group scrolling.
+    pub fn available_size(&mut self) -> Vec2 {
+        let context = self.get_active_window_context();
+        context
+            .window
+            .cursor
+            .available_size(context.window.vertical_scroll_bar_width)
+    }
+
+    /// Available width for responsive widget sizing and text wrapping.
+    pub fn available_width(&mut self) -> f32 {
+        self.available_size().x
     }
 
     pub fn canvas(&mut self) -> DrawCanvas {

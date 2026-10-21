@@ -1,6 +1,6 @@
 use crate::{
     math::{Rect, Vec2},
-    ui::{Drag, DragState, ElementState, Id, Layout, Ui},
+    ui::{Drag, DragState, ElementState, Id, Layout, LayoutSettings, Ui},
 };
 
 #[derive(Debug, Clone)]
@@ -12,6 +12,7 @@ pub struct Group {
     draggable: bool,
     highlight: bool,
     hoverable: bool,
+    content_layout: Option<LayoutSettings>,
 }
 
 impl Group {
@@ -24,6 +25,7 @@ impl Group {
             draggable: false,
             highlight: false,
             hoverable: false,
+            content_layout: None,
         }
     }
 
@@ -36,6 +38,15 @@ impl Group {
 
     pub const fn layout(self, layout: Layout) -> Group {
         Group { layout, ..self }
+    }
+
+    /// Configure child flow, padding and gaps independently of this group's
+    /// placement in its parent. Existing clipping, scrolling and skins apply.
+    pub fn content_layout(self, settings: LayoutSettings) -> Group {
+        Group {
+            content_layout: Some(settings),
+            ..self
+        }
     }
 
     pub const fn draggable(self, draggable: bool) -> Group {
@@ -119,6 +130,11 @@ impl Group {
         context.window.painter.clip(parent_rect);
 
         context.scroll_area();
+
+        if let Some(settings) = self.content_layout {
+            let scrollbar = context.window.vertical_scroll_bar_width;
+            context.window.cursor.set_layout(settings, scrollbar);
+        }
 
         let clip_rect = context.window.content_rect();
         context.window.painter.clip(clip_rect);

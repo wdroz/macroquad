@@ -86,9 +86,9 @@ The existing building blocks include:
   clipping and scrolling. Use the closure-based `.ui(...)` methods to pair
   begin/end calls.
 - `Layout::Vertical`, `Horizontal` and `Free`, explicit positions/sizes, and
-  `Ui::same_line`. These are cursor placement tools; applications still compute
-  responsive widths and spacing. `Group::layout` controls how the group itself
-  is placed in its parent, not a general layout policy for all its children.
+  `Ui::same_line` retain their legacy cursor behavior. Opt in to explicit child
+  flow with `Ui::set_layout` or `Group::content_layout` below. `Group::layout`
+  still controls placement of the group itself in its parent.
 - Labels, buttons, editboxes, checkboxes, sliders, progress bars, comboboxes,
   tree nodes and draggable groups. See [`examples/ui.rs`](../examples/ui.rs).
 - `Skin` and `StyleBuilder` for fonts, colors, images, margins and nine-slice
@@ -102,9 +102,78 @@ room for controls and scrollbars. Set `.movable(false)` on a window whose
 position must follow your layout each frame; movable windows remember their
 user-controlled position after appearing. Built-in groups/windows clip their
 own UI commands. Use `with_clip_rect` below for ordinary `draw_text` and
-`draw_texture_ex` calls. Explicit padding/gap helpers remain roadmap items. Test compact menus
+`draw_texture_ex` calls. Test compact menus
 at 390 x 400 as well as desktop sizes; the existing showcase is not a guarantee
 of responsive application layout.
+
+## Size rows, columns and scrolling settings
+
+`LayoutSettings` adds explicit padding, per-axis gaps and cross-axis
+`LayoutAlign::{Start, Center, End}` to the existing immediate UI. Call
+`Ui::set_layout(settings)` once before children in a window/group each frame,
+or use `Group::content_layout(settings)`. Settings replace the legacy cursor
+margin; widget skin margins and backgrounds remain unchanged. The existing
+widget calls still work. `Group::layout` continues to place the group in its
+parent independently of its child flow.
+
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::ui::{hash, root_ui, widgets, Layout, LayoutSettings};
+
+let mut ui = root_ui();
+let size = vec2((screen_width() - 24.).max(1.), (screen_height() - 24.).max(1.));
+widgets::Window::new(hash!("settings"), vec2(12., 12.), size)
+    .movable(false).titlebar(false).ui(&mut ui, |ui| {
+        ui.set_layout(LayoutSettings::new(Layout::Vertical)
+            .padding(RectOffset::new(12., 12., 10., 10.))
+            .gap(vec2(0., 8.)));
+        let width = ui.available_width();
+        widgets::Button::new("Resume").size(vec2(width, 36.)).ui(ui);
+        widgets::Group::new(hash!("options"), ui.available_size())
+            .layout(Layout::Vertical)
+            .content_layout(LayoutSettings::new(Layout::Vertical)
+                .padding(RectOffset::new(8., 8., 8., 16.))
+                .gap(vec2(0., 6.)))
+            .ui(ui, |ui| {
+                for option in 0..12 {
+                    widgets::Button::new(format!("Option {}", option + 1))
+                        .size(vec2(ui.available_width(), 32.)).ui(ui);
+                }
+            });
+    });
+```
+
+`Ui::available_size`/`available_width` account for padding, the current flow,
+indentation and a visible vertical scrollbar. Recompute widths each frame,
+including the width passed to existing `wrap_text`. Split the resulting lines
+into label widgets; ordinary single-line labels do not automatically wrap.
+Children retain explicit oversized dimensions; vertical groups use their
+existing clip and scrollbar, including trailing padding after the final child.
+Rows are single-line and do not wrap or gain horizontal scrolling. Select a
+column at an application breakpoint when a row no longer fits. Oversized
+cross-axis children align at the start so their leading edge stays visible.
+Use nested groups for mixed flows instead of mixing `same_line` with the
+opt-in flow. `Free` widget positions are offsets from the padded origin and do
+not advance the flow. Changing a container's size preserves its scroll state
+while updating its layout viewport.
+
+For branded/custom drawing, `LayoutCursor::new(rect, settings)` provides the
+same pure geometry without a UI or GPU. `allocate(size)` advances the row or
+column, `allocate_width(height)` consumes its available width, and
+`allocate_at(offset, size)` reserves a free rectangle. `content_size()` includes
+trailing padding but excludes a trailing gap. Empty content contains only
+padding. Negative/nonfinite padding, gaps and dimensions normalize to zero;
+nonfinite origins/offsets normalize to zero, while finite negative offsets
+remain valid. Arithmetic saturates to finite values. Caller-selected spaces
+remain unchanged: use logical window units for a default-camera HUD, or world
+units for custom world drawing. No constraint solver or retained widget tree
+is introduced.
+
+Run `cargo run --example responsive_layout` and resize to 390 x 400. The
+pause/settings example uses wrapped text, an oversized scroll group and a
+pinned action row. `responsive_layout_check` shares the native/WebGL fixture
+for resize, geometry, clipping, scroll reachability and pointer input. Clipped
+buttons do not react to pointer events outside their group's visible content.
 
 ## Draw a rounded panel
 

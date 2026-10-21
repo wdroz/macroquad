@@ -86,7 +86,7 @@ impl<'a> InputText<'a> {
         );
 
         let size = self.size.unwrap_or(vec2(
-            context.window.cursor.area.w - context.style.margin * 2. - context.window.cursor.ident,
+            context.window.cursor.widget_width(context.style.margin * 2.),
             label_size.y.max(19.),
         ));
 

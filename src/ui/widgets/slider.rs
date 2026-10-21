@@ -37,7 +37,7 @@ impl<'a> Slider<'a> {
         let context = ui.get_active_window_context();
 
         let size = vec2(
-            context.window.cursor.area.w - context.style.margin * 3. - context.window.cursor.ident,
+            context.window.cursor.widget_width(context.style.margin * 3.),
             19.,
         );
         let pos = context.window.cursor.fit(size, Layout::Vertical);
