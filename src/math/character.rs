@@ -25,8 +25,9 @@ pub struct CharacterSolids<'a> {
 /// applies gravity, and retains the result. Motion stops at the first body
 /// sweep against each solid and slides along blocking normals. Steep upward
 /// faces cannot turn horizontal input into uphill motion; falling can slide
-/// downhill. This is translation only: no stair stepping, capsule players,
-/// moving platforms, impulses, or rigid-body integration.
+/// downhill. [`Self::move_body_with_step`] adds opt-in stair stepping. This is
+/// translation only: no capsule players, moving platforms, impulses, or
+/// rigid-body integration.
 ///
 /// Initial overlaps are pushed out using the existing contacts/sweep normals,
 /// deepest first. Recovery and sliding are bounded, so mutually penetrating
@@ -88,7 +89,303 @@ pub struct CharacterMotion {
     pub ground_normal: Option<Vec3>,
 }
 
+/// Outcome of the opt-in stair/ledge attachment in
+/// [`CharacterController::move_body_with_step`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CharacterStepStatus {
+    /// A zero step height keeps ordinary controller behavior.
+    Disabled,
+    /// Invalid height, controller settings, body, time or velocity.
+    InvalidInput,
+    /// Positive input velocity along up disables stepping and attachment.
+    Jumping,
+    /// The initial body has no touching walkable support.
+    Airborne,
+    /// Ordinary movement already reaches the requested horizontal position.
+    Unneeded,
+    /// Overhead geometry leaves insufficient clearance for the attempted step.
+    HeadBlocked,
+    /// Raising the body does not improve movement past the obstacle.
+    ForwardBlocked,
+    /// The attempted final position has no support within the allowed drop.
+    NoLanding,
+    /// The first downward contact exceeds the controller's slope limit.
+    SteepLanding,
+    /// The candidate does not gain height or improve horizontal progress.
+    NoProgress,
+    /// An upward step was accepted.
+    Stepped,
+    /// A grounded body attached to lower support within the step height.
+    Descended,
+}
+
+/// World-space contact diagnostics for one optional step attempt.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CharacterStepDiagnostics {
+    /// Whether stepping was used, skipped or rejected.
+    pub status: CharacterStepStatus,
+    /// First horizontal obstruction, or the overhead contact when head blocked.
+    /// Its `t` is a fraction of that particular horizontal/upward probe.
+    pub obstacle: Option<SweepHit>,
+    /// First downward contact of the attempted landing, even when too steep.
+    /// Its `t` is a fraction of that downward probe, not the whole movement.
+    pub landing: Option<SweepHit>,
+    /// Accepted displacement from the recovered starting body along normalized
+    /// `up`; zero for rejected steps.
+    pub rise: f32,
+}
+
+/// Ordinary movement plus optional stair diagnostics; existing
+/// [`CharacterMotion`] and [`CharacterController`] literals remain unchanged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CharacterStepMotion {
+    /// Final body, velocity and support state.
+    pub motion: CharacterMotion,
+    /// Step decision and contacts, suitable for an application debug overlay.
+    pub step: CharacterStepDiagnostics,
+}
+
 impl CharacterController {
+    /// Opt-in step offset, preserving [`Self::move_body`] when stepping fails.
+    ///
+    /// `step_height` is a maximum vertical rise/drop in world units. Zero
+    /// disables this helper; negative or non-finite heights are rejected. The
+    /// original controller and motion structs gain no fields. All the ordinary
+    /// controller validation, sweep tolerances and bounded sliding still apply.
+    ///
+    /// Only a body initially touching walkable ground (within 0.0001 world
+    /// units) can step. Positive input velocity along `up` always jumps without
+    /// stepping. If ordinary movement is horizontally obstructed, try a swept
+    /// lift, ordinary horizontal sliding, then a downward sweep onto walkable
+    /// support. Overhead geometry limits the lift. Accept only a higher landing
+    /// within `step_height` that improves forward progress; a low barrier cannot
+    /// be vaulted to the floor behind it. At most one rise is attempted per
+    /// call, so use normal simulation time steps for a flight of stairs.
+    ///
+    /// Grounded ordinary movement can also attach to a lower surface within
+    /// `step_height`. The first downward solid must be walkable: attachment
+    /// cannot pass through steep geometry. Without lower support, the ordinary
+    /// result remains airborne at a ledge. Falling/jumping bodies keep ordinary
+    /// landing behavior and never gain the extra attachment distance.
+    ///
+    /// The returned diagnostics describe the attempted probes. They do not
+    /// identify application collider indices or provide a contact manifold.
+    ///
+    /// ```
+    /// use macroquad::math::{Aabb, CharacterController, CharacterSolids, CharacterStepStatus, vec3};
+    /// let boxes = [
+    ///     Aabb::from_min_max(vec3(-5.0, -1.0, -5.0), vec3(5.0, 0.0, 5.0)),
+    ///     Aabb::from_min_max(vec3(0.5, 0.0, -1.0), vec3(2.0, 0.2, 1.0)),
+    /// ];
+    /// let body = Aabb::from_center_size(vec3(0.0, 0.5, 0.0), vec3(0.4, 1.0, 0.4));
+    /// let stepped = CharacterController::default().move_body_with_step(
+    ///     body, vec3(1.0, -1.0, 0.0), 0.6,
+    ///     CharacterSolids { aabbs: &boxes, ..Default::default() }, 0.25,
+    /// );
+    /// assert_eq!(stepped.step.status, CharacterStepStatus::Stepped);
+    /// assert!(stepped.motion.on_ground);
+    /// assert!((stepped.motion.body.min.y - 0.2).abs() < 0.0001);
+    /// ```
+    pub fn move_body_with_step(
+        &self,
+        body: Aabb,
+        velocity: Vec3,
+        dt: f32,
+        solids: CharacterSolids<'_>,
+        step_height: f32,
+    ) -> CharacterStepMotion {
+        let ordinary = self.move_body(body, velocity, dt, solids);
+        let mut result = CharacterStepMotion {
+            motion: ordinary,
+            step: CharacterStepDiagnostics {
+                status: CharacterStepStatus::Unneeded,
+                obstacle: None,
+                landing: None,
+                rise: 0.0,
+            },
+        };
+        if step_height == 0.0 {
+            result.step.status = CharacterStepStatus::Disabled;
+            return result;
+        }
+        let up_length = self.up.as_dvec3().length();
+        let delta = velocity * dt;
+        if !step_height.is_finite()
+            || step_height < 0.0
+            || !body.min.is_finite()
+            || !body.max.is_finite()
+            || body.min.cmpgt(body.max).any()
+            || !velocity.is_finite()
+            || !delta.is_finite()
+            || !dt.is_finite()
+            || dt <= 0.0
+            || !up_length.is_finite()
+            || up_length == 0.0
+            || !self.max_slope_angle.is_finite()
+            || !(0.0..=std::f32::consts::FRAC_PI_2).contains(&self.max_slope_angle)
+            || !self.ground_snap_distance.is_finite()
+            || self.ground_snap_distance < 0.0
+            || self.max_iterations == 0
+        {
+            result.step.status = CharacterStepStatus::InvalidInput;
+            return result;
+        }
+        let up = (self.up.as_dvec3() / up_length).as_vec3();
+        let up_velocity = velocity.as_dvec3().dot(up.as_dvec3());
+        if up_velocity > 0.0 {
+            result.step.status = CharacterStepStatus::Jumping;
+            return result;
+        }
+        let slope_cos = self.max_slope_angle.cos().max(0.0);
+        // Recover exactly as ordinary movement does, but never snap an airborne
+        // start down to manufacture eligibility for an upward step.
+        let no_snap = Self {
+            ground_snap_distance: 0.0,
+            ..*self
+        };
+        let start = no_snap.move_body(body, Vec3::ZERO, dt, solids).body;
+        let support = solids.first_hit(start, -up * 0.001);
+        if solids.deepest_push(start).is_some()
+            || !support
+                .is_some_and(|hit| hit.t * 0.001 <= 0.0001 && walkable(hit.normal, up, slope_cos))
+        {
+            result.step.status = CharacterStepStatus::Airborne;
+            return result;
+        }
+        let up64 = up.as_dvec3();
+        let horizontal = (delta.as_dvec3() - up64 * delta.as_dvec3().dot(up64)).as_vec3();
+        if !horizontal.is_finite() {
+            result.step.status = CharacterStepStatus::InvalidInput;
+            return result;
+        }
+        let horizontal_length = horizontal.as_dvec3().length();
+        let direction = if horizontal_length > 0.0 {
+            (horizontal.as_dvec3() / horizontal_length).as_vec3()
+        } else {
+            Vec3::ZERO
+        };
+        let progress =
+            (ordinary.body.min.as_dvec3() - start.min.as_dvec3()).dot(direction.as_dvec3());
+        let obstructed = progress + 0.00001 < horizontal_length;
+        if !obstructed {
+            // The ordinary snap remains authoritative when already grounded.
+            // Extend it only for a character that walked down off its support.
+            if !ordinary.on_ground {
+                let ordinary_rise = (ordinary.body.min.as_dvec3() - start.min.as_dvec3()).dot(up64);
+                let remaining_drop = (step_height as f64 + ordinary_rise) as f32;
+                // Gravity may already have moved the body farther down than
+                // a step. Never extend attachment below the initial limit.
+                if !remaining_drop.is_finite() || remaining_drop <= 0.0 {
+                    result.step.status = CharacterStepStatus::NoLanding;
+                    return result;
+                }
+                if let Some(hit) = solids.first_hit(ordinary.body, -up * remaining_drop) {
+                    result.step.landing = Some(hit);
+                    if walkable(hit.normal, up, slope_cos) {
+                        if let Some(landed) =
+                            translated(ordinary.body, -up * (hit.t * remaining_drop))
+                        {
+                            if solids.deepest_push(landed).is_none() {
+                                result.motion = CharacterMotion {
+                                    body: landed,
+                                    velocity: self.supported_velocity(
+                                        ordinary.velocity,
+                                        landed,
+                                        hit.normal,
+                                        dt,
+                                        solids,
+                                    ),
+                                    on_ground: true,
+                                    ground_normal: Some(hit.normal),
+                                };
+                                result.step.status = CharacterStepStatus::Descended;
+                                result.step.rise =
+                                    (landed.min.as_dvec3() - start.min.as_dvec3()).dot(up64) as f32;
+                            }
+                        }
+                    } else {
+                        result.step.status = CharacterStepStatus::SteepLanding;
+                    }
+                } else {
+                    result.step.status = CharacterStepStatus::NoLanding;
+                }
+            }
+            return result;
+        }
+        result.step.obstacle = solids.first_hit(start, horizontal);
+        let upward = up * step_height;
+        let overhead = solids.first_hit(start, upward);
+        let lift = overhead.map_or(step_height, |hit| step_height * hit.t);
+        let Some(raised) = translated(start, up * lift) else {
+            result.step.status = CharacterStepStatus::InvalidInput;
+            return result;
+        };
+        if lift <= 0.00001 || solids.deepest_push(raised).is_some() {
+            result.step.status = CharacterStepStatus::HeadBlocked;
+            result.step.obstacle = overhead.or(result.step.obstacle);
+            return result;
+        }
+        let horizontal_velocity = (velocity.as_dvec3() - up64 * up_velocity).as_vec3();
+        if !horizontal_velocity.is_finite() {
+            result.step.status = CharacterStepStatus::InvalidInput;
+            return result;
+        }
+        let forward = no_snap.move_body(raised, horizontal_velocity, dt, solids);
+        let forward_progress =
+            (forward.body.min.as_dvec3() - start.min.as_dvec3()).dot(direction.as_dvec3());
+        if forward_progress <= progress + 0.00001 {
+            result.step.status = if overhead.is_some() {
+                result.step.obstacle = overhead;
+                CharacterStepStatus::HeadBlocked
+            } else {
+                CharacterStepStatus::ForwardBlocked
+            };
+            return result;
+        }
+        // This sweep may be longer than the upward lift if the horizontal
+        // portion followed a walkable ramp. The accepted rise is checked below.
+        let above_start = (forward.body.min.as_dvec3() - start.min.as_dvec3()).dot(up64);
+        let down_distance = above_start.max(0.0) as f32;
+        if !down_distance.is_finite() {
+            result.step.status = CharacterStepStatus::InvalidInput;
+            return result;
+        }
+        let Some(hit) = solids.first_hit(forward.body, -up * down_distance.max(0.001)) else {
+            result.step.status = CharacterStepStatus::NoLanding;
+            return result;
+        };
+        result.step.landing = Some(hit);
+        if !walkable(hit.normal, up, slope_cos) {
+            result.step.status = CharacterStepStatus::SteepLanding;
+            return result;
+        }
+        let Some(landed) = translated(forward.body, -up * (hit.t * down_distance.max(0.001)))
+        else {
+            result.step.status = CharacterStepStatus::InvalidInput;
+            return result;
+        };
+        let rise = (landed.min.as_dvec3() - start.min.as_dvec3()).dot(up64) as f32;
+        if rise <= 0.00001 || rise > step_height + 0.00001 || solids.deepest_push(landed).is_some()
+        {
+            result.step.status = CharacterStepStatus::NoProgress;
+            return result;
+        }
+        let candidate_velocity = (forward.velocity.as_dvec3() + up64 * up_velocity).as_vec3();
+        if !candidate_velocity.is_finite() {
+            result.step.status = CharacterStepStatus::InvalidInput;
+            return result;
+        }
+        result.motion = CharacterMotion {
+            body: landed,
+            velocity: self.supported_velocity(candidate_velocity, landed, hit.normal, dt, solids),
+            on_ground: true,
+            ground_normal: Some(hit.normal),
+        };
+        result.step.status = CharacterStepStatus::Stepped;
+        result.step.rise = rise;
+        result
+    }
+
     /// Moves `body` by `velocity * dt`, then checks support at its final position.
     ///
     /// All positions, normals and velocity use world coordinates; `dt` is in
@@ -102,6 +399,9 @@ impl CharacterController {
     /// distance. A floor touched earlier in the step does not imply support
     /// after walking off its edge. Snap distance can be set to zero in flight
     /// when the caller wants attachment only after an ordinary landing.
+    /// For AABB solids, a stationary-axis projection that only meets at its
+    /// endpoints is tangential, including exact ledge-edge support. Thus a
+    /// zero-width body/platform cannot stand on another projection's boundary.
     ///
     /// Invalid/non-finite body bounds, velocity, displacement, `dt <= 0`, zero
     /// or non-finite `up`, invalid slope/snap settings, and zero iterations return
@@ -212,6 +512,45 @@ impl CharacterController {
     }
 }
 
+impl CharacterController {
+    // Keep the landing plane and any walls touched at the final pose together.
+    // Projecting only onto the ground could introduce motion into a wall again.
+    fn supported_velocity(
+        &self,
+        input: Vec3,
+        body: Aabb,
+        ground: Vec3,
+        dt: f32,
+        solids: CharacterSolids<'_>,
+    ) -> Vec3 {
+        let up = (self.up.as_dvec3() / self.up.as_dvec3().length()).as_vec3();
+        let slope_cos = self.max_slope_angle.cos().max(0.0);
+        let mut planes = [Vec3::ZERO; 33];
+        planes[0] = ground;
+        let mut velocity = clip_planes(input, &planes[..1]);
+        for count in 1..=self.max_iterations.min(32) {
+            let delta = velocity * dt;
+            if !delta.is_finite() {
+                return Vec3::ZERO;
+            }
+            let Some(hit) = solids.first_hit(body, delta) else {
+                break;
+            };
+            if hit.t > 0.00001 {
+                break;
+            }
+            let normal = blocking_normal(delta, hit.normal, up, slope_cos);
+            planes[count] = normal;
+            let next = clip_planes(input, &planes[..=count]);
+            if next == velocity {
+                break;
+            }
+            velocity = next;
+        }
+        velocity
+    }
+}
+
 fn translated(body: Aabb, delta: Vec3) -> Option<Aabb> {
     let next = Aabb::from_min_max(body.min + delta, body.max + delta);
     (next.min.is_finite() && next.max.is_finite()).then_some(next)
@@ -290,14 +629,16 @@ impl CharacterSolids<'_> {
         self.each(|solid| {
             let hit = match solid {
                 Solid::Aabb(shape) => {
-                    // A stationary axis with a strict gap cannot collide. This
-                    // also avoids interpreting the pair sweep's shallow-touch
+                    // A stationary axis with a gap or mere touch cannot enter
+                    // the solid. In particular, reaching the edge of a box
+                    // whose top only touches our feet is a tangent, not a wall.
+                    // This also avoids interpreting the pair sweep's shallow-touch
                     // tolerance as a fictitious entering face along another
                     // axis after roundoff at a previous wall impact.
                     let separated = (0..3).any(|axis| {
                         delta[axis] == 0.0
-                            && (body.max[axis] < shape.min[axis]
-                                || body.min[axis] > shape.max[axis])
+                            && (body.max[axis] <= shape.min[axis]
+                                || body.min[axis] >= shape.max[axis])
                     });
                     if separated {
                         None
@@ -374,6 +715,158 @@ mod tests {
 
     fn close(a: Vec3, b: Vec3) {
         assert!((a - b).length() < 2e-4, "{a:?} != {b:?}");
+    }
+
+    #[test]
+    fn step_exact_height_and_recovered_start_keep_body_dimensions() {
+        let boxes = [
+            floor(),
+            Aabb::from_min_max(vec3(0.5, 0.0, -1.0), vec3(2.0, 0.2, 1.0)),
+        ];
+        let start = body(vec3(0.0, 0.89, 0.0));
+        let stepped = CharacterController::default().move_body_with_step(
+            start,
+            vec3(1.0, -1.0, 0.0),
+            0.6,
+            CharacterSolids {
+                aabbs: &boxes,
+                ..Default::default()
+            },
+            0.2,
+        );
+        assert_eq!(
+            stepped.step.status,
+            CharacterStepStatus::Stepped,
+            "{stepped:?}"
+        );
+        close(stepped.motion.body.size(), start.size());
+        assert!((stepped.step.rise - 0.2).abs() < 1e-5);
+        let landing = stepped.step.landing.unwrap();
+        assert!(landing.point.is_finite());
+        assert_eq!(landing.normal, Vec3::Y);
+    }
+
+    #[test]
+    fn arriving_at_a_box_top_edge_with_stationary_height_is_tangential() {
+        let ledge = Aabb::from_min_max(vec3(0.5, 0.0, -1.0), vec3(2.0, 0.2, 1.0));
+        let start = Aabb::from_min_max(vec3(-0.3, 0.2, -0.3), vec3(0.3, 2.0, 0.3));
+        let moved = CharacterController::default().move_body(
+            start,
+            Vec3::X,
+            1.0,
+            CharacterSolids {
+                aabbs: &[ledge],
+                ..Default::default()
+            },
+        );
+        assert!((moved.body.min.x - 0.7).abs() < 1e-5, "{moved:?}");
+        assert!(moved.on_ground);
+        assert_eq!(moved.velocity, Vec3::X);
+    }
+
+    #[test]
+    fn a_step_is_not_a_vault_over_a_thin_barrier_to_the_original_floor() {
+        let boxes = [
+            floor(),
+            Aabb::from_min_max(vec3(0.5, 0.0, -1.0), vec3(0.6, 0.2, 1.0)),
+        ];
+        let solids = CharacterSolids {
+            aabbs: &boxes,
+            ..Default::default()
+        };
+        let controller = CharacterController::default();
+        let start = body(vec3(0.0, 0.9, 0.0));
+        let ordinary = controller.move_body(start, Vec3::X, 2.0, solids);
+        let stepped = controller.move_body_with_step(start, Vec3::X, 2.0, solids, 0.25);
+        assert_eq!(
+            stepped.step.status,
+            CharacterStepStatus::NoProgress,
+            "{stepped:?}"
+        );
+        assert_eq!(stepped.motion, ordinary);
+        assert!(stepped.step.landing.is_some());
+    }
+
+    #[test]
+    fn descending_attachment_bounds_total_drop_from_start_not_extra_snap() {
+        let boxes = [
+            Aabb::from_min_max(vec3(-3.0, -1.0, -2.0), vec3(0.0, 0.0, 2.0)),
+            Aabb::from_min_max(vec3(0.0, -1.0, -2.0), vec3(3.0, -0.3, 2.0)),
+        ];
+        let solids = CharacterSolids {
+            aabbs: &boxes,
+            ..Default::default()
+        };
+        let controller = CharacterController {
+            ground_snap_distance: 0.0,
+            ..Default::default()
+        };
+        let start = body(vec3(-0.3, 0.9, 0.0));
+        let velocity = vec3(1.0, -0.2, 0.0);
+        let ordinary = controller.move_body(start, velocity, 1.0, solids);
+        assert!(!ordinary.on_ground, "{ordinary:?}");
+        let stepped = controller.move_body_with_step(start, velocity, 1.0, solids, 0.25);
+        assert_eq!(stepped.motion, ordinary);
+        assert_eq!(
+            stepped.step.status,
+            CharacterStepStatus::NoLanding,
+            "{stepped:?}"
+        );
+        let attached = controller.move_body_with_step(start, velocity, 1.0, solids, 0.35);
+        assert!(attached.motion.on_ground, "{attached:?}");
+        assert!((attached.step.rise + 0.3).abs() < 1e-5, "{attached:?}");
+    }
+
+    #[test]
+    fn invalid_step_settings_return_ordinary_movement_without_a_boost() {
+        let boxes = [floor()];
+        let solids = CharacterSolids {
+            aabbs: &boxes,
+            ..Default::default()
+        };
+        let start = body(vec3(0.0, 0.9, 0.0));
+        let controller = CharacterController::default();
+        let ordinary = controller.move_body(start, Vec3::X, 1.0, solids);
+        for height in [-1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let stepped = controller.move_body_with_step(start, Vec3::X, 1.0, solids, height);
+            assert_eq!(stepped.motion, ordinary);
+            assert_eq!(stepped.step.status, CharacterStepStatus::InvalidInput);
+        }
+        let invalid_controller = CharacterController {
+            up: Vec3::ZERO,
+            ..controller
+        };
+        let stepped = invalid_controller.move_body_with_step(start, Vec3::X, 1.0, solids, 0.2);
+        assert_eq!(stepped.motion.body, start);
+        assert_eq!(stepped.step.status, CharacterStepStatus::InvalidInput);
+    }
+
+    #[test]
+    fn stepping_into_a_wall_keeps_landing_velocity_outside_both_planes() {
+        let boxes = [
+            floor(),
+            Aabb::from_min_max(vec3(0.5, 0.0, -1.0), vec3(2.0, 0.2, 1.0)),
+            Aabb::from_min_max(vec3(1.0, 0.0, -2.0), vec3(1.1, 3.0, 2.0)),
+        ];
+        let stepped = CharacterController::default().move_body_with_step(
+            body(vec3(0.0, 0.9, 0.0)),
+            vec3(2.0, -1.0, 0.1),
+            1.0,
+            CharacterSolids {
+                aabbs: &boxes,
+                ..Default::default()
+            },
+            0.25,
+        );
+        assert_eq!(
+            stepped.step.status,
+            CharacterStepStatus::Stepped,
+            "{stepped:?}"
+        );
+        assert!(stepped.motion.velocity.x.abs() < 1e-5);
+        assert!(stepped.motion.velocity.y.abs() < 1e-5);
+        assert!((stepped.motion.velocity.z - 0.1).abs() < 1e-5);
+        assert!(stepped.motion.body.max.x <= 1.00001);
     }
 
     #[test]

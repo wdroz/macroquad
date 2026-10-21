@@ -1,5 +1,5 @@
 //! A caller-owned AABB character: full-body sweeps, grounding and slope limits.
-//! Arrows/WASD move, Space jumps, P pauses, R resets, Escape quits.
+//! Arrows/WASD move, Space jumps, T toggles stepping, P pauses, R resets.
 
 use macroquad::prelude::*;
 
@@ -9,11 +9,29 @@ fn initial_body() -> Aabb {
 
 #[macroquad::main("AABB character controller")]
 async fn main() {
-    let boxes = [
+    let mut boxes = vec![
         Aabb::from_center_size(vec3(0.0, -0.5, 0.0), vec3(16.0, 1.0, 16.0)),
         Aabb::from_center_size(vec3(0.0, 1.0, -2.0), vec3(0.02, 2.0, 4.0)),
         Aabb::from_center_size(vec3(0.0, 3.0, 1.0), vec3(3.0, 0.1, 2.0)),
     ];
+    // Five authored 0.2-unit risers with a 0.7-unit tread, all on the floor.
+    // Walk right along z=5 to ascend, then left to descend.
+    for i in 0..5 {
+        let height = (i + 1) as f32 * 0.2;
+        boxes.push(Aabb::from_center_size(
+            vec3(-4.0 + i as f32 * 0.7, height * 0.5, 5.0),
+            vec3(0.7, height, 1.6),
+        ));
+    }
+    // A higher single obstacle and a low overhang explain rejected steps.
+    boxes.push(Aabb::from_center_size(
+        vec3(0.5, 0.3, 5.0),
+        vec3(0.7, 0.6, 1.6),
+    ));
+    boxes.push(Aabb::from_center_size(
+        vec3(-2.6, 2.05, 5.7),
+        vec3(0.7, 0.1, 0.5),
+    ));
     let ramps = [
         Obb::new(
             vec3(3.0, 1.0, 0.0),
@@ -46,6 +64,9 @@ async fn main() {
     let mut on_ground = false;
     let mut ground_normal = None;
     let mut paused = false;
+    let mut stepping = true;
+    let mut step_status = String::from("ready");
+    let mut contact_status = String::new();
 
     loop {
         if is_key_pressed(KeyCode::Escape) {
@@ -53,6 +74,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::P) {
             paused = !paused;
+        }
+        if is_key_pressed(KeyCode::T) {
+            stepping = !stepping;
         }
         if is_key_pressed(KeyCode::R) || body.center().y < -15.0 {
             body = initial_body();
@@ -83,7 +107,31 @@ async fn main() {
                 velocity.y = 5.5;
             }
             velocity.y -= 14.0 * dt;
-            let moved = controller.move_body(body, velocity, dt, solids);
+            let step = controller.move_body_with_step(
+                body,
+                velocity,
+                dt,
+                solids,
+                if stepping { 0.25 } else { 0.0 },
+            );
+            step_status = format!("{:?} | rise {:.3}", step.step.status, step.step.rise);
+            let normal = |hit: Option<SweepHit>| {
+                hit.map_or_else(
+                    || String::from("-"),
+                    |hit| {
+                        format!(
+                            "{:.1},{:.1},{:.1}",
+                            hit.normal.x, hit.normal.y, hit.normal.z
+                        )
+                    },
+                )
+            };
+            contact_status = format!(
+                "obstacle normal {} | landing normal {}",
+                normal(step.step.obstacle),
+                normal(step.step.landing),
+            );
+            let moved = step.motion;
             body = moved.body;
             velocity = moved.velocity;
             on_ground = moved.on_ground;
@@ -96,8 +144,13 @@ async fn main() {
             up: Vec3::Y,
             ..Default::default()
         });
-        for shape in &boxes {
-            draw_cube(shape.center(), shape.size(), None, GRAY);
+        for (i, shape) in boxes.iter().enumerate() {
+            draw_cube(
+                shape.center(),
+                shape.size(),
+                None,
+                if (3..8).contains(&i) { GOLD } else { GRAY },
+            );
         }
         draw_obb(ramps[0], DARKGREEN);
         draw_obb(ramps[1], MAROON);
@@ -126,14 +179,14 @@ async fn main() {
         }
         set_default_camera();
         draw_text(
-            "Arrows/WASD move | Space jump | P pause | R reset",
+            "Arrows/WASD move | Space jump | T stepping | P pause | R reset",
             16.0,
             28.0,
             22.0,
             BLACK,
         );
         draw_text(
-            "Green ramp is walkable; red is too steep. Blue box is a trigger.",
+            "Gold stairs: z=5, ascend right. Green ramp walkable; red too steep.",
             16.0,
             54.0,
             20.0,
@@ -146,6 +199,17 @@ async fn main() {
             18.0,
             DARKGRAY,
         );
+        draw_text(
+            format!(
+                "step height: {} | {step_status}",
+                if stepping { "0.25" } else { "off" }
+            ),
+            16.0,
+            106.0,
+            16.0,
+            DARKGRAY,
+        );
+        draw_text(&contact_status, 16.0, 130.0, 16.0, DARKGRAY);
         next_frame().await;
     }
 }

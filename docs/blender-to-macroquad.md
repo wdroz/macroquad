@@ -308,8 +308,13 @@ Its `on_ground` and optional `ground_normal` describe support at the final pose.
 Choose `up` to match the loaded scene, set `max_slope_angle` in radians and
 `ground_snap_distance` in world units. The body remains aligned to the world
 axes regardless of `up`. Apply gravity in the game; positive input velocity
-along `up` skips grounding and snapping for takeoff. Stair stepping, capsule
-players and moving platforms remain separate work. See the
+along `up` skips grounding and snapping for takeoff. For authored stairs, call
+`move_body_with_step(body, velocity, dt, solids, step_height)` and retain its
+`motion`. The optional height is in world units; the full body is swept up,
+forward and onto a walkable landing. Its `step` diagnostics explain clearance,
+landing and slope failures. Keep the tick short enough for the tread spacing;
+one call does not solve an arbitrary flight of stairs. Capsule players and
+moving platforms remain separate work. See the
 [3D guide](3d-guide.md) and `CharacterController` rustdoc for the movement
 contract and a complete example.
 

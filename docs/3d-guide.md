@@ -7,8 +7,8 @@ Nothing here assumes an up axis. `Camera3D::up` stays caller-defined. The exampl
 `draw_cube` / `draw_cube_wires` take a center and a **full** size. `Aabb::from_center_size` uses that same pair. `Obb::half_extents` is half of that full size. `Capsule` `a` and `b` are the inner segment, so the hull extends `radius` past each end.
 
 `CharacterController` provides kinematic AABB movement with sliding, ground
-snapping and slope limits. The caller owns the body, velocity and gravity;
-there is no rigid-body world or stair stepping. `Contact`, `SweepHit`,
+snapping, slope limits and opt-in stair stepping. The caller owns the body,
+velocity and gravity; there is no rigid-body world. `Contact`, `SweepHit`,
 `slide_sphere` and `slide_sphere_solids` remain available for custom response.
 The step-by-step [Blender tutorial](blender-to-macroquad.md) covers exporting,
 loading, drawing and moving through a marked level. The
@@ -1486,9 +1486,40 @@ and prevents an unchecked movement. Exhausted slide passes discard the
 unresolved displacement. The existing sweep tolerances still apply; this is
 not a general penetration or rigid-body solver.
 
+For stairs, opt into `move_body_with_step` with a maximum step height in world
+units. It returns the resolved motion together with step diagnostics; existing
+`move_body` calls remain available with the same settings literals.
+
+```rust
+use macroquad::prelude::*;
+let floor = Aabb::from_center_size(vec3(0., -0.5, 0.), vec3(20., 1., 4.));
+let stair = Aabb::from_center_size(vec3(1., 0.1, 0.), vec3(1., 0.2, 4.));
+let body = Aabb::from_center_size(vec3(0., 0.9, 0.), vec3(0.6, 1.8, 0.6));
+let solids = CharacterSolids { aabbs: &[floor, stair], ..Default::default() };
+let result = CharacterController::default()
+    .move_body_with_step(body, vec3(1., -0.1, 0.), 0.5, solids, 0.25);
+assert!(result.motion.on_ground);
+assert!((result.motion.body.min.y - 0.2).abs() < 1e-4);
+```
+
+The candidate path sweeps the complete body upward, forward and down; a low
+ceiling cannot be bypassed. Only grounded, non-jumping movement can step.
+Landing still requires a walkable normal and an improvement over ordinary
+sliding. An upward step must land higher; it cannot vault a barrier onto the
+floor behind it. Grounded descending movement can attach to a lower tread
+within the step height measured from its initial support; a deeper ledge
+leaves the ordinary falling motion intact. This tests a single
+translation path per call, so several risers crossed in one long tick can
+still block. Use an appropriately bounded movement tick for your stair treads.
+Zero step height disables the extra path. Inspect the diagnostic outcome and
+contact normals/points when a step fails, rather than raising the body after
+an overlap test. Gravity, moving platforms and the choice of body dimensions
+remain in the caller.
+
 `examples/character_controller.rs` is a self-contained playable sample with a
-thin wall, a low ceiling, ramps, rounded solids and a nonblocking trigger.
-There is no stair stepping, capsule player, platform transport or rigid-body
+thin wall, a low ceiling, ramps, rounded solids, five gold stair treads and a
+nonblocking trigger. T toggles a 0.25-unit step height; its HUD displays the
+step diagnostics. There is no capsule player, platform transport or rigid-body
 impulse response yet. Existing `slide_sphere_solids` and `Capsule` contact
 queries remain useful for prototypes; capsule overlap tests alone do not
 provide continuous capsule movement.

@@ -11,6 +11,8 @@
 //! and do not assume an up axis.
 //! [`CharacterController`] moves a caller-owned AABB with sliding, ground
 //! snapping and slope limits, using an explicit caller-supplied up direction.
+//! [`CharacterController::move_body_with_step`] adds optional stair stepping
+//! and diagnostics without requiring changes to ordinary movement calls.
 //! `docs/3d-guide.md` walks through them.
 //!
 //! Choose a query by what the caller needs:
@@ -53,8 +55,9 @@
 //! hit, and apply `delta * hit.t`. [`SweepHit::point`] is a contact position,
 //! not the moving body's new center. Keep trigger overlap checks separate.
 //! [`CharacterController`] adds repeated sliding, bounded overlap recovery,
-//! grounding and slope limits over these queries. Gravity and stair stepping
-//! remain the caller's responsibility.
+//! grounding and slope limits over these queries, with opt-in stair stepping
+//! through [`CharacterController::move_body_with_step`]. Gravity remains the
+//! caller's responsibility.
 //!
 //! ```
 //! use macroquad::math::{Aabb, Capsule, Obb, Quat, Sphere, Vec3, vec3};
@@ -95,7 +98,10 @@ mod triangle;
 
 pub use aabb::{Aabb, RayHit};
 pub use capsule::Capsule;
-pub use character::{CharacterController, CharacterMotion, CharacterSolids};
+pub use character::{
+    CharacterController, CharacterMotion, CharacterSolids, CharacterStepDiagnostics,
+    CharacterStepMotion, CharacterStepStatus,
+};
 pub use circle::Circle;
 pub use contact::Contact;
 pub use frustum::Frustum;
