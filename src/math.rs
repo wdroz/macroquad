@@ -4,7 +4,7 @@
 //! [`Rect`] / [`Circle`] and the 3D [`Aabb`], [`Obb`], [`Sphere`], [`Capsule`],
 //! [`Ray`], [`Plane`], [`Triangle`], and [`Frustum`]. [`Contact`] is the overlap of two of
 //! those shapes. [`SweepHit`] is the time of impact of a moving [`Aabb`]
-//! against a static [`Aabb`], [`Obb`] or [`Sphere`], or a moving [`Sphere`]
+//! against a static [`Aabb`], [`Obb`], [`Sphere`] or [`Capsule`], or a moving [`Sphere`]
 //! against either box. [`slide_sphere`] moves a sphere along
 //! [`Aabb`] and [`Obb`] faces. [`slide_sphere_solids`] does the same and also
 //! slides against [`Sphere`] and [`Capsule`] solids. The 3D types are unitless
@@ -14,7 +14,7 @@
 //! Choose a query by what the caller needs:
 //!
 //! - Overlap and [`Contact`] queries describe the current pose, including a touch.
-//! - [`Aabb::sweep`], [`Aabb::sweep_obb`], [`Aabb::sweep_sphere`],
+//! - [`Aabb::sweep`], [`Aabb::sweep_obb`], [`Aabb::sweep_sphere`], [`Aabb::sweep_capsule`],
 //!   [`Sphere::sweep_aabb`] and [`Sphere::sweep_obb`] find the first impact along
 //!   a full movement delta; [`SweepHit::t`] is a fraction of that delta.
 //! - [`slide_sphere_solids`] returns a resolved center against static solids.
@@ -44,6 +44,7 @@ mod rect;
 mod slide;
 mod sphere;
 mod sweep;
+mod sweep_capsule;
 mod sweep_obb;
 mod triangle;
 

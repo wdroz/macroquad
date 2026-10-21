@@ -24,9 +24,11 @@ const INTO_SLOP: f32 = 1e-5;
 /// shape. `point` is the center of the shared region for two axis-aligned
 /// boxes, a representative point in that region for [`Aabb::sweep_obb`], and a
 /// surface point on the box for a moving sphere. [`Aabb::sweep_sphere`] returns
-/// a shared surface point on the static sphere at a new impact. An initial
+/// a shared surface point on the static sphere at a new impact, and
+/// [`Aabb::sweep_capsule`] returns one on the static capsule. An initial
 /// overlap uses the corresponding [`Contact::point`] where that query exists.
-/// The static solid is an [`Aabb`], an [`Obb`], or a [`Sphere`].
+/// The static solid is an [`Aabb`], an [`Obb`], a [`Sphere`], or a
+/// [`Capsule`](super::Capsule).
 ///
 /// A pair that is already overlapping by more than `1e-4` reports `t == 0`.
 /// A pair that only touches, or overlaps by less than that, reports `t == 0`
