@@ -168,10 +168,12 @@ is the fixture.
 `SweepHit` describes an AABB moving against a static AABB, OBB, sphere or
 capsule, or a sphere moving against either box type,
 `slide_sphere` keeps the leftover motion along a face, and
-`slide_sphere_solids` does the same against spheres and capsules. There is no rigid-body
-world and no character controller. [docs/3d-guide.md](docs/3d-guide.md) covers
-the queries and the application code a game writes for gravity and a capsule
-on a floor. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)
+`slide_sphere_solids` does the same against spheres and capsules.
+`CharacterController` adds AABB movement, ground handling and optional steps.
+`RigidBody` integrates caller-owned velocity and position with gravity and
+damping; it does not resolve collisions or own a physics world.
+[docs/3d-guide.md](docs/3d-guide.md) covers these helpers and application-owned
+motion against static shapes. [docs/blender-to-macroquad.md](docs/blender-to-macroquad.md)
 is the export and loading tutorial, including `with_up_axis` and the
 collider / trigger / spawn names. Bot-added examples are listed in
 [examples/README.md](examples/README.md).

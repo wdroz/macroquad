@@ -1585,7 +1585,66 @@ the original single sphere and a two-sphere hull with Space.
 
 ## Physics
 
-The library does not integrate velocity, apply gravity, or solve contacts. There is no `RigidBody` type. A game keeps the velocity and calls `slide_sphere` for a sphere against boxes, or `slide_sphere_solids` when a solid is a sphere or a capsule. Gravity is added to the velocity first. The slide keeps the part of the step that lies on a face, so a resting sphere still strafes and a wall removes only the component into the wall. Restitution and mass are not applied. `Contact` describes an overlap that already exists; it does not move either shape.
+`RigidBody` in `math` and the prelude provides translation-only integration
+without a window or a physics world. It stores public `position`,
+`linear_velocity`, `mass`, `linear_damping`, `mode` and `shape` fields.
+`RigidBodyShape::Aabb(Aabb)` and `RigidBodyShape::Sphere(Sphere)` hold local
+geometry: their corners/centers are offsets from the body's world-space
+position. `world_shape()` translates a copy for the existing collision queries.
+Boxes stay axis-aligned; local shapes may have an offset from the body origin.
+
+`RigidBody::new(position, shape, mass)` checks its inputs and starts in
+`RigidBodyMode::Dynamic` with zero velocity and damping. For positive mass,
+`integrate(dt, gravity)` adds `gravity * dt` to velocity, multiplies it by
+`exp(-linear_damping * dt)`, and advances position by the updated velocity
+times `dt`. Gravity is a world-space acceleration chosen by the caller,
+independent of mass magnitude and any up axis. `RigidBodyMode::Kinematic`
+ignores gravity but still damps and integrates velocity. Zero mass, including
+negative zero, makes either mode static: position **and velocity** stay fixed.
+
+```rust
+use macroquad::prelude::*;
+
+let mut body = RigidBody::new(
+    vec3(0.0, 3.0, 0.0),
+    RigidBodyShape::Sphere(Sphere::new(Vec3::ZERO, 0.5)),
+    1.0,
+).unwrap();
+body.linear_velocity = Vec3::X * 2.0;
+body.integrate(0.5, -Vec3::Y * 8.0).unwrap();
+assert_eq!(body.position, vec3(1.0, 1.0, 0.0));
+let RigidBodyShape::Sphere(world_ball) = body.world_shape().unwrap() else {
+    unreachable!();
+};
+assert_eq!(world_ball.center, body.position);
+
+body.mass = 0.0;
+let stopped = body;
+body.integrate(1.0, -Vec3::Y * 8.0).unwrap();
+assert_eq!(body, stopped);
+```
+
+Every integration call validates all inputs, including static/kinematic bodies
+and zero time. Time, mass and damping must be finite and non-negative;
+position, velocity and gravity must be finite. Local box corners must be finite
+and ordered; sphere centers/radii must be finite, with non-negative radius.
+Degenerate boxes and zero-radius spheres are accepted. The translated shape
+must also stay finite. Invalid input or an unrepresentable result returns a
+`RigidBodyError` without changing any field. Zero time is a successful no-op
+after validation. The `world_shape()` query checks only position and shape,
+including translated-coordinate overflow. Intermediate integration arithmetic
+uses `f64`, rounds the updated velocity to `f32`, then computes position;
+finite rounding/underflow is accepted. Subdividing time can change this
+semi-implicit Euler trajectory.
+
+Integration does not inspect solids, prevent tunneling, resolve contacts or
+apply restitution. Rotation, collision response and islands remain separate.
+A game can instead keep its own velocity and call `slide_sphere` for a sphere
+against boxes, or `slide_sphere_solids` when a solid is a sphere or a capsule.
+These slide helpers retain tangential motion and do not apply mass or gravity.
+`Contact` describes an overlap that already exists; it does not move either
+shape. The following manual movement recipe remains useful when solids must
+constrain each step.
 
 This is application code, not a macroquad type. The floor is one of the solids. A downward step that the slide refuses clears the vertical speed. A step in open air keeps it.
 

@@ -10,6 +10,8 @@
 //! slides against [`Sphere`] and [`Capsule`] solids. [`slide_spheres_solids`]
 //! returns one shared translation for a rigid group of equal-radius spheres.
 //! [`UniformGrid`] indexes caller-owned world bounds for overlap and ray candidates.
+//! [`RigidBody`] integrates caller-owned velocity and position with gravity and
+//! damping, with local [`RigidBodyShape`] geometry and no collision response.
 //! The 3D types are unitless
 //! and do not assume an up axis.
 //! [`CharacterController`] moves a caller-owned AABB with sliding, ground
@@ -96,6 +98,7 @@ mod obb;
 mod plane;
 mod ray;
 mod rect;
+mod rigid_body;
 mod slide;
 mod sphere;
 mod sweep;
@@ -117,6 +120,7 @@ pub use obb::Obb;
 pub use plane::{Plane, PlaneSide};
 pub use ray::{ClosestHit, Ray};
 pub use rect::{Rect, RectOffset};
+pub use rigid_body::{RigidBody, RigidBodyError, RigidBodyMode, RigidBodyShape};
 pub use slide::{slide_sphere, slide_sphere_solids, slide_spheres_solids};
 pub use sphere::Sphere;
 pub use sweep::SweepHit;
