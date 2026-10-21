@@ -526,3 +526,14 @@ prototypes, including Marble Maze and Cinder Court, and their level assets are
 not checked in. The `room.glb` in the Blender tutorial is an export you create.
 
 The guides are [`docs/3d-guide.md`](../docs/3d-guide.md), [`docs/blender-to-macroquad.md`](../docs/blender-to-macroquad.md), [`docs/ui-2d-guide.md`](../docs/ui-2d-guide.md), and [`docs/browser-host.md`](../docs/browser-host.md). The 3D guide also covers pointer capture, queued font-atlas lifetime, and the logical coordinates `Camera3D::screen_to_ray` expects.
+
+### Authored glTF room
+
+`cargo run --features gltf --example gltf_room` loads the committed original
+[room](assets/room.glb), uploads its four meshes once and uses tagged empty
+colliders, a duplicate-suffixed spawn and a sphere trigger through public APIs.
+WASD moves, R resets and Escape exits. The room keeps glTF Y-up.
+`cargo test --features gltf --test gltf_room` checks the same loading contract,
+wall blocking, trigger traversal and duplicate-name fallback without a window
+or Blender. See the [Blender guide](../docs/blender-to-macroquad.md#samples-in-this-repository)
+for headless regeneration and the separate six-object tutorial.
