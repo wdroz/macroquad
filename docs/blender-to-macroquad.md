@@ -103,7 +103,7 @@ File → Export → glTF 2.0 (`.glb` / `.gltf`).
 3. **Transform → +Y Up** stays checked.
 4. **Data → Mesh**: apply modifiers if the collider should see the modified surface, and export UVs, normals, and tangents when the mesh will be drawn or shaded. Leave the exporter's **Shape Keys** option enabled when the object has them (it sits under Mesh or Animation, depending on the Blender version). `GltfMorphData` reads the POSITION and NORMAL deltas. `GltfMorphModel` draws independently weighted instances of those shape keys. Tangent morphs are not evaluated.
 5. **Data → Material**: export materials, and keep images packed into the `.glb` (the exporter's automatic image mode). PNG, JPEG, and WebP are decoded. A WebP image uses `EXT_texture_webp`. A normal map and a metallic-roughness map are loaded with the draw model; occlusion is not.
-6. Leave Draco compression off. This loader does not decode it. Skinning and animation clips can be written into the file, and this library does not play them.
+6. Leave Draco compression off. This loader does not decode it. Enable animation export for node TRS and shape-key weight clips. The optional `GltfAnimationData` sidecar supports LINEAR and STEP; CUBICSPLINE returns an explicit error, so bake unsupported curves to LINEAR keys when needed. Skinning remains unsupported.
 7. Do not export a camera or a light unless you want those nodes in the hierarchy. They are not special-cased.
 
 Custom property names are exactly `mq_shape` and `mq_role`, string values `box` / `sphere` / `capsule` and `collider` / `trigger` / `spawn`.
@@ -356,8 +356,8 @@ Shape keys are separate from that transform. `GltfMorphData::from_bytes` loads
 mesh-local POSITION/NORMAL deltas and the node's default weights. It does not
 open a window or upload a mesh. Pass `None` to use the file's weights, or one
 finite weight per target. Weights are not clamped. Apply the node's world
-matrix, including `with_up_axis`, after evaluation. Weight clips and skinning
-are not available.
+matrix, including `with_up_axis`, after evaluation. Weight clips use the
+optional animation sidecar below; skinning remains unavailable.
 
 ```rust
 use macroquad::gltf::GltfMorphData;
@@ -399,6 +399,18 @@ buffers until submission is finished. The
 two independent expressions and the material-renderer path. Shader-based
 morphing, tangent updates and deformed normal-map/GGX buffers remain future
 work; ordinary `GltfModel` drawing continues to use the undeformed geometry.
+
+To play an exported action, parse `GltfAnimationData::from_bytes(&bytes)` and
+choose a clip by `name()`. Create a `GltfAnimationPlayer`, supply elapsed time
+with `advance` or absolute time with `seek`, and apply each sample to the
+matching hierarchy and/or morph instance. Use `set_paused`, `reset` and
+`set_looping` to control the player. Reset rewinds to the first clip sample;
+hierarchy and morph resets restore authored rest data. Apply the same
+`with_up_axis` to the clip and model/pose. The
+[clip guide](3d-guide.md#playing-gltf-clips) shows the full draw path and
+interpolation rules. `gltf_animation_check` is a tiny fixture independent of
+Blender and game assets. Animation import does not require image decoding or
+a window; applying changed morph weights does require the render context.
 
 ## CPU images and draw materials
 
@@ -552,5 +564,5 @@ a custom renderer, especially its transparency ordering and output-space limits.
 
 - `GltfScene::with_up_axis` does not change a `GltfModel` or a `GltfModelPose`, and those calls do not change the scene. Call all three with the same axis when the draw, the pose, and the markers should leave Y-up. A camera can instead keep `up: Vec3::Y` and skip them. That is what the examples do.
 - `GltfModel` still uploads its own GPU textures, and only from a `.glb`. Sampler wrap and filter stay on that draw path. `GltfScene` and `GltfMaterialMaps` do not turn their RGBA bytes into a `Texture2D`.
-- Skins, animation clips, tangent morphs and shader-based morphing are not implemented. `GltfMorphData` evaluates POSITION/NORMAL shape-key deltas on the CPU; `GltfMorphModel` uploads changed instances and exposes their current retained chunks. It does not construct deformed normal-map/GGX tangent buffers. Ordinary `GltfModel` drawing remains undeformed. `GltfNodePose` replaces one node's world matrix for drawing, and `GltfHierarchyPose` edits local transforms so descendants follow. `collider_shape` returns a collider in those worlds; the stored collider list and the spawn points stay at rest. `submit_part` and `submit_retained_part` still apply an extra matrix to baked coordinates and do not read that rest pose. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Full PBR (image-based lighting, occlusion, shadows, transmission) is not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) and `submit_shaded` samples them. Material passes and lighting are opt-in; ordinary `draw` calls still use the current material. A name such as `player_spawn.001` is still not a suffix spawn, and a custom `mq_tag` is still not stored.
+- Skins, CUBICSPLINE interpolation, clip blending, tangent morphs and shader-based morphing are not implemented. Optional LINEAR/STEP node TRS and weight clips use GltfAnimationData and GltfAnimationPlayer. `GltfMorphData` evaluates POSITION/NORMAL shape-key deltas on the CPU; `GltfMorphModel` uploads changed instances and exposes their current retained chunks. It does not construct deformed normal-map/GGX tangent buffers. Ordinary `GltfModel` drawing remains undeformed. `GltfNodePose` replaces one node's world matrix for drawing, and `GltfHierarchyPose` edits local transforms so descendants follow. `collider_shape` returns a collider in those worlds; the stored collider list and the spawn points stay at rest. `submit_part` and `submit_retained_part` still apply an extra matrix to baked coordinates and do not read that rest pose. A whole-model retained transform moves every chunk together and also leaves colliders where the CPU scene stored them. Full PBR (image-based lighting, occlusion, shadows, transmission) is not implemented. Normal and metallic-roughness maps are loaded and retained (distinct UV sets, `KHR_texture_transform`, and tangents, including mirrored handedness) and `submit_shaded` samples them. Material passes and lighting are opt-in; ordinary `draw` calls still use the current material. A name such as `player_spawn.001` is still not a suffix spawn, and a custom `mq_tag` is still not stored.
 - `assets/room.glb` is the file you export in this tutorial, not a checked-in asset. The triangle and checkerboard files are the small fixtures in this repository. The historical Marble Maze and Cinder Court game rounds are documented in the roadmap; their games and level assets are not distributed here.

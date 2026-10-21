@@ -267,6 +267,15 @@ green. Without `gltf`, it prints a feature reminder and exits. Shape keys are
 evaluated on the CPU; shader morphing, tangent morphs, clips and skinning are
 outside this example.
 
+## `gltf_animation_check`
+
+Requires `--features gltf`. A generated self-contained GLB drives a child
+transform and morph weight together, using caller-supplied clip time. The
+native/WebGL fixture exercises interpolation and playback controls alongside
+the existing hierarchy/morph drawing path. A passing run prints
+`GLTF_ANIMATION_FIXTURE_PASS` and stays green. No game or Blender assets are
+required. CUBICSPLINE, clip blending and skinning are outside this example.
+
 ## `material_depth_check`
 
 An OpenGL/WebGL shader regression that exits after checking rendered pixels.

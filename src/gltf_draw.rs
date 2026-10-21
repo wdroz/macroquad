@@ -6,9 +6,11 @@
 //! [`GltfModel::from_bytes_with_material_maps`]. Geometry, transforms,
 //! normals and indices come from the fork's CPU scene loader. This module keeps
 //! material metadata so applications can use their own lighting shader. It does
-//! not implement full PBR, skins, animation clips, external image URIs, or GPU
+//! not implement full PBR, skins, external image URIs, or GPU
 //! shader-based morph drawing. [`GltfMorphModel`] opts into CPU-evaluated morph
 //! instances with retained GPU snapshots; existing draw methods stay unchanged.
+//! [`crate::gltf::GltfAnimationData`] separately samples TRS/weight clips for
+//! explicit application to hierarchy poses and morph instances.
 //! `EXT_texture_webp` is resolved in memory; the input file is never changed.
 //! [`GltfModel::with_up_axis`] rotates the baked mesh with the same rule as
 //! [`crate::gltf::GltfScene::with_up_axis`].
@@ -108,6 +110,7 @@ use crate::{
 mod retained;
 pub use retained::*;
 mod diagnostics;
+mod animation;
 mod loading;
 mod material;
 mod material_maps;

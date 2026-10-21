@@ -365,6 +365,70 @@ pub struct GltfHierarchyPose {
 }
 
 impl GltfHierarchyPose {
+    // Animation samples replace several locals simultaneously. Evaluate the
+    // final local set together so a temporary parent/child combination cannot
+    // overflow before a compensating sampled child edit has been installed.
+    pub(super) fn set_animation_locals(
+        &mut self,
+        locals: &[(usize, GltfLocalTransform)],
+    ) -> Result<(), String> {
+        let mut staged = self.clone();
+        for &(node, mut local) in locals {
+            let handle = staged
+                .handle(node)
+                .ok_or_else(|| format!("glTF animation pose node {node} does not exist"))?;
+            if !local.translation.is_finite()
+                || !local.scale.is_finite()
+                || !local.rotation.is_finite()
+                || (local.rotation.length_squared() - 1.).abs() > 1e-4
+            {
+                return Err(format!(
+                    "glTF animation pose node {node} requires finite TRS with a unit rotation"
+                ));
+            }
+            local.rotation = local.rotation.normalize();
+            let matrix = local.matrix();
+            if !super::retained::is_affine(matrix) {
+                return Err(format!(
+                    "glTF animation pose node {node} local matrix must be finite and affine"
+                ));
+            }
+            staged.local[handle.0] = matrix;
+        }
+        let mut changed = vec![false; self.world.len()];
+        for node in 0..self.world.len() {
+            let parent = staged.rest.parents[node];
+            if staged.local[node] == self.local[node]
+                && !parent.is_some_and(|parent| changed[parent])
+            {
+                continue;
+            }
+            changed[node] = true;
+            let at_rest = parent.map(|parent| staged.at_rest[parent]).unwrap_or(true)
+                && Some(staged.local[node]) == staged.rest.rest_local[node];
+            let world = if at_rest {
+                staged.rest.rest_world[node]
+            } else {
+                parent
+                    .map(|parent| staged.world[parent])
+                    .unwrap_or(Mat4::IDENTITY)
+                    * staged.local[node]
+            };
+            if !super::retained::is_affine(world) {
+                return Err(format!(
+                    "glTF animation pose node {node} recomputed world must be finite and affine"
+                ));
+            }
+            if let Some(pose) = &mut staged.poses[node] {
+                pose.set_world(world)?;
+            }
+            staged.world[node] = world;
+            staged.at_rest[node] = at_rest;
+        }
+        *self = staged;
+        Ok(())
+    }
+
     /// Looks up the stable handle associated with a chunk's node index.
     /// ```
     /// use macroquad::prelude::*;

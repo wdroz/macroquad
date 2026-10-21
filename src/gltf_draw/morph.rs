@@ -42,7 +42,8 @@ struct MorphRest {
 /// retained model do not include these additional CPU arrays. Normal-map tangent
 /// sidecars are not deformed; use the ordinary/custom normal-lighting path or
 /// [`super::GltfMaterialFrame::submit_retained`], not stale shaded sidecars.
-/// Skinning and clip playback are not included.
+/// Clip playback uses the separate [`crate::gltf::GltfAnimationData`] sidecar;
+/// skinning is not included.
 ///
 /// ```no_run
 /// use macroquad::prelude::*;

@@ -36,8 +36,10 @@
 //!
 //! [`GltfMorphData`] separately loads mesh-local POSITION/NORMAL morph deltas
 //! and default weights. Its CPU evaluator applies caller weights and computes
-//! deformed bounds without decoding images or opening a window. Draw models do
-//! not apply these morphs yet; evaluate before the node's world/up-axis transform.
+//! deformed bounds without decoding images or opening a window.
+//! [`crate::gltf_draw::GltfMorphModel`] draws independent deformed instances.
+//! [`GltfAnimationData`] optionally imports TRS/weight clips driven by
+//! caller-supplied time, with samples applied to matching poses/instances.
 //!
 //! [`GltfPrimitive::base_color_texture`] indexes [`GltfScene::images`]. Those
 //! images are the base-color textures the loaded primitives sample, decoded
@@ -123,6 +125,8 @@ use crate::math::{Aabb, Capsule, Obb, Sphere};
 pub(crate) mod image_limits;
 pub(crate) mod material_maps;
 mod morph;
+mod animation;
+pub use animation::*;
 pub use image_limits::GltfImageLimits;
 pub use material_maps::{
     GltfMaterialMap, GltfMaterialMaps, GltfPrimitiveMaterialMaps, GltfUvTransform,
@@ -138,8 +142,9 @@ pub use morph::{
 /// Nodes are stored in preorder, parents before children. A document with no
 /// scenes yields empty `nodes`, `meshes`, and `images`. Meshes that no loaded
 /// node references are left out, and so are images those meshes do not sample.
-/// [`Self::images`] are decoded RGBA bytes, not GPU textures. Skins and
-/// animations are not loaded. [`Self::colliders`] and [`Self::spawns`] are the
+/// [`Self::images`] are decoded RGBA bytes, not GPU textures. Skins are not
+/// loaded; animations use the separate [`GltfAnimationData`] sidecar.
+/// [`Self::colliders`] and [`Self::spawns`] are the
 /// markers on those nodes, in the same preorder. See the module docs for the
 /// markup and for which images are kept.
 ///

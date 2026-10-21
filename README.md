@@ -65,6 +65,7 @@ cargo run --features gltf --example gltf_materials
 cargo run --features gltf --example gltf_shading
 cargo run --features gltf --example gltf_pose_check
 cargo run --features gltf --example gltf_morph_check
+cargo run --features gltf --example gltf_animation_check
 ```
 
 `model.parts` exposes each mesh, source node/name, bounds, and surface metadata
@@ -94,6 +95,13 @@ changed geometry while queued draws keep their previous buffers alive.
 `instance.model()` exposes the current retained chunks, normals and bounds for
 existing material, pose and culling APIs. Ordinary model loading stays unchanged.
 See the [morph guide](docs/3d-guide.md#drawing-independent-morph-instances).
+
+`macroquad::gltf::GltfAnimationData` separately imports optional node TRS and
+morph-weight clips. `GltfAnimationPlayer` samples caller-supplied time with
+pause, reset and looping controls. LINEAR (shortest-path slerp for rotation)
+and STEP are supported; CUBICSPLINE returns an explicit error. Apply samples
+to a matching hierarchy and morph instance, then use the existing posed draw
+APIs. See [Playing glTF clips](docs/3d-guide.md#playing-gltf-clips).
 
 `GltfModel::from_bytes_with_pose` (or `GltfModelLoader::take_pose`) keeps the
 authored node matrices. `GltfNodePose::set_world` replaces one node's world

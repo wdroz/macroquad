@@ -373,8 +373,9 @@ base-color and emissive uploads only. Normal and metallic-roughness images,
 their UV selection and transforms, and tangents are retained by
 `GltfModel::from_bytes_with_material_maps` and `GltfMaterialMaps`.
 `submit_shaded` samples those maps. CPU morph evaluation and independent
-deforming draw instances are described below. Shader-based morphing, skinning,
-animation, environment lighting, shadows and transmission remain roadmap work.
+deforming draw instances and optional TRS/weight clips are described below.
+Shader-based morphing, skinning, environment lighting, shadows and transmission
+remain roadmap work.
 
 ## Opt-in glTF material passes
 
@@ -744,8 +745,8 @@ node's world matrix after evaluation, including any `with_up_axis` rotation.
 `transformed_bounds` encloses the evaluated vertices under a
 finite affine matrix, including reflection, nonuniform scale and shear. It does
 not update scene colliders or draw-model bounds. Use the drawing API below to
-keep deforming draw geometry and its bounds together. Tangent deltas, weight
-clips and skinning remain separate work.
+keep deforming draw geometry and its bounds together. Optional weight clips
+are covered below; tangent deltas and skinning remain separate work.
 
 ## Drawing independent morph instances
 
@@ -810,8 +811,72 @@ loading and existing public struct literals are unchanged. Updates evaluate and
 upload synchronously; taking the initial morph model also evaluates defaults and
 uploads all initial chunks synchronously. Neither operation provides a
 frame-time budget. Collider shapes and spawn markers are unaffected.
-Shader-based deformation, tangent morphs,
-weight clips and skinning are separate work.
+Shader-based deformation, tangent morphs and skinning are separate work.
+
+## Playing glTF clips
+
+With `gltf`, `GltfAnimationData::from_bytes` loads an optional CPU sidecar from
+the same GLB or embedded-buffer glTF as the model. It does not decode images,
+upload geometry, or start playback. Clips retain immutable shared key arrays
+and map document node IDs to the selected scene's preorder, matching draw and
+hierarchy IDs. Keep clips, poses and morph instances from the same source.
+
+Translation, rotation, scale and morph-weight channels support LINEAR and STEP.
+LINEAR rotations use normalized shortest-path spherical interpolation. STEP
+switches at the exact key time. Each channel clamps to its own first/last key,
+including before a delayed first key. Clip time starts at zero and duration is
+the last key across all channels. CUBICSPLINE returns an explicit import error;
+skinning, animation extensions, clip blending and events remain separate work.
+Outputs support floats and glTF's normalized integer rotation/weight encodings,
+including sparse accessors. Invalid formats, ranges, key times, duplicate
+targets and malformed sparse indices return errors.
+
+```rust,no_run
+use macroquad::prelude::*;
+# fn animate(bytes: &[u8]) -> Result<(), String> {
+let source = GltfMorphModel::from_bytes(bytes)?;
+let mut face = source.instantiate();
+let mut hierarchy = source.pose().hierarchy()?;
+let clips = GltfAnimationData::from_bytes(bytes).map_err(|e| e.to_string())?;
+let clip = clips.clips.first().ok_or("no animation clip")?.clone();
+let mut player = GltfAnimationPlayer::new(clip);
+player.set_looping(true);
+let sample = player.advance(1. / 60.).map_err(|e| e.to_string())?;
+sample.apply(&mut hierarchy, Some(&mut face))?;
+for part in &face.model().parts {
+    let handle = hierarchy.handle(part.node).ok_or("missing node")?;
+    part.draw_posed(&hierarchy.node_pose(handle)?)?;
+}
+player.set_paused(true); // advance now holds time; seek still works.
+player.reset(); // Rewind the player, preserving pause/loop settings.
+player.sample().map_err(|e| e.to_string())?.apply(&mut hierarchy, Some(&mut face))?;
+# Ok(()) }
+```
+
+`clip.sample(seconds)` samples absolute finite clip time without a player.
+`player.seek(seconds)` uses absolute nonnegative time; `advance(delta_seconds)`
+uses a nonnegative elapsed interval supplied by the application. A nonlooping
+player clamps at duration; looping wraps into `[0, duration)`. Zero-duration
+clips stay at zero. Pausing holds advancement, and reset rewinds to the clip's
+first sample rather than the model's authored rest pose. Apply the returned
+sample explicitly. To restore authored rest data, use hierarchy/morph reset.
+
+`sample.apply_pose`, `apply_morph` and combined `apply` stage updates and commit
+only after validation succeeds. TRS channels replace the animated node's full
+local transform, using authored values for its unanimated components. Nodes
+absent from the clip retain their current values. Zero scale can be sampled and
+later restored without decomposing the singular current matrix. TRS channels
+cannot target matrix-authored nodes. Weight-only channels can.
+
+Apply `clip.with_up_axis(up)` with the same conversion as the source model and
+pose before creating the player. Animated roots receive that conversion;
+children remain parent-local. Pose-aware bounds, culling and material submission
+still use `hierarchy.node_pose` on the current morph model. Ordinary model
+drawing does not read the hierarchy automatically. Morph samples reuse the
+existing synchronous CPU evaluation and immutable replacement buffers, with
+no upload for unchanged weights; choose the update frequency in the application.
+The self-contained `gltf_animation_check` fixture drives a child transform and
+morph weight together on native and WebGL.
 
 ## Logical and physical input
 

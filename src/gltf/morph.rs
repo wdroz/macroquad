@@ -588,7 +588,7 @@ fn vec3_bytes(bytes: &[u8]) -> Vec3 {
     )
 }
 
-fn elements<'a>(
+pub(super) fn elements<'a>(
     view: &gltf::buffer::View<'_>,
     offset: usize,
     count: usize,
