@@ -354,9 +354,9 @@ pub struct GltfImage {
 /// Shape produced from a glTF collider or trigger.
 ///
 /// See the module docs for which node becomes which variant. [`Self::overlaps_sphere`]
-/// and [`Self::overlaps_aabb`] test every variant; [`Self::sweep_aabb`] sweeps
-/// an incoming axis-aligned body against every variant. Games need not match
-/// on the shape by hand.
+/// and [`Self::overlaps_aabb`] test every variant; [`Self::sweep_aabb`] and
+/// [`Self::sweep_sphere`] sweep an incoming body against every variant. Games
+/// need not match on the shape by hand.
 ///
 /// # Example
 ///
@@ -479,6 +479,50 @@ impl GltfColliderShape {
     pub fn sweep_aabb(&self, body: &Aabb, delta: Vec3) -> Option<SweepHit> {
         match *self {
             GltfColliderShape::Aabb(aabb) => body.sweep(delta, &aabb),
+            GltfColliderShape::Sphere(sphere) => body.sweep_sphere(delta, &sphere),
+            GltfColliderShape::Obb(obb) => body.sweep_obb(delta, &obb),
+            GltfColliderShape::Capsule(capsule) => body.sweep_capsule(delta, &capsule),
+        }
+    }
+
+    /// Sweeps the incoming sphere `body` along `delta` against this static shape.
+    ///
+    /// The receiver, body and delta are in world space, independent of the
+    /// scene's up axis. The receiver is one snapshot: a shape returned by
+    /// [`GltfHierarchyPose::collider_shape`](crate::gltf_draw::GltfHierarchyPose::collider_shape)
+    /// is queried at that pose without accounting for obstacle motion.
+    ///
+    /// This allocation-free dispatch returns the primitive query's result
+    /// unchanged: [`Sphere::sweep_aabb`], [`Sphere::sweep_obb`],
+    /// [`Sphere::sweep_sphere`] or [`Sphere::sweep_capsule`]. Their
+    /// initial/touching-contact rules, invalid-input behavior, tie ordering and
+    /// numerical limits apply. [`SweepHit::t`] is a fraction of `delta`; its
+    /// normal points out of this static shape and its representative point is
+    /// in world space.
+    ///
+    /// Shapes have no trigger role. Callers choose candidates (for example,
+    /// [`GltfScene::solid_colliders`]), compare hit times and apply movement
+    /// or response themselves. Swept trigger queries are also explicit; this
+    /// method does not track enter/exit events.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::gltf::GltfColliderShape;
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let rock = GltfColliderShape::Sphere(Sphere::new(Vec3::ZERO, 1.0));
+    /// let body = Sphere::new(vec3(-3.0, 0.0, 0.0), 0.5);
+    /// let delta = vec3(6.0, 0.0, 0.0);
+    /// let hit = rock.sweep_sphere(&body, delta).unwrap();
+    /// assert_eq!(hit.t, 0.25);
+    /// assert_eq!(hit.normal, -Vec3::X);
+    /// assert_eq!(hit.point, -Vec3::X);
+    /// assert_eq!(body.offset(delta * hit.t).center, vec3(-1.5, 0.0, 0.0));
+    /// ```
+    pub fn sweep_sphere(&self, body: &Sphere, delta: Vec3) -> Option<SweepHit> {
+        match *self {
+            GltfColliderShape::Aabb(aabb) => body.sweep_aabb(delta, &aabb),
             GltfColliderShape::Sphere(sphere) => body.sweep_sphere(delta, &sphere),
             GltfColliderShape::Obb(obb) => body.sweep_obb(delta, &obb),
             GltfColliderShape::Capsule(capsule) => body.sweep_capsule(delta, &capsule),

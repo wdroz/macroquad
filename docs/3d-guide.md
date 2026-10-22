@@ -1532,7 +1532,7 @@ All deltas translate a whole body in world coordinates; none of these queries
 rotates that body or integrates velocity/gravity. The static shape is a snapshot
 for the whole delta. The Blender tutorial's
 [marked-level example](blender-to-macroquad.md#4-upload-once-move-and-draw)
-shows dispatching an AABB sweep across imported solid marker shapes.
+shows dispatching AABB and sphere sweeps across imported solid marker shapes.
 
 `Sphere::sweep_sphere` moves a complete sphere against a static sphere. Its
 point lies on the static sphere, including initial contacts, matching
@@ -1672,18 +1672,45 @@ assert_eq!(hit.normal, -Vec3::X);
 assert!((hit.point.x + 0.5).abs() < 1e-4);
 ```
 
-With the `gltf` feature, `GltfColliderShape::sweep_aabb(&body, delta)` treats
-the receiver as one static world-space shape and dispatches an incoming
-world-space AABB/delta to the matching primitive sweep above. It allocates
-nothing and preserves the delegated result, including contact points,
-initial/tangent-contact rules and invalid-input behavior. The body stays
-axis-aligned for any caller-defined up axis. A shape from
+With the `gltf` feature, `GltfColliderShape::sweep_aabb(&body, delta)` and
+`GltfColliderShape::sweep_sphere(&body, delta)` treat the receiver as one static
+world-space shape and dispatch the incoming world-space body/delta to the
+matching primitive sweep above. Both allocate nothing and return the delegated
+result unchanged, including contact points, initial/tangent-contact rules,
+tie ordering, invalid-input behavior and numerical limits. There is no added
+validation or geometry conversion. The AABB body stays axis-aligned for any
+caller-defined up axis. A shape from
 `GltfHierarchyPose::collider_shape` is queried at that snapshot; obstacle motion
 is not swept. Shapes carry no trigger role: select `scene.solid_colliders()`
 for blocking queries or choose triggers explicitly. Candidate selection,
 earliest-hit ties and response stay with the caller; the
 [Blender recipe](blender-to-macroquad.md#4-upload-once-move-and-draw) shows an
-allocation-free earliest-hit loop.
+allocation-free earliest-hit loop and separate swept trigger queries.
+
+The sphere dispatcher selects `Sphere::sweep_aabb`, `Sphere::sweep_obb`,
+`Sphere::sweep_sphere` or `Sphere::sweep_capsule` for the receiver's variant.
+The receiver remains the obstacle: the sphere center advances by
+`delta * hit.t`, the normal points out of the obstacle, and the returned point
+is in world space. For example, with `gltf` enabled:
+
+```rust
+use macroquad::gltf::GltfColliderShape;
+use macroquad::math::{Capsule, Sphere, Vec3, vec3};
+
+let post = GltfColliderShape::Capsule(Capsule::new(
+    vec3(0.0, -2.0, 0.0), vec3(0.0, 2.0, 0.0), 0.5,
+));
+let mut body = Sphere::new(vec3(-3.0, 0.0, 0.0), 0.5);
+let delta = Vec3::X * 6.0;
+let hit = post.sweep_sphere(&body, delta).unwrap();
+body.center += delta * hit.t;
+assert!((body.center + Vec3::X).length() < 1e-5);
+assert_eq!(hit.normal, -Vec3::X);
+```
+
+The headless [`gltf_sphere_sweep` example](../examples/README.md#gltf_sphere_sweep)
+selects the earliest solid and queries triggers explicitly. Dispatch alone
+does not move the body, recover an initial overlap or slide along a surface.
 
 ## Sphere slide
 

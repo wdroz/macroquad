@@ -367,12 +367,55 @@ For a sphere or a fixed multi-sphere hull, reuse those same four solid-only
 arrays with `slide_sphere_solids` or `slide_spheres_solids`. They already accept
 static capsule markers and return a center or one shared translation,
 respectively. If the game needs the time of one impact instead, primitive
-`Sphere` sweeps cover AABBs, OBBs, spheres and capsules. A sphere player can use
-`Sphere::sweep_capsule` directly for one static capsule marker, with the hit
-normal and point in world space. Apply `delta * hit.t` to its center; the hit
-point belongs to the obstacle. See the current [sweep table](3d-guide.md#sweep)
-for initial-contact rules and numerical limits. Neither path sweeps a rotating
-body.
+`Sphere` sweeps cover AABBs, OBBs, spheres and capsules, and
+`collider.shape.sweep_sphere(&body, delta)` dispatches across those imported
+variants. As with `sweep_aabb`, the receiver is the static world-space obstacle
+and the sphere and delta are in world space. It allocates nothing and returns
+the exact primitive result, including its invalid-input behavior and numerical
+limits; it adds no validation or shape conversion. Apply `delta * hit.t` to
+the sphere's center, rather than replacing the center with `hit.point`.
+
+This caller-owned loop keeps equal-time solid hits in stored order and checks
+triggers only along the translation that the solid query permits:
+
+```rust
+use macroquad::prelude::*;
+
+fn move_sphere_to_first_hit(scene: &GltfScene, body: &mut Sphere, delta: Vec3) -> bool {
+    let mut first: Option<SweepHit> = None;
+    for collider in scene.solid_colliders() {
+        let Some(hit) = collider.shape.sweep_sphere(body, delta) else {
+            continue;
+        };
+        if let Some(previous) = first {
+            if hit.t >= previous.t {
+                continue;
+            }
+        }
+        first = Some(hit);
+    }
+    let permitted_delta = delta * first.map_or(1.0, |hit| hit.t);
+    let reached_trigger = scene.trigger_colliders().any(|trigger| {
+        trigger.shape.overlaps_sphere(body)
+            || trigger.shape.sweep_sphere(body, permitted_delta).is_some()
+    });
+    body.center += permitted_delta;
+    reached_trigger
+}
+```
+
+Neither shape dispatch filters triggers automatically; their roles belong to
+`GltfCollider`. The initial overlap query includes an already touched trigger;
+the swept query retains the primitive's inward-motion and tangency rules.
+An initial solid penetration can report time zero and needs a separate
+recovery policy. To query an animated obstacle at its current pose, obtain
+`hierarchy.collider_shape(&scene, collider)` and call `sweep_sphere` on that
+shape. This remains one static snapshot for the entire delta, without
+accounting for obstacle motion. See the [sweep table](3d-guide.md#sweep) for
+initial-contact rules and numerical limits, and run the headless
+[`gltf_sphere_sweep` example](../examples/README.md#gltf_sphere_sweep) for an
+asset-free solid/trigger recipe. Neither dispatcher supplies sliding,
+grounding or rotating-body motion.
 
 Use `slide_spheres_solids_with_contacts` when a hull needs the selected solid,
 sample and outward normal for scrape/stop feedback. Its `solid_index` belongs

@@ -10,6 +10,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, single-sphere and rigid two-sphere slide against boxes, spheres and capsules; additional full-AABB body sweep fixtures are in the CPU tests |
 | Sphere body sweeps | `sphere_sweep` | Asset-free CPU example: sphere/sphere and sphere/capsule impacts, world-space surface point and normal, caller-owned translation and initial touching; run without a window using `cargo run --example sphere_sweep` |
+| Imported sphere sweeps | `gltf_sphere_sweep` (`gltf` feature) | Asset-free CPU example: sphere dispatch against imported marker shapes, earliest solid selection and separate swept trigger queries; run without a window using `cargo run --features gltf --example gltf_sphere_sweep` |
 | Body and joint composition | `rigid_body_joint` | Checked integration, discrete pair response, one anchored distance joint, bounded fixed-step clock and joint/contact ordering diagnostics; [recipe](../docs/3d-guide.md#combine-integration-contacts-and-one-joint) |
 | Character movement | `character_controller` | Caller-owned AABB, solid-only sweeps, jumping, ceiling/wall sliding, ground snap, slope limits and optional stair stepping with diagnostics |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
@@ -38,8 +39,8 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 Interactive collision examples use the default features and a Y-up `Camera3D`.
 Escape quits their windows. Arrow keys move the overlap/sweep/slide demos on
 the XZ plane: left and right change X, up and down change Z (up is toward -Z).
-`sphere_sweep` is a separate CPU-only command that prints its results and exits;
-it needs no window, camera or input.
+`sphere_sweep` and `gltf_sphere_sweep` are separate CPU-only commands that print
+their results and exit; they need no window, camera or input.
 
 ```sh
 cargo run --example aabb_overlap
@@ -52,6 +53,7 @@ cargo run --example capsule_overlap
 cargo run --example sweep_hit
 cargo run --example sweep_obb
 cargo run --example sphere_sweep
+cargo run --features gltf --example gltf_sphere_sweep
 cargo run --example slide_solids
 cargo run --example rigid_body_joint
 cargo run --example character_controller
@@ -148,9 +150,10 @@ browser checks without game assets. `keyboard_buttons_command` provides
 explicit test-model changes (clear focus, hide/show a button, disable/enable
 Apply); keyboard and pointer events can still come from the real DOM.
 
-These commands run from the fork root; `sphere_sweep` exits without opening a
-window, while the interactive and GPU-check examples open one. To compile a sample
-without opening a window, use `cargo build --example <name>` with the same
+These commands run from the fork root; `sphere_sweep` and `gltf_sphere_sweep`
+exit without opening a window, while the interactive and GPU-check examples
+open one. To compile a sample without opening a window, use
+`cargo build --example <name>` with the same
 feature flags and omit runtime arguments after `--`. Pure collision and scene-loader tests can run without graphics;
 rendering and texture uploads need a graphics context.
 
@@ -313,6 +316,20 @@ The [sweep guide](../docs/3d-guide.md#sweep) lists the available moving/static
 pairs, including `Sphere::sweep_capsule`, with initial-contact rules and
 numerical limits. The slide helpers accept those same static shape kinds
 when the application needs movement against several solids.
+
+## `gltf_sphere_sweep`
+
+Run `cargo run --features gltf --example gltf_sphere_sweep` for an asset-free,
+window-free imported-shape recipe. `GltfColliderShape::sweep_sphere(&body, delta)`
+dispatches an incoming world-space sphere against a static AABB, OBB, sphere
+or capsule snapshot. The example chooses the earliest solid hit, applies the
+permitted translation to the center and queries triggers explicitly along
+that path. Shapes have no trigger role, so the caller selects
+`solid_colliders()` and `trigger_colliders()` separately. Dispatch preserves
+each primitive query's exact result and invalid-input behavior; it supplies no
+automatic filtering, sliding or overlap recovery. See the
+[sweep guide](../docs/3d-guide.md#sweep) and
+[Blender recipe](../docs/blender-to-macroquad.md#4-upload-once-move-and-draw).
 
 ## `timed_sprite_check`
 
