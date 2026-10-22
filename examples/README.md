@@ -285,6 +285,17 @@ outside cannot select the note. F fits the page and R resets to 100%, centered
 on the page; the header also offers those actions. Escape quits the native
 example.
 
+Touch: drag or tap the note with one finger; pinch with two fingers to zoom
+and pan around their midpoint. Only touches started inside acquire the page;
+captured gestures continue outside. Touch IDs keep ownership stable when the
+input array changes order. Finger-count transitions rebase without a jump or
+tap, and cancelled contacts do not select. Extra fingers do not steal an
+active pinch. Coincident fingers wait for a usable separation. Fit/reset and
+resize cancel gestures; lift and start again. Touch input suppresses mouse
+events through release, while keyboard controls remain available. The header
+buttons accept mouse clicks and explicit touch starts to fit/reset; they do
+not acquire page gestures.
+
 Each axis centers when the scaled page fits, and otherwise clamps to the page
 edges. Bounds take precedence over a zoom anchor near an edge. Fit mode follows
 window resizing; after manual interaction, resizing preserves the page point
@@ -305,6 +316,9 @@ checkout's JavaScript bundle. Try 390 x 400 and desktop windows at browser DPR
 1 and 2: zoom at an interior page point, scroll/drag to each bound, resize in
 fit and manual modes, and click or wheel on the header and outside the viewport.
 Check that clipped page content stays below the header and above the footer.
+Also exercise touch starts outside, captured outside drags, pinch anchoring,
+one/two-finger transitions and cancellation at both densities. Browser touch
+emulation is useful coverage; no physical device was tested for this recipe.
 The read-only exports `document_zoom_pan_status` (0 starting, 1 ready, 2 panic),
 `document_zoom_pan_frames` and `document_zoom_pan_value(index)` expose the
 live state; the index comment in the Rust example names the values. Status

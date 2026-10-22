@@ -628,11 +628,37 @@ camera for the header and footer after the scope. Keep input, pan and the
 clip in logical units at every DPI; the window clip helper converts to
 framebuffer pixels.
 
+The same example reads `touches_logical()` and disables
+`simulate_mouse_with_touch` before its first frame. Only a `Started` contact
+inside the viewport can acquire a document drag; moving in from outside does
+not acquire it. Ownership follows touch IDs rather than array positions, and
+a captured finger can move outside while page bounds still apply. A second
+eligible finger starts a pinch with a stable pair of IDs. Save the page point
+under their midpoint, scale by their distance ratio within the zoom bounds,
+and solve pan so that point follows the new midpoint, then clamp pan. This also
+pans when the pair moves together.
+
+Changing from one finger to two, or back to one, rebases at the current
+positions without moving the page or selecting the note. Additional fingers
+do not replace a captured pair. Ended/cancelled or missing contacts release
+ownership; cancellation never selects. Coincident fingers rebase until their
+separation exceeds one logical pixel, avoiding division by zero. Fit, reset
+and resize cancel capture; held contacts must start again to acquire it.
+Mouse/wheel and mouse header actions are suppressed while touches are present,
+including their terminal frame, until a neutral frame releases suppression.
+This avoids applying a touch gesture twice through synthetic mouse events;
+keyboard Fit/Reset remains available. Explicit touch starts on the header
+buttons also perform Fit/Reset. A header touch does not acquire a page
+gesture. These are example-owned rules,
+not a general input manager. Browser touch emulation does not establish
+physical-phone behavior; no physical device was tested for this recipe.
+
 The [example index](../examples/README.md#document_zoom_pan) lists the controls,
 fit/reset and resize behavior, and the build/copy steps for its native and
 [WebGL host](../examples/document_zoom_pan.html). Inspect real input at
-390 x 400 and desktop sizes at browser DPR 1 and 2, including wheel/clicks
-outside the viewport and document edges crossing beneath the restored HUD.
+390 x 400 and desktop sizes at browser DPR 1 and 2, including touch drag/pinch
+transitions, wheel/clicks outside the viewport and document edges crossing
+beneath the restored HUD.
 
 ## Wrap and draw text explicitly
 

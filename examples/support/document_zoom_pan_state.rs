@@ -28,6 +28,27 @@ struct Drag {
     moved: bool,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct TouchDrag {
+    id: u64,
+    drag: Drag,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Pinch {
+    ids: [u64; 2],
+    center: Vec2,
+    distance: f64,
+}
+
+// A subpixel/coincident pair has no useful scale baseline. Continue midpoint
+// translation, then rebase when the fingers separate instead of dividing by 0.
+const MIN_PINCH_DISTANCE: f64 = 1.;
+
+fn pinch_distance(a: Vec2, b: Vec2) -> f64 {
+    (a.x as f64 - b.x as f64).hypot(a.y as f64 - b.y as f64)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Input {
     pub pointer: Vec2,
@@ -58,7 +79,17 @@ pub struct Document {
     pub resizes: u32,
     pub anchor_error: f32,
     pub anchor_clamped: bool,
+    pub touch_starts: u32,
+    pub pinch_starts: u32,
+    pub pinch_frames: u32,
+    pub touch_transitions: u32,
+    pub touch_cancels: u32,
+    pub rejected_touch_starts: u32,
+    pub touch_taps: u32,
     drag: Option<Drag>,
+    touch_drag: Option<TouchDrag>,
+    pinch: Option<Pinch>,
+    mouse_blocked: bool,
 }
 
 impl Document {
@@ -80,7 +111,17 @@ impl Document {
             resizes: 0,
             anchor_error: 0.,
             anchor_clamped: false,
+            touch_starts: 0,
+            pinch_starts: 0,
+            pinch_frames: 0,
+            touch_transitions: 0,
+            touch_cancels: 0,
+            rejected_touch_starts: 0,
+            touch_taps: 0,
             drag: None,
+            touch_drag: None,
+            pinch: None,
+            mouse_blocked: false,
         };
         value.fit();
         value
@@ -122,12 +163,18 @@ impl Document {
         };
     }
 
+    fn cancel_capture(&mut self) {
+        self.drag = None;
+        self.touch_drag = None;
+        self.pinch = None;
+    }
+
     pub fn fit(&mut self) {
         self.zoom = self.fit_zoom();
         self.pan = (self.size() - PAGE * self.zoom) * 0.5;
         self.clamp_pan();
         self.follow_fit = true;
-        self.drag = None;
+        self.cancel_capture();
         self.anchor_error = 0.;
         self.anchor_clamped = false;
     }
@@ -138,7 +185,7 @@ impl Document {
         self.pan = (self.size() - PAGE) * 0.5;
         self.clamp_pan();
         self.follow_fit = false;
-        self.drag = None;
+        self.cancel_capture();
         self.anchor_error = 0.;
         self.anchor_clamped = false;
     }
@@ -156,14 +203,236 @@ impl Document {
         } else {
             self.pan = self.size() * 0.5 - center_page * self.zoom;
             self.clamp_pan();
-            self.drag = None;
+            self.cancel_capture();
         }
         self.resizes += 1;
         true
     }
 
     pub fn captured(&self) -> bool {
-        self.drag.is_some()
+        self.drag.is_some() || self.touch_drag.is_some() || self.pinch.is_some()
+    }
+
+    pub fn touch_ids(&self) -> [Option<u64>; 2] {
+        if let Some(pinch) = self.pinch {
+            pinch.ids.map(Some)
+        } else {
+            [self.touch_drag.map(|drag| drag.id), None]
+        }
+    }
+
+    pub fn touch_mode(&self) -> u32 {
+        if self.pinch.is_some() {
+            2
+        } else {
+            u32::from(self.touch_drag.is_some())
+        }
+    }
+
+    /// Share this gate with mouse-operated HUD buttons. Touches, including
+    /// terminal phases, suppress mouse input until a neutral mouse frame.
+    pub fn mouse_allowed(&self) -> bool {
+        !self.mouse_blocked
+    }
+
+    fn anchor_at(&mut self, page: Vec2, pointer: Vec2) {
+        // Compute the desired pan/error in f64 so a finite captured contact far
+        // outside the window cannot overflow the diagnostic length calculation.
+        let x = pointer.x as f64 - self.viewport.x as f64 - page.x as f64 * self.zoom as f64;
+        let y = pointer.y as f64 - self.viewport.y as f64 - page.y as f64 * self.zoom as f64;
+        self.pan = vec2(x as f32, y as f32);
+        self.clamp_pan();
+        let error = (self.pan.x as f64 - x).hypot(self.pan.y as f64 - y);
+        self.anchor_clamped = error > 0.001;
+        self.anchor_error = error.min(f32::MAX as f64) as f32;
+    }
+
+    /// Only an in-viewport Started contact can acquire ownership. The input
+    /// slice is a complete touches_logical() snapshot, whose order is unspecified.
+    /// Extra/outside starts are ignored for their lifetime; they cannot steal a
+    /// captured ID. Transitions rebase at current positions without a view jump.
+    fn update_touches(&mut self, touches: &[Touch]) -> bool {
+        let viewport = self.viewport;
+        let active = |id| {
+            touches.iter().find(|touch| {
+                touch.id == id
+                    && touch.position.is_finite()
+                    && !matches!(touch.phase, TouchPhase::Ended | TouchPhase::Cancelled)
+            })
+        };
+        let candidate = |owned: [Option<u64>; 2]| {
+            touches
+                .iter()
+                .filter(|touch| {
+                    touch.phase == TouchPhase::Started
+                        && contains(viewport, touch.position)
+                        && !owned.contains(&Some(touch.id))
+                })
+                .min_by_key(|touch| touch.id)
+        };
+        let mut changed = false;
+        // Take the old ownership first so a missing/cancelled contact can never
+        // leave a stale origin for a later contact with another ID.
+        if let Some(pinch) = self.pinch.take() {
+            let first = active(pinch.ids[0]);
+            let second = active(pinch.ids[1]);
+            if let (Some(a), Some(b)) = (first, second) {
+                let center = a.position * 0.5 + b.position * 0.5;
+                let distance = pinch_distance(a.position, b.position);
+                let page = self.window_to_page(pinch.center);
+                if page.is_finite() {
+                    if pinch.distance > MIN_PINCH_DISTANCE && distance > MIN_PINCH_DISTANCE {
+                        // f64 ratio avoids intermediate overflow for otherwise
+                        // finite positions; clamp before conversion to f32.
+                        self.zoom = ((self.zoom as f64 * distance / pinch.distance)
+                            .clamp(self.fit_zoom().min(0.2) as f64, MAX_ZOOM as f64))
+                            as f32;
+                    }
+                    if center != pinch.center || distance != pinch.distance {
+                        self.anchor_at(page, center);
+                        self.follow_fit = false;
+                        self.pinch_frames += 1;
+                        changed = true;
+                    }
+                    self.pinch = Some(Pinch {
+                        center,
+                        distance,
+                        ..pinch
+                    });
+                } else {
+                    self.touch_cancels += 1;
+                    changed = true;
+                }
+            } else {
+                // Terminal coordinates do not transform a pinch. Rebase the
+                // survivor, discard tap eligibility, and require a fresh start
+                // for the second finger. Missing contacts act like cancellation.
+                self.touch_drag = first.or(second).map(|touch| TouchDrag {
+                    id: touch.id,
+                    drag: Drag {
+                        start: touch.position,
+                        last: touch.position,
+                        moved: true,
+                    },
+                });
+                self.touch_transitions += 1;
+                if pinch.ids.iter().any(|id| {
+                    !touches.iter().any(|t| {
+                        t.id == *id && t.phase != TouchPhase::Cancelled && t.position.is_finite()
+                    })
+                }) {
+                    self.touch_cancels += 1;
+                }
+                changed = true;
+            }
+        } else if let Some(mut owned) = self.touch_drag.take() {
+            let contact = touches.iter().find(|touch| touch.id == owned.id);
+            if let Some(touch) = contact
+                .filter(|touch| touch.position.is_finite() && touch.phase != TouchPhase::Cancelled)
+            {
+                if touch.phase != TouchPhase::Ended {
+                    if let Some(second) = candidate([Some(owned.id), None]) {
+                        self.pinch = Some(Pinch {
+                            ids: [owned.id, second.id],
+                            center: touch.position * 0.5 + second.position * 0.5,
+                            distance: pinch_distance(touch.position, second.position),
+                        });
+                        self.touch_starts += 1;
+                        self.pinch_starts += 1;
+                        self.touch_transitions += 1;
+                        changed = true;
+                    }
+                }
+                if self.pinch.is_none() {
+                    let drag = &mut owned.drag;
+                    if drag.moved || touch.position.distance(drag.start) > 3. {
+                        let from = if drag.moved { drag.last } else { drag.start };
+                        let delta = touch.position - from;
+                        if delta != Vec2::ZERO {
+                            self.pan += delta;
+                            self.clamp_pan();
+                            self.follow_fit = false;
+                            self.drag_frames += 1;
+                            changed = true;
+                        }
+                        drag.moved = true;
+                    }
+                    drag.last = touch.position;
+                    if touch.phase == TouchPhase::Ended {
+                        if !drag.moved && self.marker_hit(touch.position) {
+                            self.selected = !self.selected;
+                            self.hits += 1;
+                            self.touch_taps += 1;
+                        }
+                        changed = true;
+                    } else {
+                        self.touch_drag = Some(owned);
+                    }
+                }
+            } else {
+                self.touch_cancels += 1;
+                changed = true;
+            }
+        }
+        if self.touch_mode() == 0 {
+            if let Some(first) = candidate([None, None]) {
+                self.touch_drag = Some(TouchDrag {
+                    id: first.id,
+                    drag: Drag {
+                        start: first.position,
+                        last: first.position,
+                        moved: false,
+                    },
+                });
+                self.touch_starts += 1;
+                self.drag_starts += 1;
+                changed = true;
+                if let Some(second) = candidate([Some(first.id), None]) {
+                    self.pinch = Some(Pinch {
+                        ids: [first.id, second.id],
+                        center: first.position * 0.5 + second.position * 0.5,
+                        distance: pinch_distance(first.position, second.position),
+                    });
+                    self.touch_drag = None;
+                    self.touch_starts += 1;
+                    self.pinch_starts += 1;
+                    self.touch_transitions += 1;
+                }
+            }
+        }
+        // A pinch owns both IDs, never an additional dormant drag.
+        if self.pinch.is_some() {
+            self.touch_drag = None;
+        }
+        for touch in touches
+            .iter()
+            .filter(|touch| touch.phase == TouchPhase::Started)
+        {
+            if !self.touch_ids().contains(&Some(touch.id)) {
+                self.rejected_touch_starts += 1;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    /// The example also disables engine mouse simulation at startup. This gate
+    /// prevents an already queued synthetic mouse release/held button or wheel
+    /// from operating the page/HUD while touch owns the interaction.
+    pub fn update_with_touches(&mut self, input: Input, touches: &[Touch]) -> bool {
+        let mut changed = self.update_touches(touches);
+        if !touches.is_empty() {
+            changed |= self.drag.take().is_some() || !self.mouse_blocked;
+            self.mouse_blocked = true;
+        }
+        if self.mouse_blocked {
+            if touches.is_empty() && !input.pressed && !input.down && !input.released {
+                self.mouse_blocked = false;
+                changed = true;
+            }
+            return changed;
+        }
+        changed | self.update_mouse(input)
     }
 
     pub fn marker_hit(&self, pointer: Vec2) -> bool {
@@ -175,6 +444,10 @@ impl Document {
     /// ordinary wheel pans by 40 logical pixels per reported wheel unit. A
     /// captured left drag may continue outside, while bounds still apply.
     pub fn update(&mut self, input: Input) -> bool {
+        self.update_with_touches(input, &[])
+    }
+
+    fn update_mouse(&mut self, input: Input) -> bool {
         let mut changed = false;
         let inside = contains(self.viewport, input.pointer);
         if input.wheel.is_finite()
@@ -188,11 +461,7 @@ impl Document {
                     let page = self.window_to_page(input.pointer);
                     self.zoom = (self.zoom * (input.wheel.y.clamp(-20., 20.) * 0.14).exp())
                         .clamp(self.fit_zoom().min(0.2), MAX_ZOOM);
-                    let ideal = input.pointer - self.origin() - page * self.zoom;
-                    self.pan = ideal;
-                    self.clamp_pan();
-                    self.anchor_clamped = (self.pan - ideal).length() > 0.001;
-                    self.anchor_error = (self.page_to_window(page) - input.pointer).length();
+                    self.anchor_at(page, input.pointer);
                     self.zooms += 1;
                     self.follow_fit = false;
                 } else {
