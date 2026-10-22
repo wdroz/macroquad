@@ -245,8 +245,10 @@ widgets::Window::new(hash!("settings"), vec2(12., 12.), size)
 
 `Ui::available_size`/`available_width` account for padding, the current flow,
 indentation and a visible vertical scrollbar. Recompute widths each frame,
-including the width passed to existing `wrap_text`. Split the resulting lines
-into label widgets; ordinary single-line labels do not automatically wrap.
+including the width passed to `Label::wrap`. A wrapped label reserves its
+measured multiline height as one child; ordinary label calls retain their
+single-line behavior. The [text section](#wrap-and-draw-text-explicitly) defines
+spacing, margins and measurement for caller-owned layouts.
 Children retain explicit oversized dimensions; vertical groups use their
 existing clip and scrollbar, including trailing padding after the final child.
 Rows are single-line and do not wrap or gain horizontal scrolling. Select a
@@ -606,10 +608,52 @@ let wrapped = wrap_text("Pause the game to change these settings.", None, 24, 1.
 draw_multiline_text(&wrapped, 16.0, 80.0, 24.0, Some(1.2), BLACK);
 ```
 
-The UI `Label::multiline` builder currently stores a value without implementing
-multiline layout or width wrapping. Use the text helpers above for a custom
-multiline drawing path; reserve its measured space yourself. Text shaping,
-fallback fonts and a general UI text layout system remain outside this guide.
+For a built-in UI label, opt into `Label::wrap(outer_width)`. The width is in
+logical window units and includes the label skin's content and background
+margins. The same skin font, font size and current DPI raster size are used
+for wrapping, measurement and drawing. Lines start at the inner left edge and
+use existing group clipping; a narrow label also clips its own content width.
+Row/column layout and group scroll extents receive the measured full height.
+
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::ui::{root_ui, widgets::Label};
+
+let mut ui = root_ui();
+let width = ui.available_width(); // recompute each frame after resize
+Label::new("A longer settings description.\nAn explicit second paragraph.")
+    .wrap(width).multiline(22.).ui(&mut ui);
+```
+
+`multiline(spacing)` specifies absolute baseline spacing in logical units only
+when wrapping is selected. Its default is the font size; nonfinite or
+nonpositive spacing uses that default. Smaller positive spacing deliberately
+overlaps lines, while measured height still contains their glyphs. `\n` and
+CRLF are hard breaks, preserving empty and trailing lines. Empty text reserves
+one font-size line. The existing word/character wrapping splits long words;
+each glyph wider than the available content gets its own clipped line, without
+synthetic empty lines. Whitespace follows the existing `wrap_text` behavior.
+
+Combined content/background margin sides that are negative or nonfinite
+become zero on this opt-in path. A positive outer width exhausted by margins
+reserves one empty line plus vertical margins; a nonfinite/nonpositive outer
+width reserves zero and draws nothing. `size(vec2(x, y))` supplies a minimum
+height for a wrapped label; its X is ignored because `wrap` owns the width.
+Without `wrap`, `multiline` retains its historical no-op behavior and `size`
+retains its previous meaning.
+
+`Label::measure(&mut ui)` returns the exact allocation without advancing the
+cursor or drawing. It needs a running context and uses the active skin. For a
+caller-owned `LayoutCursor`, measure the same builder before allocating. Use
+container-local rectangle positions relative to the active container's padded
+origin for `Label::position` (root coordinates when placing in the root UI);
+rebuild both after resize.
+Run `cargo run --example wrapped_labels_check` for a compact/desktop menu and
+shared native/WebGL checks with asymmetric margins, a custom font, tight/narrow
+geometry, measured scroll extents and clipped large text. The
+[WebGL host](../examples/wrapped_labels_check.html) exposes live geometry for
+real pointer/wheel checks at DPR 1 and 2. Text shaping, fallback fonts, IME and
+a general UI text layout system remain outside this guide.
 
 ## Draw source regions and animations
 

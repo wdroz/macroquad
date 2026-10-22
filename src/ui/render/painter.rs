@@ -393,6 +393,58 @@ impl Painter {
         }
     }
 
+    /// Wrapped labels measure at the DPI raster size, then submit logical glyph
+    /// rectangles. Deliberately bypass the legacy label's approximate pre-cull.
+    pub(crate) fn draw_character_scaled(
+        &mut self,
+        character: char,
+        position: Vec2,
+        color: Color,
+        font: &mut Font,
+        raster_size: u16,
+        scale: f32,
+    ) -> Option<f32> {
+        if font.get(character, raster_size).is_none() {
+            font.cache_glyph(character, raster_size);
+        }
+        let data = font.get(character, raster_size)?;
+        let glyph = self
+            .font_atlas
+            .lock()
+            .unwrap()
+            .get(data.sprite)
+            .unwrap()
+            .rect;
+        let dest = Rect::new(
+            position.x + data.offset_x as f32 * scale,
+            position.y - (glyph.h + data.offset_y as f32) * scale,
+            glyph.w * scale,
+            glyph.h * scale,
+        );
+        if !self
+            .clipping_zone
+            .is_some_and(|clip| clip.w <= 0. || clip.h <= 0. || !clip.overlaps(&dest))
+        {
+            self.add_command(DrawCommand::DrawCharacter {
+                dest,
+                sprite: data.sprite,
+                color,
+            });
+        }
+        Some(data.advance * scale)
+    }
+
+    // Set an already intersected clip, including an explicitly empty one. Used
+    // by the opt-in label scope; restoring a parent must not intersect it again.
+    pub(crate) fn set_clip_rect(&mut self, rect: Option<Rect>) {
+        self.clipping_zone = rect;
+        let dpi = crate::window::screen_dpi_scale();
+        self.add_command(DrawCommand::Clip {
+            rect: rect
+                .map(|rect| Rect::new(rect.x * dpi, rect.y * dpi, rect.w * dpi, rect.h * dpi)),
+        });
+    }
+
     pub fn draw_raw_texture(&mut self, rect: Rect, texture: &Texture2D) {
         if self
             .clipping_zone
