@@ -176,6 +176,40 @@ fn endpoint_at_the_end_of_displacement_is_included() {
 }
 
 #[test]
+fn tilted_barrel_endpoint_impacts_survive_segment_reversal_without_a_skin() {
+    // Integer orthogonal vectors give an exact radius-five final distance,
+    // independent of the implementation's normalized segment arithmetic.
+    let body = Sphere::new(vec3(-8.0, 6.0, 0.0), 2.0);
+    let delta = vec3(4.0, -3.0, 0.0);
+    let short_delta = delta * f32::from_bits(1.0_f32.to_bits() - 1);
+    for half_axis in [vec3(9.0, 12.0, 0.0), vec3(30.0, 40.0, 0.0)] {
+        for (a, b) in [(-half_axis, half_axis), (half_axis, -half_axis)] {
+            let capsule = Capsule::new(a, b, 3.0);
+            let hit = body.sweep_capsule(delta, &capsule).unwrap();
+            assert_eq!(hit.t, 1.0);
+            close(hit.normal, vec3(-0.8, 0.6, 0.0), 1e-6);
+            close(hit.point, vec3(-2.4, 1.8, 0.0), 1e-6);
+            shared_contact(body, delta, capsule, hit);
+            assert!(body.sweep_capsule(short_delta, &capsule).is_none());
+        }
+    }
+}
+
+#[test]
+fn barrel_endpoint_slack_does_not_grow_with_canceling_root_terms() {
+    // The closest approach is extremely far along a tiny radial movement.
+    // Entry is still after the delta (about t=2.5 or t=4.5), so a root-scale
+    // tolerance must not turn either path into an endpoint impact.
+    let body = Sphere::new(vec3(-1e10, 1000.0, 0.0), 0.0);
+    for (a, b) in [(-Vec3::Z, Vec3::Z), (Vec3::Z, -Vec3::Z)] {
+        let capsule = Capsule::new(a, b, 1e10);
+        for delta in [Vec3::X * 2e-5, Vec3::X * 1.1e-5] {
+            assert!(body.sweep_capsule(delta, &capsule).is_none());
+        }
+    }
+}
+
+#[test]
 fn shallow_overlap_and_pure_touch_use_world_depth_and_inward_thresholds() {
     for depth in [0.0, 5e-5] {
         let body = Sphere::new(Vec3::X * (1.0 - depth), 0.5);

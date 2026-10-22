@@ -27,8 +27,10 @@ const INTO_SLOP: f32 = 1e-5;
 /// a shared surface point on the static sphere at a new impact, and
 /// [`Aabb::sweep_capsule`] returns one on the static capsule.
 /// [`Sphere::sweep_sphere`] returns a point on the static sphere, and
-/// [`Sphere::sweep_capsule`] returns one on the static capsule. An initial
-/// overlap uses the corresponding [`Contact::point`] where that query exists.
+/// [`Sphere::sweep_capsule`] returns one on the static capsule. Initial-overlap
+/// points follow each method's documented convention. In particular,
+/// [`Sphere::sweep_capsule`] keeps its point on the static capsule, unlike
+/// [`Capsule::contact_sphere`]'s point on the moving sphere.
 /// The static solid is an [`Aabb`], an [`Obb`], a [`Sphere`], or a
 /// [`Capsule`](super::Capsule).
 ///
@@ -520,10 +522,17 @@ fn sphere_capsule_barrel(
     if gap <= gap_slack {
         return None;
     }
-    let t = middle - (gap / speed_sq).sqrt();
-    if !t.is_finite() || !(0.0..=1.0).contains(&t) {
+    let half_span = (gap / speed_sq).sqrt();
+    let t = middle - half_span;
+    // An exact endpoint impact can round just outside the displacement,
+    // including differently when the segment endpoints are reversed. Allow
+    // only a few f64 fraction steps: scaling this by the root terms could
+    // admit a materially later hit when those terms nearly cancel.
+    let time_slack = 16.0 * f64::EPSILON;
+    if !t.is_finite() || !(-time_slack..=1.0 + time_slack).contains(&t) {
         return None;
     }
+    let t = t.clamp(0.0, 1.0);
     let along = (offset + motion * t).dot(axis);
     if !(0.0..=length).contains(&along) {
         return None;

@@ -97,6 +97,47 @@ fn zoom_reports_required_bounds_adjustment_and_limits() {
 }
 
 #[test]
+fn control_horizontal_wheel_keeps_fit_following_resize() {
+    let mut document = Document::new(viewport(vec2(390., 400.)));
+    let pointer = document.origin() + document.size() * 0.5;
+    let before = (document.zoom, document.pan);
+    assert!(!document.update(Input {
+        pointer,
+        wheel: vec2(3., 0.),
+        zoom_modifier: true,
+        ..Default::default()
+    }));
+    assert_eq!((document.zoom, document.pan), before);
+    assert!(document.follow_fit);
+    assert_eq!((document.wheels, document.zooms), (0, 0));
+    document.resize(viewport(vec2(960., 640.)));
+    assert_eq!(document.zoom, document.fit_zoom());
+    assert!(document.follow_fit);
+}
+
+#[test]
+fn control_horizontal_wheel_does_not_cancel_a_captured_drag() {
+    let mut document = Document::new(viewport(vec2(390., 400.)));
+    document.reset();
+    let pointer = document.origin() + document.size() * 0.5;
+    let before = document.pan;
+    press(&mut document, pointer);
+    assert!(!document.update(Input {
+        pointer,
+        down: true,
+        wheel: vec2(-3., 0.),
+        zoom_modifier: true,
+        ..Default::default()
+    }));
+    assert!(document.captured());
+    release(&mut document, pointer + vec2(24., 32.));
+    close(document.pan, before + vec2(24., 32.));
+    assert_eq!(document.drag_frames, 1);
+    assert!(!document.captured());
+    assert!(document.bounded());
+}
+
+#[test]
 fn wheel_and_hit_testing_are_gated_by_half_open_viewport() {
     let mut document = Document::new(viewport(vec2(390., 400.)));
     document.reset();

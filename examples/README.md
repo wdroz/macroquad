@@ -230,7 +230,8 @@ DPR 1 and 2; compiling WASM alone does not verify rendering or input.
 
 A generated 600 x 800 page uses a downward-positive `Camera2D` and a logical
 `with_clip_rect` viewport. Wheel scrolls on both axes; Ctrl+wheel zooms around
-the pointer. Drag with the left button and click the colored page marker to
+the pointer; Ctrl+horizontal-only wheel preserves the view and active drag.
+Drag with the left button and click the colored page marker to
 toggle its selection. A drag started inside can continue outside; releasing
 outside cannot select the note. F fits the page and R resets to 100%, centered
 on the page; the header also offers those actions. Escape quits the native

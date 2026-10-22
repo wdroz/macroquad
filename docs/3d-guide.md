@@ -1520,7 +1520,7 @@ assert_eq!(contact.normal, Vec3::Y);
 
 ## Sweep
 
-`SweepHit` is the first time a moving box or sphere meets one static solid along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static solid. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point` where that query exists, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box; both bodies have `sweep_sphere` and `sweep_capsule` for those static shapes. The point and normal are in world space.
+`SweepHit` is the first time a moving box or sphere meets one static solid along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static solid. `point` is a representative contact position, with initial overlaps following each method's documented convention. In particular, `Sphere::sweep_capsule` keeps its point on the static capsule, unlike `Capsule::contact_sphere`'s point on the moving sphere. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box; both bodies have `sweep_sphere` and `sweep_capsule` for those static shapes. The point and normal are in world space.
 
 | Moving body | Static AABB | Static OBB | Static sphere | Static capsule |
 | --- | --- | --- | --- | --- |

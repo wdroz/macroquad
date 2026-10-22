@@ -171,12 +171,16 @@ impl Document {
     }
 
     /// Wheel only affects the hovered viewport. Ctrl+vertical wheel zooms;
+    /// Ctrl+horizontal-only wheel leaves the current view and drag unchanged.
     /// ordinary wheel pans by 40 logical pixels per reported wheel unit. A
     /// captured left drag may continue outside, while bounds still apply.
     pub fn update(&mut self, input: Input) -> bool {
         let mut changed = false;
         let inside = contains(self.viewport, input.pointer);
-        if input.wheel.is_finite() && input.wheel != Vec2::ZERO {
+        if input.wheel.is_finite()
+            && input.wheel != Vec2::ZERO
+            && (!input.zoom_modifier || input.wheel.y != 0.)
+        {
             changed = true;
             if inside {
                 self.wheels += 1;
