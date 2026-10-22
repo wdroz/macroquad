@@ -9,6 +9,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | --- | --- | --- |
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, single-sphere and rigid two-sphere slide against boxes, spheres and capsules; additional full-AABB body sweep fixtures are in the CPU tests |
+| Body and joint composition | `rigid_body_joint` | Checked integration, discrete pair response, one anchored distance joint, bounded fixed-step clock and joint/contact ordering diagnostics; [recipe](../docs/3d-guide.md#combine-integration-contacts-and-one-joint) |
 | Character movement | `character_controller` | Caller-owned AABB, solid-only sweeps, jumping, ceiling/wall sliding, ground snap, slope limits and optional stair stepping with diagnostics |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
 | Input coordinates | `input_coordinates` | Logical/physical mouse and touch positions, relative units, resize and density changes |
@@ -44,6 +45,7 @@ cargo run --example capsule_overlap
 cargo run --example sweep_hit
 cargo run --example sweep_obb
 cargo run --example slide_solids
+cargo run --example rigid_body_joint
 cargo run --example character_controller
 cargo run --example picking_ray
 cargo run --example frustum_cull
@@ -239,6 +241,35 @@ cargo test --test triangle_mesh --test heightfield --test octree --test distance
 
 These recipes need no GPU or `gltf` feature. Broadphase candidates still need
 shape queries; joints need caller-selected integration and pair ordering.
+
+## `rigid_body_joint`
+
+Shows a free sphere and one anchored bob over a primitive floor using checked
+`RigidBody::integrate`, explicit `resolve_collision` pairs and `DistanceJoint`.
+P or Space pauses, R resets, O changes joint/contact order and resets, K changes
+between a zero-mass anchor and prescribed positive-mass kinematic motion and
+resets, and T runs deterministic replay checks. Reset and option changes keep
+the current pause state. Escape exits the native example.
+
+The example uses a bounded 120 Hz accumulator, at most 0.1 seconds/12 steps per
+frame, and clears pending time on pause/resume/reset transitions. Joint
+fractions (position 0.8, velocity 0.2) apply once per step, independent of `dt`.
+Contacts visit free sphere/floor, bob/floor, then free sphere/bob with restitution
+0.2. The HUD compares joint-before-contact and contact-before-joint residuals
+with an isolated probe: a final joint correction can reduce length error while
+reintroducing floor overlap. This is one anchored pair, not a joint-network
+solver. The [3D guide](../docs/3d-guide.md#combine-integration-contacts-and-one-joint)
+explains ordering, anchor semantics and whole-step error handling.
+
+```sh
+cargo test --test rigid_body_joint_example
+cargo run --example rigid_body_joint
+cargo build --release --target wasm32-unknown-unknown --example rigid_body_joint
+```
+
+For WebGL, copy the built WASM beside `examples/rigid_body_joint.html` and serve
+the repository root over HTTP so the host can load `../js/mq_js_bundle.js`.
+Compiling WASM alone does not verify controls or finite runtime state.
 
 ## `character_controller`
 

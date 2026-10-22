@@ -2113,3 +2113,57 @@ octree, or update grid snapshots, after corrections before the next query.
 No local attachment offsets, angular joints, automatic collision filtering,
 continuous solving or world ownership are supplied. Pair order and repetition
 count affect the result; networks have no convergence or stability guarantee.
+
+### Combine integration, contacts and one joint
+
+Run `cargo run --example rigid_body_joint` for a small Y-up scene with a free
+sphere, one anchored sphere and a primitive floor. The
+[shared scene](../examples/support/rigid_body_joint_scene.rs) composes only the
+public checked APIs; it is application code, not a physics world. P or Space
+pauses, R resets, O switches the joint/contact order and resets, K switches the
+anchor mode and resets, and T runs the deterministic replay checks. Reset and
+mode/order changes preserve the pause state. The
+[example index](../examples/README.md#rigid_body_joint) includes WebGL setup.
+
+The example accumulates render-frame time into fixed 1/120-second steps. It
+accepts at most 0.1 seconds from one frame and performs at most 12 steps per
+frame, dropping excess elapsed time rather than catching up without a bound.
+Pause, resume and reset clear the accumulator and skip their transition frame,
+so paused time cannot become a large integration step. These are example clock
+choices: the library does not supply a scheduler or a timestep-independent
+solver. Changing the fixed step or the number of joint calls changes trajectory
+and joint correction per simulated second.
+
+Each step integrates the bodies, then calls the joint once and visits contacts
+in a fixed order: free sphere/floor, bob/floor, free sphere/bob. O moves the
+single joint call after those contacts. Restitution is 0.2. The joint uses
+position correction 0.8 and velocity correction 0.2 **per call**; these are
+fractions, not rates multiplied by `dt`. The anchor is excluded from contact
+pairs. This explicit pair list needs no broadphase; larger scenes must maintain
+their own candidate bounds and ordering.
+
+The default anchor has zero mass and remains fixed, with any stored velocity
+ignored by response. K selects a positive-mass `Kinematic` anchor: the caller
+prescribes its velocity and integrates it with zero damping, while contacts and
+the joint cannot move it. Its prescribed velocity affects the bob's radial
+correction. Setting zero mass on a kinematic body would freeze it too; mass zero
+does not describe a moving anchor.
+
+The HUD displays the caller-computed
+`abs(distance(anchor.position, bob.position) - rest_length)` after the complete
+step, alongside contacts and replay check totals. An
+isolated probe also compares both orders from the same starting state: contact
+correction after the joint can increase distance error; joint correction after
+contacts can pull the bob into the floor again. A smaller distance residual is
+therefore not proof that contacts are satisfied. In the probe, joint then
+contacts leaves 0.20 distance error and no overlap; contacts then joint leaves
+0.04 error and 0.16 overlap. The scene contains only one anchored pair and an
+unconnected body; it makes no joint-network stability or continuous-collision
+guarantee.
+
+Each checked library call leaves its own inputs unchanged on error. The example
+also stages a whole step in a copy and commits it only when every operation
+succeeds. An error pauses the scene, clears pending time and displays the error;
+reset reconstructs the initial valid state. The headless tests exercise this
+policy, the bounded clock, pause/reset transitions and the ordering probe
+without opening a window.
