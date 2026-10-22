@@ -31,6 +31,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Document interaction | `document_zoom_pan` | Generated page, pointer-anchored zoom, bounded drag/scroll, viewport-gated picking, fit/reset and resize; see the [recipe](../docs/ui-2d-guide.md#zoom-and-pan-a-document) and [WebGL host](document_zoom_pan.html) |
 | Responsive layout | `responsive_layout`, `responsive_layout_check` | Explicit padding/gaps, available-width sizing, row/column/free placement, alignment and oversized scrolling settings at compact/desktop sizes; see the [UI and 2D guide](../docs/ui-2d-guide.md#size-rows-columns-and-scrolling-settings) |
 | Wrapped UI labels | `wrapped_labels_check` | Opt-in width wrapping, measured multiline height, skin margins/custom fonts, narrow glyphs, row/column geometry, group clipping and scroll reachability after resize; [guide](../docs/ui-2d-guide.md#wrap-and-draw-text-explicitly), [WebGL host](wrapped_labels_check.html) |
+| Custom-drawn wrapped HUD | `custom_wrapped_hud` | Matching custom-font wrapping/measurement/drawing, measured bounded panel, baseline placement, hard breaks, long words, caller-owned scroll and restored HUD; [recipe](../docs/ui-2d-guide.md#custom-drawn-wrapped-hud), [WebGL host](custom_wrapped_hud.html) |
 | Keyboard buttons | `keyboard_buttons`, `keyboard_buttons_check` | Stable button IDs, mixed editbox Tab traversal, disabled controls, press-once activation and modal focus containment/restoration; see the [UI and 2D guide](../docs/ui-2d-guide.md#make-buttons-usable-from-the-keyboard) |
 | Keyboard sliders | `keyboard_sliders_check` | Opt-in keyboard steps, numeric-field/track traversal, endpoint clamping, invalid input, modal restoration and compact menus; see the [UI guide](../docs/ui-2d-guide.md#make-sliders-usable-from-the-keyboard) and [WebGL host](keyboard_sliders_check.html) |
 | Keyboard checkboxes | `keyboard_checkboxes_check` | Opt-in stable-ID checkbox focus, mixed editbox/button traversal, repeat suppression, disabled/removed controls, modal restoration and visible focus; see the [UI guide](../docs/ui-2d-guide.md#make-checkboxes-usable-from-the-keyboard) and [WebGL host](keyboard_checkboxes_check.html) |
@@ -94,6 +95,7 @@ cargo run --example document_zoom_pan
 cargo run --example responsive_layout
 cargo run --example responsive_layout_check
 cargo run --example wrapped_labels_check
+cargo run --example custom_wrapped_hud
 cargo run --example keyboard_buttons
 cargo run --example keyboard_buttons_check
 cargo run --example keyboard_checkboxes_check
@@ -225,6 +227,38 @@ for the other hosts.
 The paired HTML files load this checkout's JavaScript bundle. Use actual
 window resizing and input after the pixel checks, and inspect at both browser
 DPR 1 and 2; compiling WASM alone does not verify rendering or input.
+
+## `custom_wrapped_hud`
+
+An immediate-drawing HUD using the existing 8,312-byte MinimalPixel font.
+`wrap_text`, `measure_multiline_text` and `draw_multiline_text_ex` share the
+same font, size, scale and line-distance settings. `LayoutCursor` allocates a
+panel from its measured content height, capped to preserve the surrounding
+HUD. Nested `with_clip_rect` scopes bound the background and scrolled text.
+The fixture includes hard breaks and a long unbroken word; resize between
+390 x 400 and 960 x 640 to see the height and line count change.
+
+Wheel inside the panel or press Up/Down to scroll. Home/End select the scroll
+limits; Escape exits natively. The header/footer indicators remain outside
+both clips. The helper module keeps measured-geometry and scroll tests free
+of a window, while the running example checks actual font wrapping and
+measurement/drawing agreement.
+
+```sh
+cargo run --example custom_wrapped_hud
+cargo test --test custom_wrapped_hud
+cargo build --target wasm32-unknown-unknown --example custom_wrapped_hud
+```
+
+Copy `target/wasm32-unknown-unknown/debug/examples/custom_wrapped_hud.wasm`
+beside [`custom_wrapped_hud.html`](custom_wrapped_hud.html), serve the fork
+root over HTTP, and open that host. Inspect compact/desktop output at DPR 1/2.
+Read-only `custom_wrapped_hud_status` (0 starting, 1 ready, 2 panic),
+`custom_wrapped_hud_frames` and `custom_wrapped_hud_value(index)` exports expose
+the geometry described beside their definitions in the source. Set
+`MACROQUAD_WRAPPED_HUD_TRACE=1` for native state-change logs. These diagnostics
+observe the same layout used for drawing; input remains application-owned.
+See the [HUD recipe](../docs/ui-2d-guide.md#custom-drawn-wrapped-hud).
 
 ## `document_zoom_pan`
 

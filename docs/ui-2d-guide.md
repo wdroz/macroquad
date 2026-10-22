@@ -649,7 +649,8 @@ These operations need a running macroquad context for font textures.
 use macroquad::prelude::*;
 
 let width = (screen_width() - 32.0).max(1.0);
-let wrapped = wrap_text("Pause the game to change these settings.", None, 24, 1.0, width);
+let wrapped = wrap_text("Pause the game to change these settings.", None, 24, 1.0,
+                        width * screen_dpi_scale());
 draw_multiline_text(&wrapped, 16.0, 80.0, 24.0, Some(1.2), BLACK);
 ```
 
@@ -719,6 +720,45 @@ geometry, measured scroll extents and clipped large text. The
 [WebGL host](../examples/wrapped_labels_check.html) exposes live geometry for
 real pointer/wheel checks at DPR 1 and 2. Text shaping, fallback fonts, IME and
 a general UI text layout system remain outside this guide.
+
+### Custom-drawn wrapped HUD
+
+Run `cargo run --example custom_wrapped_hud` for a small immediate-drawing
+[recipe](../examples/custom_wrapped_hud.rs) using the existing MinimalPixel font
+fixture. It uses one font, size 24, scale 0.875 and line-distance factor 1.25
+throughout wrapping, measurement and drawing. The factor multiplies the scaled
+font size to give the baseline step; it is not an absolute pixel distance.
+The sample includes a hard paragraph break and an unbroken long word.
+
+Rewrap against the current inner width after resize. The existing `wrap_text`
+callback accumulates physical glyph advances, so this recipe passes
+`inner_width * screen_dpi_scale()` as its width budget; the font settings and
+returned measurements remain logical. The notes are hidden below an inner
+width of 42 logical pixels (two scaled ems), the sample's explicit readability
+breakpoint. Measure the wrapped string with
+`measure_multiline_text`, then reserve its height plus padding
+with `LayoutCursor`. The example caps the visible panel height to preserve
+space for the HUD; its full measured text height determines the scroll range.
+Multiline height is the sum of baseline steps, rather than a tight glyph
+bounding box. Place the first baseline at the inner top plus the measured
+`offset_y`, subtracting the caller-owned scroll offset. This fixed sample
+starts with visible glyphs and uses a font and line step that fit its glyphs;
+it does not implement arbitrary-font text layout.
+
+Select the default camera before entering `with_clip_rect`. The example
+scopes both background and text to the panel, intersects a second clip with
+the inner text viewport, then draws the header/footer and colored indicators
+after both scopes return. Wheel input is accepted only inside the visible
+panel; Up/Down and Home/End also move the bounded scroll offset. A drawing
+clip by itself does not gate input. These rectangles and font settings are in
+logical window units; the host handles framebuffer density.
+
+The [example index](../examples/README.md#custom_wrapped_hud) lists the native,
+headless-test and WebAssembly commands and the
+[WebGL host](../examples/custom_wrapped_hud.html). Resize between 390 x 400 and
+desktop dimensions, checking DPR 1 and 2, long-word splitting, the explicit
+paragraph break and the restored HUD at both scroll limits. Font shaping,
+fallback and a new text-layout API are outside this recipe.
 
 ## Draw source regions and animations
 
