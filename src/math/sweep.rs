@@ -25,7 +25,8 @@ const INTO_SLOP: f32 = 1e-5;
 /// boxes, a representative point in that region for [`Aabb::sweep_obb`], and a
 /// surface point on the box for a moving sphere. [`Aabb::sweep_sphere`] returns
 /// a shared surface point on the static sphere at a new impact, and
-/// [`Aabb::sweep_capsule`] returns one on the static capsule. An initial
+/// [`Aabb::sweep_capsule`] returns one on the static capsule.
+/// [`Sphere::sweep_sphere`] returns a point on the static sphere. An initial
 /// overlap uses the corresponding [`Contact::point`] where that query exists.
 /// The static solid is an [`Aabb`], an [`Obb`], a [`Sphere`], or a
 /// [`Capsule`](super::Capsule).
@@ -162,6 +163,99 @@ impl Aabb {
 }
 
 impl Sphere {
+    /// Sweeps this sphere along world-space `delta` against the static `other`.
+    ///
+    /// The normal points out of `other` toward this sphere. `point` is on the
+    /// static sphere, `other.center + normal * other.radius`, including initial
+    /// overlaps (the same convention as [`Sphere::contact`]). At a new impact
+    /// it also lies on the moving sphere. `t` is a fraction of `delta`, not a
+    /// distance or time in seconds; this query applies no motion or response.
+    ///
+    /// Penetration deeper than `1e-4` reports `t == 0` with any finite motion,
+    /// including zero. A touch or shallower overlap reports `t == 0` only if
+    /// `delta.dot(normal) < -1e-5`; outward and tangential motion miss. Future
+    /// impacts require the same inward component, so exact tangencies miss.
+    /// Coincident centers use [`Vec3::X`], matching the contact query.
+    ///
+    /// Zero radii are allowed. Two separated zero-radius spheres have only an
+    /// isolated tangency and miss; initially coincident points use the normal
+    /// and inward-motion rule above. Negative/non-finite radii, non-finite
+    /// centers or deltas, overflowing summed radii or squared center separation
+    /// or squared summed radius, and non-finite contact results miss.
+    /// The reused slide cast retains floating-point limits: squared motion at
+    /// most `1e-12` cannot produce a new impact, and impact-center cancellation
+    /// or underflow can leave no usable normal. A public-only discriminant
+    /// guard rejects tangencies within `8 * f64::EPSILON` of its term scale,
+    /// so numerically indistinguishable near-tangent entries may also miss.
+    /// It does not promise exact geometry at extreme finite scales.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Sphere, Vec3, vec3};
+    ///
+    /// let body = Sphere::new(vec3(-3.0, 0.0, 0.0), 0.5);
+    /// let rock = Sphere::new(Vec3::ZERO, 1.0);
+    /// let delta = Vec3::X * 6.0;
+    /// let hit = body.sweep_sphere(delta, &rock).unwrap();
+    /// assert_eq!(hit.t, 0.25);
+    /// assert_eq!(hit.normal, -Vec3::X);
+    /// assert_eq!(hit.point, -Vec3::X);
+    /// assert_eq!(body.center + delta * hit.t, -Vec3::X * 1.5);
+    /// ```
+    pub fn sweep_sphere(&self, delta: Vec3, other: &Sphere) -> Option<SweepHit> {
+        if !delta.is_finite()
+            || !self.center.is_finite()
+            || !other.center.is_finite()
+            || !self.radius.is_finite()
+            || self.radius < 0.0
+            || !other.radius.is_finite()
+            || other.radius < 0.0
+        {
+            return None;
+        }
+        let reach = self.radius + other.radius;
+        if !(reach * reach).is_finite()
+            || !(self.center - other.center).length_squared().is_finite()
+        {
+            return None;
+        }
+        if let Some(contact) = self.contact(other) {
+            if !contact.normal.is_finite()
+                || !contact.point.is_finite()
+                || !contact.penetration.is_finite()
+            {
+                return None;
+            }
+            return (contact.penetration > TOUCH_SLOP || delta.dot(contact.normal) < -INTO_SLOP)
+                .then(|| hit_at_start(contact));
+        }
+        // An isolated point/point crossing has no inward surface. Do not let
+        // f32 cancellation at the impact manufacture a blocking normal.
+        if reach == 0.0 {
+            return None;
+        }
+        let (t, normal) = super::slide::sphere_sphere_entry(self, delta, other)?;
+        // A rounded f32 impact time can put a true tangent slightly on its
+        // inward side. Require a positive quadratic discriminant beyond f64
+        // rounding noise. This public-only guard leaves slide math intact.
+        let offset = (self.center - other.center).as_dvec3();
+        let motion = delta.as_dvec3();
+        let a = motion.length_squared();
+        let b = 2.0 * offset.dot(motion);
+        let c = offset.length_squared() - (reach as f64) * (reach as f64);
+        let bb = b * b;
+        let four_ac = 4.0 * a * c;
+        if bb - four_ac <= 8.0 * f64::EPSILON * (bb + four_ac.abs()) {
+            return None;
+        }
+        let point = other.center + normal * other.radius;
+        if !normal.is_finite() || !point.is_finite() {
+            return None;
+        }
+        Some(SweepHit { t, normal, point })
+    }
+
     /// Sweeps this sphere along `delta` against the static `aabb`.
     ///
     /// `t` is in `0..=1`. The normal points out of `aabb`. A path that misses

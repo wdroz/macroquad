@@ -872,6 +872,13 @@ fn cast_sphere_sphere(center: Vec3, radius: f32, delta: Vec3, sphere: &Sphere) -
     cast_corner(center, radius + sphere.radius, delta, sphere.center)
 }
 
+// The public sweep handles initial overlap and validates its surface point.
+// Keep this adapter separate so slide casts retain their exact arithmetic.
+pub(super) fn sphere_sphere_entry(body: &Sphere, delta: Vec3, solid: &Sphere) -> Option<(f32, Vec3)> {
+    let hit = cast_sphere_sphere(body.center, body.radius, delta, solid)?;
+    Some((hit.t, hit.normal))
+}
+
 fn cast_sphere_capsule(
     center: Vec3,
     radius: f32,

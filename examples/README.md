@@ -9,6 +9,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | --- | --- | --- |
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, single-sphere and rigid two-sphere slide against boxes, spheres and capsules; additional full-AABB body sweep fixtures are in the CPU tests |
+| Sphere body sweeps | `sphere_sweep` | Asset-free CPU example: off-center sphere/sphere impact, world-space surface point and normal, caller-owned translation and initial touching; run without a window using `cargo run --example sphere_sweep` |
 | Body and joint composition | `rigid_body_joint` | Checked integration, discrete pair response, one anchored distance joint, bounded fixed-step clock and joint/contact ordering diagnostics; [recipe](../docs/3d-guide.md#combine-integration-contacts-and-one-joint) |
 | Character movement | `character_controller` | Caller-owned AABB, solid-only sweeps, jumping, ceiling/wall sliding, ground snap, slope limits and optional stair stepping with diagnostics |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |

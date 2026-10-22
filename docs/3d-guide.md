@@ -1520,12 +1520,26 @@ assert_eq!(contact.normal, Vec3::Y);
 
 ## Sweep
 
+`Sphere::sweep_sphere` moves a complete sphere against a static sphere. Its
+world-space normal points out of the static sphere; its point lies on that
+sphere, including initial contacts, matching `Sphere::contact`. New impacts
+also lie on the moving sphere. Initial penetration deeper than `1e-4` reports
+zero; touching/shallow pairs and future hits require inward displacement
+greater than `1e-5`. Exact future tangencies miss. Coincident centers use +X.
+Zero radii are allowed, but a crossing between two separated points has no
+inward surface and misses. Invalid inputs, overflowing radius/separation
+intermediates and nonfinite results miss. The existing slide cast supplies
+new impact times without changing slide behavior; very small motion or
+extreme-scale cancellation can miss. See its rustdoc for numerical limits.
+Run the asset-free, window-free `cargo run --example sphere_sweep` for a
+graze that a center ray misses, world-space contact data and touching motion.
+
 `SweepHit` is the first time a moving box or sphere meets one static solid along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static solid. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point` where that query exists, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box; `Aabb::sweep_sphere` takes a sphere; `Aabb::sweep_capsule` takes a capsule. The point and normal are in world space.
 
 | Moving body | Static AABB | Static OBB | Static sphere | Static capsule |
 | --- | --- | --- | --- | --- |
 | AABB | `Aabb::sweep` | `Aabb::sweep_obb` | `Aabb::sweep_sphere` | `Aabb::sweep_capsule` |
-| Sphere | `Sphere::sweep_aabb` | `Sphere::sweep_obb` | No public sweep | No public sweep |
+| Sphere | `Sphere::sweep_aabb` | `Sphere::sweep_obb` | `Sphere::sweep_sphere` | No public sweep |
 | Capsule | No public sweep | No public sweep | No public sweep | No public sweep |
 
 All deltas translate a whole body in world coordinates; none of these queries
