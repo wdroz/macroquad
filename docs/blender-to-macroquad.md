@@ -323,6 +323,17 @@ hierarchy are needed. It and `GltfModel::from_bytes` still parse separately;
 copies only static metadata from a scene that is already loaded. Shared marker
 loading makes no memory bound or performance promise.
 
+Keep the ownership and identity choices explicit when adapting this recipe:
+
+- Keep `GltfMarkers` for static queries, or copy the selected shape/spawn values
+  before dropping it. A reference returned by an iterator borrows the sidecar.
+- Use `collider.node` or `spawn.node` with `marker_tag` and `marker_rotation`.
+  Enumerating `solid_colliders()` gives a filtered position, not the original
+  collider position or node ID. Retain your own mapping for grid indices.
+- Keep a full scene and matching pose data if markers must follow an edited
+  hierarchy. Read posed shapes after updating the pose; the static sidecar
+  does not acquire animation updates from the draw model.
+
 `RetainedGltfModel` clones share immutable GPU geometry and textures. A clone
 with `draw(transform)` places another instance of that geometry, but does not
 clone or move the CPU scene's colliders. `draw_culled` tests transformed chunk
@@ -479,6 +490,12 @@ is unavailable, query the complete set too. The maintained
 `scene.colliders` indices and explicit rebuilding, with exact trigger overlaps
 after candidate selection and a full-list fallback. Its sliding movement still
 uses all four solids.
+
+The [checked snapshot recipe](3d-guide.md#shape-bounds-snapshots) shows the
+all-or-complete fallback without opening a window. It collects bounds with
+`Option<Vec<_>>`, so one failed enclosure disables the filter rather than
+silently removing a collider. Rebuild only after installing the matching
+world-space shape snapshots; query the original shapes for precise results.
 
 Update world-space shapes and their bounds after pose changes. A shape returned
 by `pose.collider_shape(&scene, collider)` can use the same helper after an up-axis

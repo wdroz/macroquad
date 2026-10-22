@@ -424,6 +424,25 @@ impl GltfColliderShape {
     /// assert_eq!(grid.query_aabb(&probe), vec![42]);
     /// assert!(shape.overlaps_aabb(&probe)); // precise shape query
     /// ```
+    ///
+    /// If a shape has no representable bound, keep it for the precise query.
+    /// This small filter tests every omitted shape separately instead of
+    /// silently dropping it from the complete candidate set:
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let probe = Aabb::from_min_max(Vec3::ZERO, Vec3::ONE);
+    /// let keep_candidate = |shape: &GltfColliderShape| {
+    ///     shape.bounding_aabb().map_or(true, |bounds| bounds.overlaps(&probe))
+    /// };
+    /// let shape = GltfColliderShape::Sphere(Sphere::new(Vec3::splat(f32::MAX), 1.0));
+    /// assert!(shape.bounding_aabb().is_none());
+    /// assert!(keep_candidate(&shape)); // None is not evidence of a miss.
+    /// // A retained candidate still needs shape.overlaps_aabb(&probe).
+    /// ```
+    ///
+    /// A snapshot covers the current shape only; it is not a swept movement
+    /// envelope and does not include the deflection of a sliding body.
     pub fn bounding_aabb(&self) -> Option<Aabb> {
         match *self {
             GltfColliderShape::Aabb(aabb) => {

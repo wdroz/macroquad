@@ -331,6 +331,20 @@ names, tags, node indices and order. These are rest snapshots; draw instance
 transforms, hierarchy edits and animations do not update them. This avoids a
 second parse for static markers; it makes no memory or performance promise.
 
+Choose the metadata owner before loading:
+
+| Application needs | Loading path | What remains caller-owned |
+| --- | --- | --- |
+| Drawing plus static colliders, triggers and spawn facing | `GltfModelLoader::new_with_markers`, then independent model/marker takes | Draw model and `GltfMarkers`; drop the loader to release untaken results |
+| CPU mesh/image inspection or hierarchy data | `GltfScene::from_bytes` | Full CPU scene; `GltfMarkers::from_scene` can copy only the static metadata before dropping it |
+| Markers that follow edited or animated nodes | Keep the scene and matching pose metadata | Fetch current shapes/spawns from the hierarchy pose after each update; a marker sidecar remains at rest |
+
+Collider positions in `markers.colliders`, positions in a filtered iterator,
+and `collider.node` address different lists. Keep the collider's original
+list position for an application index and use `collider.node` for tag/facing
+lookups. Neither a duplicate name nor a numeric node ID identifies a marker
+from another imported document.
+
 ## Loading and materials
 
 The optional `gltf` feature provides two loading paths. `GltfScene::from_bytes`
@@ -1372,6 +1386,43 @@ Keep every unrepresentable shape in the query's complete candidate fallback:
 grid for that snapshot, or test every omitted shape separately. If the query
 shape itself has no finite enclosure, use complete candidates for that query
 too. Existing primitive query arithmetic and numerical limits still apply.
+
+This headless recipe disables the entire filter if any snapshot cannot be
+indexed. Collecting into `Option<Vec<_>>` preserves failure instead of silently
+dropping an entry. Rebuild from current shapes whenever they change:
+
+```rust
+use macroquad::prelude::*;
+use macroquad::gltf::GltfColliderShape;
+
+let shapes = [
+    GltfColliderShape::Sphere(Sphere::new(Vec3::ZERO, 0.5)),
+    GltfColliderShape::Capsule(Capsule {
+        a: vec3(4., 0., 0.), b: vec3(4., 2., 0.), radius: 0.25,
+    }),
+];
+let snapshots: Option<Vec<_>> = shapes.iter().enumerate().map(|(index, shape)| {
+    Some((u32::try_from(index).ok()?, shape.bounding_aabb()?))
+}).collect();
+let grid = snapshots.map(|entries| {
+    let mut grid = UniformGrid::new(2.).unwrap();
+    assert_eq!(grid.rebuild(entries), shapes.len());
+    grid
+});
+let probe = Sphere::new(vec3(0.5, 0., 0.), 0.25);
+let candidates: Vec<usize> = match (&grid, probe.bounding_aabb()) {
+    (Some(grid), Some(bounds)) => grid.query_aabb(&bounds)
+        .into_iter().map(|index| index as usize).collect(),
+    _ => (0..shapes.len()).collect(), // Complete fallback, also for the query.
+};
+let overlaps: Vec<_> = candidates.into_iter()
+    .filter(|&index| shapes[index].overlaps_sphere(&probe)).collect();
+assert_eq!(overlaps, vec![0]); // Exact shape query after candidate selection.
+```
+
+The indices here address `shapes`, including every role. With imported
+colliders, inspect each original entry's `trigger` flag and tag explicitly;
+candidate selection does not choose which gameplay roles to query.
 
 The maintained [authored room](../examples/gltf_room.rs) and its
 [shared headless logic](../examples/support/room_scene.rs) show caller-selected

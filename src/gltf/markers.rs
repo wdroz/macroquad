@@ -96,6 +96,8 @@ impl GltfMarkers {
     /// Includes parent transforms and any [`Self::with_up_axis`] conversion.
     /// Singular or non-finite matrices are preserved exactly; a missing node
     /// returns `None`. This does not read or edit a separate hierarchy pose.
+    /// Use [`Self::marker_rotation`] for checked facing instead of assuming a
+    /// spawn's parent is unrotated; [`GltfSpawn::position`] stores only position.
     pub fn rest_world(&self, node: usize) -> Option<Mat4> {
         self.rest_world.get(node).copied()
     }

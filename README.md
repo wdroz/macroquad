@@ -52,6 +52,13 @@ matrices, and splits large index buffers into triangle-safe 16-bit chunks.
 Call `from_bytes` after macroquad starts, because it creates GPU textures. `model.draw()`
 submits the textured meshes with the current camera and material.
 
+For a draw model plus static colliders, triggers and spawns, opt into
+`GltfModelLoader::new_with_markers`. Its independent, once-only `take_markers`
+returns owned `GltfMarkers` from the same parse, without mesh/image retention
+in that sidecar. Apply the same up-axis conversion to both results. Static
+markers stay at rest when an instance or hierarchy moves; see the
+[loading choices and ownership recipe](docs/3d-guide.md#pollable-gltf-construction).
+
 For memory-constrained scenes, `GltfModel::from_bytes_with_options` accepts
 `GltfLoadOptions { max_texture_size: Some(512), ..Default::default() }`.
 This bounds both edges of each uploaded base-color, emissive, normal, and
@@ -176,6 +183,11 @@ indexed ray hits and AABB/sphere surface overlaps. See the [3D guide](docs/3d-gu
 `UniformGrid` and immutable `Octree` index caller-owned world bounds for candidate
 queries. Refresh snapshots after movement, constructing a new tree for `Octree`. Sliding and initial recovery need
 [conservative candidate bounds](docs/3d-guide.md#candidate-bounds-for-sliding).
+Checked `bounding_aabb` snapshots on `Sphere`, `Capsule`, `Obb` and
+`GltfColliderShape` supply stored per-shape bounds; movement candidate envelopes
+remain caller-owned. Keep complete candidates when a bound is
+`None`, then run precise shape queries; the
+[snapshot recipe](docs/3d-guide.md#shape-bounds-snapshots) demonstrates this fallback.
 `CharacterController` adds AABB movement, ground handling and optional steps.
 `RigidBody` integrates caller-owned velocity and position with gravity and
 damping. Its explicit `resolve_collision` step separates a touching/overlapping

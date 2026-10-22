@@ -175,6 +175,13 @@ for a scrolling document whose images and text share a nested clip. The
 scope restores the HUD clip afterward. Select the camera first and clear the
 surface outside the scope; built-in UI groups clip their own deferred widgets.
 
+Use `custom_wrapped_hud` next when a panel uses ordinary text drawing. It
+combines matching font settings, a measured `LayoutCursor` allocation and
+nested clips with caller-owned scrolling. The
+[text contracts](../docs/ui-2d-guide.md#wrap-and-draw-text-explicitly) explain
+its physical wrap-width budget and line-distance factor before moving to
+wrapped UI labels, whose width and spacing are logical units.
+
 Continue with `document_zoom_pan` to compose that clip with a camera and logical
 input. The application owns the page transform, zoom anchor, bounds and resize
 policy; the [document recipe](../docs/ui-2d-guide.md#zoom-and-pan-a-document)
@@ -236,7 +243,11 @@ same font, size, scale and line-distance settings. `LayoutCursor` allocates a
 panel from its measured content height, capped to preserve the surrounding
 HUD. Nested `with_clip_rect` scopes bound the background and scrolled text.
 The fixture includes hard breaks and a long unbroken word; resize between
-390 x 400 and 960 x 640 to see the height and line count change.
+390 x 400 and 960 x 640 to see the height and line count change. At desktop
+size the panel follows its measured content; at compact size it caps the
+visible height and reclamps scrolling to the new text viewport. The notes
+are hidden below an inner width of 42 logical pixels, an example-owned
+readability breakpoint.
 
 Wheel inside the panel or press Up/Down to scroll. Home/End select the scroll
 limits; Escape exits natively. The header/footer indicators remain outside
@@ -253,11 +264,14 @@ cargo build --target wasm32-unknown-unknown --example custom_wrapped_hud
 Copy `target/wasm32-unknown-unknown/debug/examples/custom_wrapped_hud.wasm`
 beside [`custom_wrapped_hud.html`](custom_wrapped_hud.html), serve the fork
 root over HTTP, and open that host. Inspect compact/desktop output at DPR 1/2.
+At each density, check that line widths fit the inner clip, both scroll limits
+remain reachable, and the header/footer indicators draw outside the panel.
 Read-only `custom_wrapped_hud_status` (0 starting, 1 ready, 2 panic),
 `custom_wrapped_hud_frames` and `custom_wrapped_hud_value(index)` exports expose
 the geometry described beside their definitions in the source. Set
 `MACROQUAD_WRAPPED_HUD_TRACE=1` for native state-change logs. These diagnostics
 observe the same layout used for drawing; input remains application-owned.
+Status 1 reports readiness, so it does not replace real input or pixel checks.
 See the [HUD recipe](../docs/ui-2d-guide.md#custom-drawn-wrapped-hud).
 
 ## `document_zoom_pan`

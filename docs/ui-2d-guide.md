@@ -645,14 +645,31 @@ drawing, including a custom UI label's skin. Measuring at one size and drawing
 at another can clip lines even when the enclosing layout rectangle is correct.
 These operations need a running macroquad context for font textures.
 
+Choose the text path before sharing widths or spacing values between them:
+
+| Contract | Wrapped UI label | Immediate text |
+| --- | --- | --- |
+| Width | `Label::wrap` takes logical outer width, including skin margins | `wrap_text` compares physical glyph advances; pass logical inner width times `screen_dpi_scale()` |
+| Line spacing | `Label::multiline` takes an absolute logical baseline step | Multiline draw/measure functions take a factor times font size and scale |
+| Allocation and scroll | The label reserves height in its UI container; the group/window owns scrolling | The caller reserves height, bounds scroll and clips drawing |
+
 ```rust,no_run
 use macroquad::prelude::*;
 
 let width = (screen_width() - 32.0).max(1.0);
 let wrapped = wrap_text("Pause the game to change these settings.", None, 24, 1.0,
                         width * screen_dpi_scale());
-draw_multiline_text(&wrapped, 16.0, 80.0, 24.0, Some(1.2), BLACK);
+let measured = measure_multiline_text(&wrapped, None, 24, 1.0, Some(1.2));
+// For a visible first line, convert its desired ink top into a baseline.
+draw_multiline_text_ex(&wrapped, 16.0, 80.0 + measured.offset_y, Some(1.2),
+    TextParams { font_size: 24, font_scale: 1.0, color: BLACK, ..Default::default() });
 ```
+
+Immediate multiline drawing/measurement follows `str::lines()`: empty input
+has no lines, an internal blank line adds a baseline step, and a final `\n`
+does not reserve an extra line. Reserve any required trailing blank space in
+the caller's layout. Wrapped labels use the explicit empty/trailing-line
+policy below instead.
 
 For a built-in UI label, opt into `Label::wrap(outer_width)`. The width is in
 logical window units and includes the label skin's content and background
@@ -739,11 +756,17 @@ breakpoint. Measure the wrapped string with
 `measure_multiline_text`, then reserve its height plus padding
 with `LayoutCursor`. The example caps the visible panel height to preserve
 space for the HUD; its full measured text height determines the scroll range.
+Its [pure layout helper](../examples/support/custom_wrapped_hud_layout.rs)
+allocates the text with `allocate_width(measured.height)`, uses
+`content_size().y` for the padded requested panel height, and clamps the scroll
+offset to `(measured.height - clip.h).max(0.)` after every resize.
 Multiline height is the sum of baseline steps, rather than a tight glyph
 bounding box. Place the first baseline at the inner top plus the measured
 `offset_y`, subtracting the caller-owned scroll offset. This fixed sample
 starts with visible glyphs and uses a font and line step that fit its glyphs;
 it does not implement arbitrary-font text layout.
+Keep `TextParams::rotation` at zero and `font_scale_aspect` at one for this
+measurement recipe: `measure_multiline_text` has no corresponding parameters.
 
 Select the default camera before entering `with_clip_rect`. The example
 scopes both background and text to the panel, intersects a second clip with

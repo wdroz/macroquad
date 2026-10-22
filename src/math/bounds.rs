@@ -19,6 +19,12 @@ impl Sphere {
     /// let bounds = Sphere::new(Vec3::ZERO, 2.0).bounding_aabb().unwrap();
     /// assert_eq!(bounds.min, Vec3::splat(-2.0));
     /// assert_eq!(bounds.max, Vec3::splat(2.0));
+    /// // A tiny radius must still expand outward beside a large center.
+    /// let sphere = Sphere::new(Vec3::splat(16_777_216.0), 0.25);
+    /// let bounds = sphere.bounding_aabb().unwrap();
+    /// assert!(bounds.min.cmplt(sphere.center).all());
+    /// assert!(bounds.max.cmpgt(sphere.center).all());
+    /// assert!(Sphere::new(Vec3::splat(f32::MAX), 1.0).bounding_aabb().is_none());
     /// ```
     pub fn bounding_aabb(&self) -> Option<Aabb> {
         rounded_segment_bounds(self.center, self.center, self.radius)
@@ -43,6 +49,9 @@ impl Capsule {
     /// let bounds = Capsule::new(-Vec3::X, Vec3::X, 0.5).bounding_aabb().unwrap();
     /// assert_eq!(bounds.min.x, -1.5);
     /// assert_eq!(bounds.max.x, 1.5);
+    /// let point_segment = Capsule::new(Vec3::Z, Vec3::Z, 0.5);
+    /// assert_eq!(point_segment.bounding_aabb(),
+    ///     macroquad::math::Sphere::new(Vec3::Z, 0.5).bounding_aabb());
     /// ```
     pub fn bounding_aabb(&self) -> Option<Aabb> {
         rounded_segment_bounds(self.a, self.b, self.radius)
@@ -68,9 +77,18 @@ impl Obb {
     ///
     /// ```
     /// use macroquad::math::{Obb, Quat, Vec3};
-    /// let bounds = Obb::new(Vec3::ZERO, Vec3::ONE, Quat::IDENTITY)
-    ///     .bounding_aabb().unwrap();
-    /// assert!(bounds.contains(Vec3::ONE));
+    /// let rotation = Quat::from_rotation_z(0.7);
+    /// let box_shape = Obb::new(Vec3::X, Vec3::new(2.0, 0.5, 1.0), rotation);
+    /// let bounds = box_shape.bounding_aabb().unwrap();
+    /// for x in [-1.0, 1.0] {
+    ///     for y in [-1.0, 1.0] {
+    ///         for z in [-1.0, 1.0] {
+    ///             let corner = box_shape.center
+    ///                 + rotation * (box_shape.half_extents * Vec3::new(x, y, z));
+    ///             assert!(bounds.contains(corner));
+    ///         }
+    ///     }
+    /// }
     /// ```
     pub fn bounding_aabb(&self) -> Option<Aabb> {
         let rotation = self.pose()?;

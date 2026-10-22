@@ -803,10 +803,25 @@ impl<'a> GltfModelLoader<'a> {
     ///
     /// ```
     /// use macroquad::prelude::*;
-    /// let mut load = GltfModelLoader::new_with_markers(&[], GltfLoadSettings::default()).unwrap();
-    /// assert!(load.take_markers().is_none());
-    /// load.cancel();
-    /// assert!(load.take_markers().is_none());
+    /// # use std::borrow::Cow;
+    /// # let json = br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],
+    /// #   "nodes":[{"name":"player_spawn","extras":{"mq_tag":"player"}}]}"#;
+    /// # let bytes = ::gltf::binary::Glb {
+    /// #     header: ::gltf::binary::Header { magic: *b"glTF", version: 2, length: 0 },
+    /// #     json: Cow::Borrowed(json), bin: Some(Cow::Borrowed(&[])),
+    /// # }.to_vec().unwrap();
+    /// // This marker-only GLB needs no texture uploads or graphics context.
+    /// let mut load = GltfModelLoader::new_with_markers(&bytes, GltfLoadSettings::default()).unwrap();
+    /// assert!(load.take_markers().is_none()); // pending
+    /// while load.poll().unwrap().stage != GltfLoadStage::Complete {}
+    /// let markers = load.take_markers().unwrap();
+    /// assert!(load.take_markers().is_none()); // once only
+    /// let model = load.take_model().unwrap();
+    /// let pose = load.take_pose().unwrap();
+    /// let maps = load.take_material_maps().unwrap();
+    /// drop((load, model, pose, maps));
+    /// drop(bytes);
+    /// assert_eq!(markers.marker_tag(markers.spawns[0].node), Some("player"));
     /// ```
     pub fn take_markers(&mut self) -> Option<GltfMarkers> {
         self.markers.take()
