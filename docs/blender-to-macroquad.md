@@ -465,11 +465,28 @@ and test triggers separately at the moved pose.
 
 For a larger set of authored colliders, the optional use of `UniformGrid`
 can narrow the candidates before the shape queries above. Store a conservative
-world AABB under each collider's caller-chosen `u32` index, retain the mapping
+world AABB from `collider.shape.bounding_aabb()` under each collider's caller-chosen `u32` index, retain the mapping
 to `scene.colliders` yourself, and query by AABB or ray. Returned indices are
 unique and numerically sorted; they do not imply nearest-hit order or solid
 roles. Keep triggers separate and still test the original collider shape.
-Update the bounds after pose changes. Enclosing the start and end bounds is
+The helper returns a checked static snapshot: valid AABBs are preserved exactly,
+and sphere/capsule/OBB corners round outward. Degenerate finite shapes are valid;
+invalid inputs or an enclosure beyond finite `f32` return `None`. Keep complete
+candidates whenever a bound is unavailable, or test every unindexed shape
+separately; do not silently skip it with `filter_map`. If the query's own bound
+is unavailable, query the complete set too. The maintained
+[room logic](../examples/support/room_scene.rs) demonstrates insertion under
+`scene.colliders` indices and explicit rebuilding, with exact trigger overlaps
+after candidate selection and a full-list fallback. Its sliding movement still
+uses all four solids.
+
+Update world-space shapes and their bounds after pose changes. A shape returned
+by `pose.collider_shape(&scene, collider)` can use the same helper after an up-axis
+conversion. Preserve unchanged authored scene/collider data when deriving each
+new posed snapshot, and replace separate caller-owned query copies; deriving
+from an already posed collider would compound the rest-to-pose delta. Neither
+the old shape nor old bounds follows later pose changes.
+Enclosing the start and end bounds is
 enough for a straight sweep; sliding can deflect beyond that box. Use an envelope
 that also covers deflection, and handle initial overlap against the complete
 solid set before narrowing movement candidates. Steps and snapping need their

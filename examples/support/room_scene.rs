@@ -1,6 +1,6 @@
 //! Shared public-API room contract; no window or Blender needed.
 use macroquad::gltf::{GltfColliderShape, GltfScene};
-use macroquad::math::{slide_sphere_solids, vec3, Aabb, Sphere, Vec3};
+use macroquad::math::{slide_sphere_solids, vec3, Aabb, Sphere, UniformGrid, Vec3};
 
 pub const BYTES: &[u8] = include_bytes!("../assets/room.glb");
 pub const RADIUS: f32 = 0.4;
@@ -10,6 +10,9 @@ pub struct Room {
     pub spawn: Vec3,
     pub goal: Sphere,
     pub solids: Vec<Aabb>,
+    // Indices address scene.colliders, not scene.nodes or the solid-only list.
+    // None means every marker must remain a candidate.
+    grid: Option<UniformGrid>,
 }
 
 impl Room {
@@ -62,12 +65,52 @@ impl Room {
         assert_eq!(scene.marker_tag(spawn.node), Some("player"));
         assert!((spawn.position - vec3(0., 0.4, 2.)).length() < 1e-5);
         let spawn = spawn.position;
+        let mut grid = UniformGrid::new(2.).unwrap();
+        let mut complete = true;
+        for (index, collider) in scene.colliders.iter().enumerate() {
+            let Some((index, bounds)) = u32::try_from(index)
+                .ok()
+                .zip(collider.shape.bounding_aabb())
+            else {
+                complete = false;
+                break;
+            };
+            complete &= grid.insert(index, bounds);
+        }
         Self {
             scene,
             spawn,
             goal,
             solids,
+            grid: complete.then_some(grid),
         }
+    }
+
+    /// Rebuild goal-query bounds after replacing world-space shape snapshots.
+    /// A posed adaptation must preserve unchanged authored scene/collider data:
+    /// derive collider_shape from that data for each pose, then replace query
+    /// copies. Reusing an already posed collider would compound its pose delta.
+    /// The example's complete slide-solid list is managed separately.
+    pub fn rebuild_bounds(&mut self) {
+        let snapshots: Option<Vec<_>> = self
+            .scene
+            .colliders
+            .iter()
+            .enumerate()
+            .map(|(index, collider)| {
+                Some((u32::try_from(index).ok()?, collider.shape.bounding_aabb()?))
+            })
+            .collect();
+        self.grid = snapshots.map(|snapshots| {
+            let mut grid = self
+                .grid
+                .take()
+                .unwrap_or_else(|| UniformGrid::new(2.).unwrap());
+            grid.rebuild(snapshots);
+            grid
+        });
+        // A failed conversion disables this entire candidate filter. In
+        // particular, never filter_map away an unrepresentable enclosure.
     }
 
     pub fn step(&self, center: Vec3, delta: Vec3) -> Vec3 {
@@ -77,6 +120,20 @@ impl Room {
     }
 
     pub fn reached(&self, center: Vec3) -> bool {
-        self.goal.overlaps(&Sphere::new(center, RADIUS))
+        let body = Sphere::new(center, RADIUS);
+        let is_reached = |index: usize| {
+            let collider = &self.scene.colliders[index];
+            collider.trigger
+                && self.scene.marker_tag(collider.node) == Some("goal")
+                && collider.shape.overlaps_sphere(&body)
+        };
+        match (&self.grid, body.bounding_aabb()) {
+            (Some(grid), Some(bounds)) => grid
+                .query_aabb(&bounds)
+                .into_iter()
+                .any(|index| is_reached(index as usize)),
+            // Invalid/unrepresentable query bounds also use complete candidates.
+            _ => (0..self.scene.colliders.len()).any(is_reached),
+        }
     }
 }

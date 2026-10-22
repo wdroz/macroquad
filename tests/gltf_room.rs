@@ -2,8 +2,8 @@
 #[path = "../examples/support/room_scene.rs"]
 mod room_scene;
 use macroquad::{
-    gltf::GltfScene,
-    math::{vec3, Vec3},
+    gltf::{GltfColliderShape, GltfScene},
+    math::{vec3, Sphere, Vec3},
 };
 use serde_json::Value;
 
@@ -32,6 +32,55 @@ fn authored_walls_block_and_goal_does_not() {
     assert!((end.z + 2.).abs() < 1e-4);
     let back = room.step(end, vec3(0., 0., -20.));
     assert!(back.z > -3.51 && back.z < -3.4, "{back:?}");
+}
+
+#[test]
+fn goal_bounds_rebuild_and_complete_candidate_fallback_keep_exact_queries() {
+    let mut room = room_scene::Room::load();
+    let goal_index = room
+        .scene
+        .colliders
+        .iter()
+        .position(|collider| room.scene.marker_tag(collider.node) == Some("goal"))
+        .unwrap();
+    let moved = Sphere::new(vec3(12., 0.4, -2.), 0.6);
+    room.scene.colliders[goal_index].shape = GltfColliderShape::Sphere(moved);
+    // The caller refreshes snapshots after changing world-space geometry.
+    room.rebuild_bounds();
+    assert!(!room.reached(room.goal.center));
+    assert!(room.reached(moved.center));
+
+    // All indexed shapes have finite bounds, but this query's positive radius
+    // extends beyond f32::MAX. Complete candidates must be used for this query
+    // even while the grid itself is available.
+    let far_point = GltfColliderShape::Sphere(Sphere::new(Vec3::X * f32::MAX, 0.));
+    room.scene.colliders[goal_index].shape = far_point;
+    assert!(room
+        .scene
+        .colliders
+        .iter()
+        .all(|collider| collider.shape.bounding_aabb().is_some()));
+    room.rebuild_bounds();
+    let far_query = Sphere::new(Vec3::X * f32::MAX, room_scene::RADIUS);
+    assert!(far_query.bounding_aabb().is_none());
+    assert!(far_point.overlaps_sphere(&far_query));
+    assert!(room.reached(far_query.center));
+
+    // Valid finite sphere inputs can have no finite bounding enclosure. The
+    // candidate fallback must still run the original shape query unchanged.
+    let huge = GltfColliderShape::Sphere(Sphere::new(Vec3::X * f32::MAX, f32::MAX));
+    assert!(huge.bounding_aabb().is_none());
+    let query = Sphere::new(Vec3::ZERO, room_scene::RADIUS);
+    assert!(huge.overlaps_sphere(&query));
+    room.scene.colliders[goal_index].shape = huge;
+    room.rebuild_bounds();
+    assert_eq!(room.reached(query.center), huge.overlaps_sphere(&query));
+
+    // Rebuilding a representable snapshot restores normal grid queries.
+    room.scene.colliders[goal_index].shape = GltfColliderShape::Sphere(moved);
+    room.rebuild_bounds();
+    assert!(room.reached(moved.center));
+    assert!(!room.reached(Vec3::ZERO));
 }
 
 #[test]

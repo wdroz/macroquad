@@ -756,8 +756,19 @@ The guides are [`docs/3d-guide.md`](../docs/3d-guide.md), [`docs/blender-to-macr
 `cargo run --features gltf --example gltf_room` loads the committed original
 [room](assets/room.glb), uploads its four meshes once and uses tagged empty
 colliders, a duplicate-suffixed spawn and a sphere trigger through public APIs.
-WASD moves, R resets and Escape exits. The room keeps glTF Y-up.
+WASD moves, R resets/rebuilds marker bounds and Escape exits. The room keeps glTF Y-up.
+Its [shared logic](support/room_scene.rs) inserts checked
+`GltfColliderShape::bounding_aabb()` snapshots under caller-owned indices into
+`scene.colliders`, and shows explicit `UniformGrid::rebuild` after world-shape
+changes. Current goal queries use grid candidates followed by exact shape
+overlaps; any unavailable collider/query bound falls back to complete candidates.
+Sliding keeps the full solid list, since slide deflection/recovery needs a
+separate candidate policy. Bounds are snapshots, not contact or sweep results.
 `cargo test --features gltf --test gltf_room` checks the same loading contract,
-wall blocking, trigger traversal and duplicate-name fallback without a window
+wall blocking, trigger traversal, bounds rebuild/fallback and duplicate-name fallback without a window
 or Blender. See the [Blender guide](../docs/blender-to-macroquad.md#samples-in-this-repository)
 for headless regeneration and the separate six-object tutorial.
+`cargo test --features gltf --test gltf_bounds` compares bounds dispatch with
+the primitives, verifies allocation-free snapshots and checks grid candidates
+against complete narrowphase queries for posed and non-Y-up shapes. See the
+[shape bounds guide](../docs/3d-guide.md#shape-bounds-snapshots).

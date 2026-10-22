@@ -95,6 +95,7 @@
 pub use glam::*;
 
 mod aabb;
+mod bounds;
 mod capsule;
 mod character;
 mod circle;

@@ -360,7 +360,8 @@ pub struct GltfImage {
 /// See the module docs for which node becomes which variant. [`Self::overlaps_sphere`]
 /// and [`Self::overlaps_aabb`] test every variant; [`Self::sweep_aabb`] and
 /// [`Self::sweep_sphere`] sweep an incoming body against every variant. Games
-/// need not match on the shape by hand.
+/// need not match on the shape by hand. [`Self::bounding_aabb`] supplies a
+/// conservative world-space snapshot for caller-owned broadphase candidates.
 ///
 /// # Example
 ///
@@ -394,6 +395,47 @@ pub enum GltfColliderShape {
 }
 
 impl GltfColliderShape {
+    /// Returns a checked, conservative world-space AABB for this snapshot.
+    ///
+    /// This allocation-free dispatcher preserves a finite, ordered [`Aabb`]
+    /// exactly, including point/flat bounds and signed zeros. The other variants
+    /// delegate to [`Sphere::bounding_aabb`], [`Capsule::bounding_aabb`] and
+    /// [`Obb::bounding_aabb`], including their outward rounding, degenerate-size,
+    /// rotation-normalization and invalid-input contracts. No up axis is assumed.
+    ///
+    /// Returns [`None`] for invalid geometry or when a conservative enclosure
+    /// cannot be represented by finite `f32` corners. Do not silently omit such
+    /// a shape from a candidate set: use the complete shape list (or test every
+    /// omitted shape separately). Bounds are candidates, not precise contact or
+    /// sweep results; still query the original shape.
+    ///
+    /// A shape from
+    /// [`GltfHierarchyPose::collider_shape`](crate::gltf_draw::GltfHierarchyPose::collider_shape)
+    /// describes only that pose. Refresh its bounds after pose changes. This
+    /// method neither owns a spatial index nor changes marker/trigger roles.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let shape = GltfColliderShape::Sphere(Sphere::new(Vec3::ZERO, 1.0));
+    /// let mut grid = UniformGrid::new(2.0).unwrap();
+    /// // The application chooses and retains the index-to-shape mapping.
+    /// assert!(grid.insert(42, shape.bounding_aabb().unwrap()));
+    /// let probe = Aabb::from_min_max(Vec3::ZERO, Vec3::ONE);
+    /// assert_eq!(grid.query_aabb(&probe), vec![42]);
+    /// assert!(shape.overlaps_aabb(&probe)); // precise shape query
+    /// ```
+    pub fn bounding_aabb(&self) -> Option<Aabb> {
+        match *self {
+            GltfColliderShape::Aabb(aabb) => {
+                (aabb.min.is_finite() && aabb.max.is_finite() && aabb.min.cmple(aabb.max).all())
+                    .then_some(aabb)
+            }
+            GltfColliderShape::Sphere(sphere) => sphere.bounding_aabb(),
+            GltfColliderShape::Obb(obb) => obb.bounding_aabb(),
+            GltfColliderShape::Capsule(capsule) => capsule.bounding_aabb(),
+        }
+    }
+
     /// Returns true when this shape and `sphere` overlap, including a touch.
     ///
     /// A sphere sitting on a face counts. A negative or non-finite radius on

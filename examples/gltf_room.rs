@@ -8,7 +8,7 @@ use macroquad::prelude::*;
 #[cfg(feature = "gltf")]
 #[macroquad::main("Authored glTF room")]
 async fn main() {
-    let room = room_scene::Room::load();
+    let mut room = room_scene::Room::load();
     let model = RetainedGltfModel::from_model(
         GltfModel::from_bytes(room_scene::BYTES).expect("room draw"),
         false,
@@ -26,6 +26,9 @@ async fn main() {
         }
         if is_key_pressed(KeyCode::R) {
             center = room.spawn;
+            // This static room has unchanged markers. Posed adaptations derive
+            // fresh shapes from preserved authored data, then rebuild queries.
+            room.rebuild_bounds();
         }
         let mut wish = Vec3::ZERO;
         if is_key_down(KeyCode::A) {

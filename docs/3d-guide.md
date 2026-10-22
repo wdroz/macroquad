@@ -1352,6 +1352,47 @@ frame-time improvement is promised. Reinsert changed bounds, or rebuild, after
 moving shapes. For one straight translation, query the union of its starting
 and ending AABBs, then use the existing full-body sweeps on the candidates.
 
+### Shape bounds snapshots
+
+`Sphere::bounding_aabb()`, `Capsule::bounding_aabb()` and
+`Obb::bounding_aabb()` return checked world-space `Option<Aabb>` snapshots.
+With `gltf` enabled, `GltfColliderShape::bounding_aabb()` dispatches to those
+helpers and returns a finite, ordered AABB variant unchanged, including its
+signed zeros. Each helper is allocation-free and assumes no up axis. Radii
+and half-extents must be finite and nonnegative; positions/endpoints must be
+finite. Zero radii/extents and zero-length capsule segments are valid. OBBs
+use the existing rotation normalization and reject unusable quaternions.
+Corners round outward conservatively; they can be slightly wider than the
+mathematical bound. Invalid geometry and an enclosure extending beyond finite
+`f32` corners return `None`.
+
+Keep every unrepresentable shape in the query's complete candidate fallback:
+`None` does not mean the shape is empty. Do not build an index with
+`filter_map` that silently drops these shapes. An application can disable the
+grid for that snapshot, or test every omitted shape separately. If the query
+shape itself has no finite enclosure, use complete candidates for that query
+too. Existing primitive query arithmetic and numerical limits still apply.
+
+The maintained [authored room](../examples/gltf_room.rs) and its
+[shared headless logic](../examples/support/room_scene.rs) show caller-selected
+`u32` indices that map to `scene.colliders`, checked insertion, explicit
+`rebuild_bounds()` and complete-candidate fallback. The room narrows current
+goal-trigger overlaps and then calls `overlaps_sphere` on the original shape;
+a bound corner can overlap a query while its sphere/OBB/capsule does not.
+Movement retains the complete tiny solid list. Bounds do not supply contacts,
+sweep times, trigger events, response or an automatic scene index.
+
+Shapes from `GltfHierarchyPose::collider_shape` already describe their current
+world-space pose, including an explicit non-Y up conversion. Obtain new shape
+snapshots and reinsert their caller indices or rebuild after pose changes;
+derive each snapshot from unchanged authored scene/collider data and keep the
+query copies separate. Passing an already posed collider back to
+`collider_shape` would apply the rest-to-pose delta again. Previously returned
+shapes and bounds remain unchanged. Bounds for static
+snapshots alone do not describe obstacle motion. Public regressions compare
+grid-narrowed AABB/sphere overlaps and straight sphere sweeps with complete
+shape queries before and after posed/non-Y-up rebuilds.
+
 ### Candidate bounds for sliding
 
 A slide can change direction after hitting a surface. Its path can leave the
