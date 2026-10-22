@@ -351,6 +351,22 @@ moving platforms remain separate work. See the
 [3D guide](3d-guide.md) and `CharacterController` rustdoc for the movement
 contract and a complete example.
 
+For a sphere or a fixed multi-sphere hull, reuse those same four solid-only
+arrays with `slide_sphere_solids` or `slide_spheres_solids`. They already accept
+static capsule markers and return a center or one shared translation,
+respectively. If the game needs the time of one impact instead, primitive
+`Sphere` sweeps cover AABBs, OBBs and spheres; a public sphere/capsule sweep is
+still pending. See the current [sweep table](3d-guide.md#sweep) before choosing
+a query for an imported shape. Neither path sweeps a rotating body.
+
+Use `slide_spheres_solids_with_contacts` when a hull needs the selected solid,
+sample and outward normal for scrape/stop feedback. Its `solid_index` belongs
+to one of the four extracted arrays, so retain a parallel mapping to the
+original collider/node if gameplay needs marker tags or identity. It does not
+index `scene.colliders`. Events can repeat and include a blocked final probe
+that the hull did not reach; use them as [solver diagnostics](3d-guide.md#rigid-groups-of-spheres),
+and test triggers separately at the moved pose.
+
 For a larger set of authored colliders, the optional use of `UniformGrid`
 can narrow the candidates before the shape queries above. Store a conservative
 world AABB under each collider's caller-chosen `u32` index, retain the mapping
@@ -377,6 +393,11 @@ response is not provided; keep capsule solids on the supported query/slide
 paths. Filter out triggers before any response and choose the application
 time step and pair order. The [physics guide](3d-guide.md#physics) explains
 static versus kinematic bodies, restitution and transactional errors.
+The maintained [`rigid_body_joint` example](../examples/README.md#rigid_body_joint)
+adds a bounded fixed-step clock and one caller-ordered distance joint. Its
+residual/overlap probe shows why moving the joint correction after contacts
+can reintroduce penetration. Use that recipe when adding a constrained prop;
+the imported level loop above remains kinematic.
 
 ## Add a mission log or pause menu
 
@@ -410,6 +431,16 @@ track are two consecutive Tab stops. Disable unavailable settings with
 and [slider](ui-2d-guide.md#make-sliders-usable-from-the-keyboard) recipes describe
 key edges, endpoints and invalid input. Run `keyboard_sliders_check` to inspect
 the mixed menu before integrating it into your level loop.
+
+Use `Label::wrap(ui.available_width())` for descriptions that should expand the
+scrollable settings content after resize. `Label::measure` uses the active
+skin and the same width for a caller-owned layout; the
+[wrapped-label recipe](ui-2d-guide.md#wrap-and-draw-text-explicitly) covers
+measurement, margins and spacing. `draw_rectangle_rounded_lines` can outline
+a custom panel with a full inward stroke; the
+[rounded-panel recipe](ui-2d-guide.md#draw-a-rounded-panel) explains its radius
+and thickness limits. Root UI labels use logical window units; immediate
+outlines use the current drawing camera, so select the default camera for a HUD.
 
 ## Move one imported object
 

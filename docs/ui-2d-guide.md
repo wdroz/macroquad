@@ -639,6 +639,8 @@ become zero on this opt-in path. A positive outer width exhausted by margins
 reserves one empty line plus vertical margins; a nonfinite/nonpositive outer
 width reserves zero and draws nothing. `size(vec2(x, y))` supplies a minimum
 height for a wrapped label; its X is ignored because `wrap` owns the width.
+An invalid outer width also leaves the row/column cursor and its gaps untouched;
+a valid empty label still reserves its line and participates in layout.
 Without `wrap`, `multiline` retains its historical no-op behavior and `size`
 retains its previous meaning.
 
@@ -648,6 +650,24 @@ caller-owned `LayoutCursor`, measure the same builder before allocating. Use
 container-local rectangle positions relative to the active container's padded
 origin for `Label::position` (root coordinates when placing in the root UI);
 rebuild both after resize.
+Measurement can populate the font glyph cache even though it does not draw.
+Keep the same builder, skin and width for allocation and drawing:
+
+```rust,no_run
+use macroquad::prelude::*;
+use macroquad::ui::{root_ui, widgets::Label, Layout, LayoutCursor, LayoutSettings};
+
+let mut ui = root_ui();
+let mut column = LayoutCursor::new(Rect::new(16., 16., 240., 300.),
+    LayoutSettings::new(Layout::Vertical).gap(vec2(0., 8.)));
+let description = Label::new("A description that grows to its full wrapped height.")
+    .wrap(column.available_size().x);
+let rect = column.allocate(description.measure(&mut ui));
+description.position(rect.point()).ui(&mut ui);
+let next_control = column.allocate_width(32.);
+draw_rectangle_lines(next_control.x, next_control.y, next_control.w, next_control.h, 1., WHITE);
+```
+
 Run `cargo run --example wrapped_labels_check` for a compact/desktop menu and
 shared native/WebGL checks with asymmetric margins, a custom font, tight/narrow
 geometry, measured scroll extents and clipped large text. The
@@ -776,6 +796,16 @@ uniform-FPS API. A clip owns checked `SpriteRegion` values and individual `f64`
 seconds; it owns no texture. `Animation` and `AnimationFrame` literals and
 `AnimatedSprite` behavior stay unchanged.
 
+| Player | Clip metadata | Clock and selection |
+| --- | --- | --- |
+| `AnimatedSprite` | Equal grid cells with one integer FPS per row-based `Animation` | `update_with_delta` or frame-time `update`; `set_animation` selects a stored clip |
+| `TimedSprite` | An immutable `SpriteClip` of checked regions and individual seconds | `update_with_delta` only; construct a new player to replace its clip |
+
+Both players own independent elapsed time, pause state and loop/once policy.
+They share no texture ownership; supply the sheet that matches the current
+region when drawing. Configure the mode and pause state explicitly when
+creating a replacement `TimedSprite`; a new player starts at zero in Loop.
+
 ```rust
 use macroquad::experimental::animation::{SpriteClip, TimedSprite, SpriteRegion};
 use macroquad::prelude::*;
@@ -800,17 +830,18 @@ with its matching texture, preserving trim/pivot/flip behavior. The maintained
 `timed_sprite_check` example uses the tiny asymmetric sheet and checks actual
 pixels on native/WebGL before showing interactive loop/once playback.
 
-Choose the operation by the state change you want:
+Choose the operation by the state change you want. Except for clip selection,
+these lifecycle operations apply to both players:
 
 | Action | Operation | Result |
 | --- | --- | --- |
 | Pause and resume | Change `playing` | Keep the current frame and fractional progress |
 | Restart the selected clip | `reset()` | Rewind and clear completion; preserve `playing` and playback mode |
 | Jump to an absolute clip time | `seek(seconds)` | Wrap a loop or clamp a one-shot, even while paused |
-| Select a clip and start it fresh | `set_animation(index)`, then `reset()` | Explicitly discard the previous clip's progress |
+| Select a uniform-FPS clip and start it fresh | `AnimatedSprite::set_animation(index)`, then `reset()` | Explicitly discard the previous clip's progress |
 | Replay a completed one-shot | `reset()`, then set `playing = true` | Start again with the same one-shot policy |
 
-The legacy `set_animation` retains the frame modulo the new length and the
+For `AnimatedSprite`, the legacy `set_animation` retains the frame modulo the new length and the
 fractional seconds; `set_frame` retains fractional seconds. Both clear
 completion. Changing FPS can leave excess fractional seconds pending until the
 next playing update, so `elapsed()` is temporarily unnormalized after that
@@ -821,8 +852,9 @@ setter, so supply a frame below the selected clip's length. Checked construction
 validates animation metadata, while `SpriteRegion` validates the resulting
 source rectangle against the actual sheet dimensions before drawing.
 
-Advance a player from one clock: call `update_with_delta` for caller time or
-`update` for frame time. Calling both in the same tick advances it twice.
+Advance each player from one clock: call `update_with_delta` for caller time.
+`AnimatedSprite` also offers `update` for frame time; calling both in the same
+tick advances it twice. `TimedSprite` has no automatic frame-time method.
 For repeatable playback, replay the same sequence of elapsed values and
 selection/seek operations; the timer does not choose fixed simulation steps.
 

@@ -34,7 +34,11 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Keyboard checkboxes | `keyboard_checkboxes_check` | Opt-in stable-ID checkbox focus, mixed editbox/button traversal, repeat suppression, disabled/removed controls, modal restoration and visible focus; see the [UI guide](../docs/ui-2d-guide.md#make-checkboxes-usable-from-the-keyboard) and [WebGL host](keyboard_checkboxes_check.html) |
 | Existing UI/2D samples | `camera`, `camera_transformations`, `texture`, `ui`, `ui_skins`, `platformer` | World/HUD cameras, texture drawing, widgets/skins, tile maps and platformer collisions; see the [UI and 2D guide](../docs/ui-2d-guide.md) for current limitations |
 
-Collision examples use the default features and a Y-up `Camera3D`. Escape quits each of them. Arrow keys move on the XZ plane: left and right change X, up and down change Z (up is toward -Z).
+Interactive collision examples use the default features and a Y-up `Camera3D`.
+Escape quits their windows. Arrow keys move the overlap/sweep/slide demos on
+the XZ plane: left and right change X, up and down change Z (up is toward -Z).
+`sphere_sweep` is a separate CPU-only command that prints its results and exits;
+it needs no window, camera or input.
 
 ```sh
 cargo run --example aabb_overlap
@@ -46,6 +50,7 @@ cargo run --example obb_overlap
 cargo run --example capsule_overlap
 cargo run --example sweep_hit
 cargo run --example sweep_obb
+cargo run --example sphere_sweep
 cargo run --example slide_solids
 cargo run --example rigid_body_joint
 cargo run --example character_controller
@@ -59,6 +64,7 @@ cargo run --example sprite_regions
 cargo run --example sprite_regions_check
 cargo run --example sprite_animation
 cargo run --example sprite_animation_check
+cargo run --example timed_sprite_check
 cargo run --example sprite_ui
 cargo run --example sprite_ui_check
 cargo run --features gltf --example gltf_textured
@@ -78,6 +84,7 @@ cargo run --example cursor_capture
 cargo run --example canvas_host
 cargo run --example rounded_panels
 cargo run --example rounded_panels_check
+cargo run --example rounded_outlines_check
 cargo run --example scoped_clipping
 cargo run --example scoped_clipping_check
 cargo run --example responsive_layout
@@ -139,7 +146,8 @@ browser checks without game assets. `keyboard_buttons_command` provides
 explicit test-model changes (clear focus, hide/show a button, disable/enable
 Apply); keyboard and pointer events can still come from the real DOM.
 
-These commands run from the fork root and open a window. To compile a sample
+These commands run from the fork root; `sphere_sweep` exits without opening a
+window, while the interactive and GPU-check examples open one. To compile a sample
 without opening a window, use `cargo build --example <name>` with the same
 feature flags and omit runtime arguments after `--`. Pure collision and scene-loader tests can run without graphics;
 rendering and texture uploads need a graphics context.
@@ -163,6 +171,9 @@ surface outside the scope; built-in UI groups clip their own deferred widgets.
 `responsive_layout` demonstrates a padded settings column, wrapped text,
 scrollable oversized content and a separate action row. Resize to 390 x 400,
 scroll to the final setting, and check that Resume and Apply remain reachable.
+Follow with `wrapped_labels_check` to use `Label::wrap`/`measure` with the active
+skin, including custom fonts, empty/invalid widths, tight spacing and scroll
+extents. `rounded_outlines_check` demonstrates a matching inward panel border.
 `keyboard_buttons` adds stable IDs, an editbox, disabled actions and a
 confirmation modal. Try Tab/Shift+Tab, a held Enter or Space, and canceling the
 modal to return focus to its opener. These are UI examples: an application's
@@ -179,7 +190,9 @@ Next, `camera_target` maps clicks through a displayed render texture into a
 rotated 2D world; `sprite_regions` draws checked source regions while keeping
 the visible pivot fixed through trimming and flips. Change frames manually
 with Space, then use `sprite_animation` to advance those cells from caller
-elapsed time or to seek/reset a paused player. Finally, `sprite_ui` combines
+elapsed time or to seek/reset a paused player. `timed_sprite_check` uses
+`SpriteClip`/`TimedSprite` when individual poses need unequal durations; it
+advances only from supplied elapsed seconds. Finally, `sprite_ui` combines
 the sprite, target picking, HUD, clipping and pause modal in a maintained
 example with application-owned input and clock gating. The
 [UI and 2D guide](../docs/ui-2d-guide.md) connects these APIs and coordinate spaces.
@@ -196,7 +209,8 @@ Copy `target/wasm32-unknown-unknown/debug/examples/scoped_clipping_check.wasm`
 to `examples/scoped_clipping_check.wasm`, serve the fork root, and open
 `examples/scoped_clipping_check.html`. Substitute `responsive_layout`,
 `keyboard_buttons`, `keyboard_checkboxes`, `keyboard_sliders`, `camera_target`,
-`sprite_regions`, `sprite_animation` or `sprite_ui`
+`sprite_regions`, `sprite_animation`, `sprite_ui`, `timed_sprite`,
+`rounded_outlines` or `wrapped_labels`
 for the other hosts.
 The paired HTML files load this checkout's JavaScript bundle. Use actual
 window resizing and input after the pixel checks, and inspect at both browser
@@ -221,6 +235,7 @@ updates. Run their maintained CPU regressions from the fork root:
 
 ```sh
 cargo test --test rigid_slide --test uniform_grid --test rigid_body --test collision_response
+cargo test --test sphere_sphere_sweep --test slide_contacts --test slide_contact_allocations
 cargo test --features gltf --test gltf_markers
 ```
 
@@ -244,6 +259,45 @@ cargo test --test triangle_mesh --test heightfield --test octree --test distance
 
 These recipes need no GPU or `gltf` feature. Broadphase candidates still need
 shape queries; joints need caller-selected integration and pair ordering.
+
+## `sphere_sweep`
+
+Run `cargo run --example sphere_sweep` for an asset-free, window-free
+`Sphere::sweep_sphere` recipe. It prints an off-center impact, the world-space
+normal and surface point, and the new center computed from `delta * hit.t`.
+Touching inward/tangential checks show why an overlap and a blocking sweep
+are different queries. The [sweep guide](../docs/3d-guide.md#sweep) lists the
+available moving/static pairs and initial-contact rules. A public
+sphere/capsule sweep remains pending; the existing slide helpers already
+accept static capsules.
+
+## `timed_sprite_check`
+
+Run `cargo test --test timed_sprite`, then `cargo run --example timed_sprite_check`.
+Space pauses/resumes, R resets, S seeks to 0.125 seconds and T advances 2.25
+seconds. The shared fixture checks 72,000 target pixels before the interactive
+scene starts, using a generated asymmetric sheet and both horizontal flips.
+The [sprite clock guide](../docs/ui-2d-guide.md#control-the-sprite-clock) compares
+the variable-duration and uniform-FPS players and their lifecycle controls.
+Escape closes the native example.
+
+For WebGL, build with `cargo build --release --target wasm32-unknown-unknown
+--example timed_sprite_check`, copy that WASM beside `examples/timed_sprite_check.html`
+and serve the repository root so the host can load `../js/mq_js_bundle.js`.
+
+## `rounded_outlines_check`
+
+Run `cargo run --example rounded_outlines_check` for the responsive outline demo
+and shared GPU fixture. It checks inward strokes, radius/thickness limits,
+single translucent coverage, camera transforms and nested clipping. See the
+[rounded-panel guide](../docs/ui-2d-guide.md#draw-a-rounded-panel) for the drawing
+contract.
+
+For WebGL, build with `cargo build --release --target wasm32-unknown-unknown
+--example rounded_outlines_check`, copy the WASM beside
+`examples/rounded_outlines_check.html` and serve the repository root. Browser
+exports `rounded_outlines_status` (0 pending, 1 passed, 2 panic) and
+`rounded_outlines_pixels` report the shared GPU fixture result.
 
 ## `rigid_body_joint`
 
@@ -598,19 +652,3 @@ WASD moves, R resets and Escape exits. The room keeps glTF Y-up.
 wall blocking, trigger traversal and duplicate-name fallback without a window
 or Blender. See the [Blender guide](../docs/blender-to-macroquad.md#samples-in-this-repository)
 for headless regeneration and the separate six-object tutorial.
-
-Run variable-duration checks with `cargo test --test timed_sprite`, then
-`cargo run --example timed_sprite_check`. Space pauses/resumes, R resets,
-S seeks to 0.125 seconds and T advances 2.25 seconds. For WebGL, build with
-`cargo build --release --target wasm32-unknown-unknown --example timed_sprite_check`,
-copy that WASM beside `timed_sprite_check.html` and serve the repository root
-so the host can load `../js/mq_js_bundle.js`. The same deterministic fixture
-checks 72,000 target pixels (15 states, including both horizontal flips) before
-the interactive scene starts. Escape closes the native example.
-
-Run `cargo run --example rounded_outlines_check` for the responsive outline demo.
-For WebGL, build it with `cargo build --release --target wasm32-unknown-unknown
---example rounded_outlines_check`, copy the WASM beside
-`examples/rounded_outlines_check.html` and serve the repository root. Browser
-exports `rounded_outlines_status` (0 pending, 1 passed, 2 panic) and
-`rounded_outlines_pixels` report the shared GPU fixture result.

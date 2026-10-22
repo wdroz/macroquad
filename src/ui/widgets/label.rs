@@ -184,6 +184,25 @@ impl<'a> Label<'a> {
     /// Measure the allocation without advancing layout or drawing. Uses the
     /// active label skin and needs a running macroquad context. Wrapped height
     /// can be passed to a caller-owned [`crate::ui::LayoutCursor`].
+    /// Measurement may populate the font's glyph cache. Keep the skin and width
+    /// unchanged between measuring this builder and drawing it.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// use macroquad::ui::{root_ui, widgets::Label, Layout, LayoutCursor, LayoutSettings};
+    ///
+    /// let mut ui = root_ui();
+    /// // In the root UI, rectangle positions are logical window coordinates.
+    /// let mut column = LayoutCursor::new(Rect::new(16., 16., 240., 300.),
+    ///     LayoutSettings::new(Layout::Vertical).gap(vec2(0., 8.)));
+    /// let label = Label::new("A description that reserves its complete wrapped height.")
+    ///     .wrap(column.available_size().x);
+    /// let allocation = column.allocate(label.measure(&mut ui));
+    /// label.position(allocation.point()).ui(&mut ui);
+    /// // The next custom control starts below the measured label and gap.
+    /// let button = column.allocate_width(32.);
+    /// draw_rectangle_lines(button.x, button.y, button.w, button.h, 1., WHITE);
+    /// ```
     pub fn measure(&self, ui: &mut Ui) -> Vec2 {
         let context = ui.get_active_window_context();
         if let Some(width) = self.wrap {

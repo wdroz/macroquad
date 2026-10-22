@@ -107,6 +107,37 @@ impl SpriteClip {
 /// iterating over loops or overflowing their sum. Frame lookup is logarithmic.
 /// Floating-point rounding applies; different subdivisions need not be identical.
 /// Clones copy their clock and clip without sharing mutable state.
+///
+/// The player owns no texture and has no automatic frame-time update. Advance
+/// it once from the caller's clock, then draw [`Self::frame`] through
+/// [`SpriteRegion::draw`]. Pausing, seeking and replaying a one-shot need no GPU:
+///
+/// ```
+/// use macroquad::experimental::animation::{
+///     AnimationPlayback, SpriteClip, SpriteRegion, TimedSprite,
+/// };
+/// use macroquad::math::vec2;
+///
+/// let first = SpriteRegion::from_grid(vec2(16., 8.), vec2(8., 8.), 0, 0).unwrap();
+/// let last = SpriteRegion::from_grid(vec2(16., 8.), vec2(8., 8.), 1, 0).unwrap();
+/// let clip = SpriteClip::new(&[(first, 0.125), (last, 0.375)]).unwrap();
+/// let mut player = TimedSprite::new(clip, false);
+/// player.set_playback(AnimationPlayback::Once);
+/// player.seek(0.125).unwrap(); // Seek while paused; exact boundary selects frame 1.
+/// player.update_with_delta(10.0).unwrap();
+/// assert_eq!(player.elapsed(), 0.125);
+/// assert_eq!(player.current_frame(), 1);
+/// assert!(!player.is_finished()); // The last frame still has time remaining.
+/// player.playing = true;
+/// player.update_with_delta(0.375).unwrap();
+/// assert!(player.is_finished());
+/// assert!(player.playing); // Completion does not change the caller's pause flag.
+/// assert!(player.seek(f64::NAN).is_err());
+/// assert!(player.is_finished()); // Invalid times leave state unchanged.
+/// player.reset(); // Rewind while preserving Once and playing.
+/// assert_eq!(player.current_frame(), 0);
+/// assert!(!player.is_finished());
+/// ```
 #[derive(Clone, Debug)]
 pub struct TimedSprite {
     clip: SpriteClip,

@@ -15,6 +15,9 @@
 //! [`SpriteClip`] and [`TimedSprite`] support individually held frames using
 //! checked regions and caller-supplied seconds. They preserve the uniform-FPS
 //! API and use the same loop/once, pause, reset and seek policies.
+//! `TimedSprite` advances only through `update_with_delta`; it has no `update`
+//! convenience or mutable clip selection. Construct another player to replace
+//! its clip, then choose its playback and pause state explicitly.
 //!
 //! # Examples
 //! Let's say we have an image of our character where every frame is 15x20 rect and we have this animations:
