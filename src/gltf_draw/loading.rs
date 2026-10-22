@@ -6,6 +6,7 @@ use std::{
 };
 
 use super::*;
+use crate::gltf::GltfMarkers;
 use crate::{math::Aabb, models::validate_retained_mesh};
 
 /// Current operation in a pollable glTF load.
@@ -440,13 +441,16 @@ impl<'a> Prepared<'a> {
 
     fn finish(
         mut self,
+        markers_requested: bool,
     ) -> (
         GltfModel,
         GltfModelMaterialMaps,
         GltfModelPose,
+        Option<GltfMarkers>,
         Option<super::morph::MorphLoadData>,
     ) {
         let pose = GltfModelPose::from_document(&self.scene, &self.document);
+        let markers = markers_requested.then(|| GltfMarkers::take_from_scene(&mut self.scene));
         if self.model.parts.is_empty() {
             self.model.bounds_min = Vec3::ZERO;
             self.model.bounds_max = Vec3::ZERO;
@@ -460,7 +464,7 @@ impl<'a> Prepared<'a> {
         let material_maps = GltfModelMaterialMaps {
             parts: self.material_parts,
         };
-        (self.model, material_maps, pose, self.morph)
+        (self.model, material_maps, pose, markers, self.morph)
     }
 }
 
@@ -509,6 +513,8 @@ pub struct GltfModelLoader<'a> {
     result: Option<GltfModel>,
     material_maps: Option<GltfModelMaterialMaps>,
     pose: Option<GltfModelPose>,
+    markers_requested: bool,
+    markers: Option<GltfMarkers>,
     morph_requested: bool,
     morph: Option<super::morph::MorphLoadData>,
     morph_pose: Option<GltfModelPose>,
@@ -538,12 +544,57 @@ impl<'a> GltfModelLoader<'a> {
             result: None,
             material_maps: None,
             pose: None,
+            markers_requested: false,
+            markers: None,
             morph_requested: false,
             morph: None,
             morph_pose: None,
             error: None,
             _render_thread: PhantomData,
         })
+    }
+
+    /// Creates a loader that also returns an owned static marker sidecar.
+    ///
+    /// This reuses the ordinary parse and retains no extra geometry or images
+    /// in [`GltfMarkers`]. Take it once with [`Self::take_markers`] after
+    /// completion. Ordinary [`Self::new`] does not retain a marker result.
+    /// To combine markers with [`Self::new_with_morph`], call
+    /// [`Self::enable_markers`] before the first poll instead.
+    ///
+    /// ```no_run
+    /// use macroquad::prelude::*;
+    /// # async fn load(bytes: &[u8]) -> Result<GltfMarkers, String> {
+    /// let mut load = GltfModelLoader::new_with_markers(bytes, GltfLoadSettings::default())?;
+    /// while load.poll()?.stage != GltfLoadStage::Complete { next_frame().await; }
+    /// let markers = load.take_markers().unwrap();
+    /// let model = load.take_model().unwrap();
+    /// # Ok(markers) }
+    /// ```
+    pub fn new_with_markers(bytes: &'a [u8], settings: GltfLoadSettings) -> Result<Self, String> {
+        let mut loader = Self::new(bytes, settings)?;
+        loader.enable_markers()?;
+        Ok(loader)
+    }
+
+    /// Requests static markers before the first poll, including on a morph load.
+    ///
+    /// Repeating this before parsing is harmless. Once polling has begun, this
+    /// returns an error without changing the loader or any existing results.
+    /// Markers remain at rest when morphs or a hierarchy pose change.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let mut load = GltfModelLoader::new_with_morph(&[], GltfLoadSettings::default()).unwrap();
+    /// load.enable_markers().unwrap();
+    /// assert!(load.take_markers().is_none());
+    /// ```
+    pub fn enable_markers(&mut self) -> Result<(), String> {
+        if self.progress.stage != GltfLoadStage::Parse || self.progress.completed != 0 {
+            return Err("glTF markers must be enabled before the first poll".into());
+        }
+        self.markers_requested = true;
+        Ok(())
     }
 
     /// Opts into validated CPU morph inputs and exact chunk-to-source mapping.
@@ -598,6 +649,7 @@ impl<'a> GltfModelLoader<'a> {
             self.result = None;
             self.material_maps = None;
             self.pose = None;
+            self.markers = None;
             self.morph = None;
             self.morph_pose = None;
             self.progress = GltfLoadProgress::new(GltfLoadStage::Failed, 0);
@@ -628,11 +680,13 @@ impl<'a> GltfModelLoader<'a> {
                 PreflightImages => GltfLoadProgress::new(LoadTextures, prepared.texture_jobs.len()),
                 LoadTextures => GltfLoadProgress::new(ConvertMeshes, prepared.primitive_jobs.len()),
                 ConvertMeshes => {
-                    let (model, maps, pose, morph) = self.prepared.take().unwrap().finish();
+                    let (model, maps, pose, markers, morph) =
+                        self.prepared.take().unwrap().finish(self.markers_requested);
                     self.result = Some(model);
                     self.material_maps = Some(maps);
                     self.morph_pose = self.morph_requested.then(|| pose.clone());
                     self.pose = Some(pose);
+                    self.markers = markers;
                     self.morph = morph;
                     GltfLoadProgress::new(Complete, 0)
                 }
@@ -661,7 +715,10 @@ impl<'a> GltfModelLoader<'a> {
     /// Releases partial work or an untaken result. Repeated cancellation is safe.
     ///
     /// Failure remains `Failed`; cancellation after taking a model is a no-op.
-    /// A model already returned by [`Self::take_model`] remains valid.
+    /// A model already returned by [`Self::take_model`] remains valid. This
+    /// existing no-op also leaves any untaken sidecars available. Otherwise,
+    /// cancellation releases all untaken results; an already taken marker,
+    /// pose or material-map result remains independently owned by the caller.
     /// ```
     /// use macroquad::prelude::*;
     /// let mut load = GltfModelLoader::new(&[], GltfLoadSettings::default()).unwrap();
@@ -678,6 +735,7 @@ impl<'a> GltfModelLoader<'a> {
         self.result = None;
         self.material_maps = None;
         self.pose = None;
+        self.markers = None;
         self.morph = None;
         self.morph_pose = None;
         self.error = Some("glTF loading cancelled".into());
@@ -725,6 +783,33 @@ impl<'a> GltfModelLoader<'a> {
     /// ```
     pub fn take_pose(&mut self) -> Option<GltfModelPose> {
         self.pose.take()
+    }
+
+    /// Takes an opted-in static marker sidecar once after successful completion.
+    ///
+    /// Pending, cancelled, failed and non-opted-in loads return `None`. The
+    /// model, material-map, pose and morph takes leave this sidecar in place,
+    /// and taking markers leaves those results in place. No `GltfScene`, mesh
+    /// arrays, decoded images or GPU handles are returned or retained by it.
+    /// Its rest-world shapes, facing and tags use the same scene-local node
+    /// indices as the corresponding model and standalone scene loader.
+    ///
+    /// Dropping a loader releases its untaken sidecar. Cancellation does so too
+    /// while the loader still owns its completed model; after a model take,
+    /// cancellation keeps its existing no-op behavior and markers remain
+    /// available. A taken sidecar owns its data independently of subsequent
+    /// cancellation/drop, input bytes and other results. Apply the same
+    /// [`GltfMarkers::with_up_axis`] conversion to it as to the model and pose.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let mut load = GltfModelLoader::new_with_markers(&[], GltfLoadSettings::default()).unwrap();
+    /// assert!(load.take_markers().is_none());
+    /// load.cancel();
+    /// assert!(load.take_markers().is_none());
+    /// ```
+    pub fn take_markers(&mut self) -> Option<GltfMarkers> {
+        self.markers.take()
     }
 
     /// Takes an opted-in load as a shared source for independent morph instances.

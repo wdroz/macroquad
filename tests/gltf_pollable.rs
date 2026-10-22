@@ -51,9 +51,9 @@ fn fixture(corrupt_second_image: bool) -> Vec<u8> {
         "scenes":[{"nodes":[0]}],
         "nodes":[
             {"name":"root","children":[1,2,3]},
-            {"name":"first","mesh":2,"translation":[-1.5,0,0]},
-            {"name":"second","mesh":1},
-            {"name":"reflected","mesh":2,"translation":[1.5,0,0],"scale":[-1,1,1]}
+            {"name":"first","mesh":2,"translation":[-1.5,0,0],"extras":{"mq_role":"collider","mq_tag":"wall"}},
+            {"name":"second","mesh":1,"extras":{"mq_role":"trigger","mq_shape":"sphere","mq_tag":"goal"}},
+            {"name":"reflected","mesh":2,"translation":[1.5,0,0],"scale":[-1,1,1],"extras":{"mq_role":"spawn","mq_tag":"player"}}
         ],
         "meshes":[
             {"name":"unused","primitives":[primitive(0)]},
@@ -264,14 +264,18 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     }
     let reference_textures = telemetry::textures_count();
 
-    let mut loader = GltfModelLoader::new(&bytes, settings()).unwrap();
+    let mut loader = GltfModelLoader::new_with_markers(&bytes, settings()).unwrap();
     let mut model_trace = vec![loader.progress()];
     assert_eq!(loader.progress().stage, GltfLoadStage::Parse);
     assert!(loader.take_model().is_none());
+    assert!(loader.take_markers().is_none());
     while loader.progress().stage != GltfLoadStage::Complete {
         let before = loader.progress();
         let previous_textures = telemetry::textures_count();
         let progress = loader.poll().unwrap();
+        if progress.stage != GltfLoadStage::Complete {
+            assert!(loader.take_markers().is_none());
+        }
         assert_progress_step(before, progress);
         let new_textures = telemetry::textures_count() - previous_textures;
         assert!(new_textures <= 1, "one poll uploaded {new_textures} images");
@@ -291,6 +295,14 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     let model = loader.take_model().unwrap();
     assert!(loader.take_model().is_none());
     loader.cancel(); // A taken model no longer belongs to the loader.
+    let markers = loader.take_markers().unwrap();
+    assert!(loader.take_markers().is_none());
+    let scene = GltfScene::from_bytes(&bytes).unwrap();
+    assert_eq!(markers, GltfMarkers::from_scene(&scene));
+    assert_eq!(markers.solid_colliders().count(), 1);
+    assert_eq!(markers.trigger_colliders().count(), 1);
+    assert_eq!(markers.marker_tag(markers.spawns[0].node), Some("player"));
+    drop(scene);
     drop(loader);
     assert_same_model(&model, &reference);
     assert_eq!(model.resource_report().textures.len(), 3);
@@ -412,7 +424,7 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     // and after completion while the output is still owned by the loader.
     for drop_only in [false, true] {
         for (stop, expected) in model_trace.iter().enumerate() {
-            let mut loader = GltfModelLoader::new(&bytes, settings()).unwrap();
+            let mut loader = GltfModelLoader::new_with_markers(&bytes, settings()).unwrap();
             for _ in 0..stop {
                 loader.poll().unwrap();
             }
@@ -422,6 +434,7 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
                 assert_eq!(loader.progress().stage, GltfLoadStage::Cancelled);
                 assert!(loader.poll().is_err());
                 assert!(loader.take_model().is_none());
+                assert!(loader.take_markers().is_none());
                 loader.cancel();
             }
             drop(loader);
@@ -447,7 +460,7 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     }
 
     let invalid = fixture(true);
-    let mut loader = GltfModelLoader::new(&invalid, settings()).unwrap();
+    let mut loader = GltfModelLoader::new_with_markers(&invalid, settings()).unwrap();
     let mut saw_first_texture = false;
     let error = loop {
         match loader.poll() {
@@ -469,6 +482,7 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     assert_eq!(loader.progress().stage, GltfLoadStage::Failed);
     assert!(loader.poll().is_err());
     assert!(loader.take_model().is_none());
+    assert!(loader.take_markers().is_none());
     assert_resources(reference_textures); // Even a still-live failed handle releases resources.
     drop(loader);
 
@@ -485,7 +499,7 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     }
     .to_vec()
     .unwrap();
-    let mut loader = GltfModelLoader::new(&invalid_uvs, settings()).unwrap();
+    let mut loader = GltfModelLoader::new_with_markers(&invalid_uvs, settings()).unwrap();
     while loader.progress().stage != GltfLoadStage::ConvertMeshes {
         loader.poll().unwrap();
     }
@@ -498,6 +512,7 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     );
     assert_eq!(loader.progress().stage, GltfLoadStage::Failed);
     assert!(loader.take_model().is_none());
+    assert!(loader.take_markers().is_none());
     assert_resources(reference_textures);
     loader.cancel();
     assert_eq!(loader.poll().unwrap_err(), error);
@@ -515,6 +530,13 @@ async fn pollable_loading_yields_matches_sync_and_releases_every_partial_state()
     drop(restarted);
     assert_resources(reference_textures);
     drop(reference);
+    assert_resources(baseline);
+    // The still-live marker sidecar cannot keep any texture or geometry alive.
+    assert_eq!(
+        markers.marker_rotation(markers.spawns[0].node).unwrap() * Vec3::Y,
+        Vec3::Y
+    );
+    drop(markers);
     assert_resources(baseline);
     set_gltf_resource_diagnostics_enabled(false);
     set_default_camera();

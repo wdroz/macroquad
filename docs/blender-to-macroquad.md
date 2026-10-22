@@ -212,20 +212,30 @@ use macroquad::gltf::GltfColliderShape;
 #[macroquad::main("Level")]
 async fn main() {
     let bytes = load_file("assets/room.glb").await.expect("file");
-    let scene = GltfScene::from_bytes(&bytes).expect("parse");
-    let cpu = GltfModel::from_bytes(&bytes).expect("draw model");
+    let mut source = GltfModelLoader::new_with_markers(
+        &bytes, GltfLoadSettings::default(),
+    ).expect("loader");
+    while source.poll().expect("load").stage != GltfLoadStage::Complete {
+        clear_background(DARKGRAY);
+        draw_text("Loading level...", 20.0, 30.0, 24.0, WHITE);
+        next_frame().await;
+    }
+    // Each take is independent. Both results reuse the same scene parse.
+    let markers = source.take_markers().expect("static markers");
+    let cpu = source.take_model().expect("draw model");
+    drop(source); // Releases the input borrow and untaken pose/material sidecars.
     // false releases this model's CPU vertices and indices after upload.
     let model = RetainedGltfModel::from_model(cpu, false).expect("upload");
 
-    let mut center = scene
+    let mut center = markers
         .spawns
         .iter()
-        .find(|spawn| scene.marker_tag(spawn.node) == Some("player"))
+        .find(|spawn| markers.marker_tag(spawn.node) == Some("player"))
         .map(|spawn| spawn.position)
         .expect("player_spawn");
     let (mut aabbs, mut obbs, mut spheres, mut capsules) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-    for collider in scene.solid_colliders() {
+    for collider in markers.solid_colliders() {
         match collider.shape {
             GltfColliderShape::Aabb(shape) => aabbs.push(shape),
             GltfColliderShape::Obb(shape) => obbs.push(shape),
@@ -233,10 +243,10 @@ async fn main() {
             GltfColliderShape::Capsule(shape) => capsules.push(shape),
         }
     }
-    // Markers are all we need after extracting the solids and spawn. Drop the
-    // separate CPU scene's mesh/image data as well as the input file bytes.
-    let triggers: Vec<_> = scene.trigger_colliders().cloned().collect();
-    drop(scene);
+    // The marker sidecar has no geometry or images. Keep it instead when the
+    // game needs its tags, rest-world matrices or parented facing later.
+    let triggers: Vec<_> = markers.trigger_colliders().cloned().collect();
+    drop(markers);
     drop(bytes);
     let radius = 0.4;
 
@@ -283,7 +293,35 @@ async fn main() {
 }
 ```
 
-`GltfScene::from_bytes` and `GltfModel::from_bytes` each parse the buffer. Call both when you need markers and a draw. `GltfModel` has no method that reuses an existing `GltfScene`. When the camera's up axis is not glTF +Y, call `with_up_axis` on each result with that same axis **before** retained upload.
+`new_with_markers` reuses the draw loader's existing scene parse. Its owned
+`GltfMarkers` result preserves collider/spawn order, duplicate names,
+scene-local node indices, tags and rest-world facing. Use `marker_tag`,
+`rest_world`, `marker_rotation`, `solid_colliders` and `trigger_colliders` as
+on the static scene data; all loaded nodes have world/tag metadata, including
+tag-only nodes. There are no mesh arrays, images, local transforms or parent
+links in this result. A draw instance transform or animated pose does not move
+these markers.
+
+For a camera up axis other than glTF +Y, call `with_up_axis(up)` separately on
+the CPU model, markers and any `take_pose()` result with that same axis
+**before** retained upload. For example, `cpu.with_up_axis(Vec3::Z)` and
+`markers.with_up_axis(Vec3::Z)` match a Z-up camera; converting one never
+changes the other. Marker facing includes the same rotated parent world.
+
+Marker/model/material-map/pose results can be taken once in any order after
+completion. `take_markers()` is `None` while pending, cancelled, failed,
+without opt-in or after taking it. Drop releases untaken results. Cancellation
+releases untaken results while the loader still owns its model; after taking
+the model it preserves its existing no-op behavior and remaining sidecars stay
+available. Taken markers survive cancellation, loader drop and release of
+the input bytes. To combine markers with `new_with_morph`, call
+`enable_markers()` before the first poll; late requests fail without mutation.
+
+`GltfScene::from_bytes` remains the CPU path when full geometry, images or
+hierarchy are needed. It and `GltfModel::from_bytes` still parse separately;
+`GltfModel` does not consume an existing scene. `GltfMarkers::from_scene`
+copies only static metadata from a scene that is already loaded. Shared marker
+loading makes no memory bound or performance promise.
 
 `RetainedGltfModel` clones share immutable GPU geometry and textures. A clone
 with `draw(transform)` places another instance of that geometry, but does not
@@ -751,8 +789,8 @@ that scene keeps its decoded images and local mesh arrays alive even after
 `RetainedGltfModel::from_model(cpu, false)` releases draw-model geometry.
 Use `GltfScene::from_bytes_with_image_limits(bytes, limits)` to apply the same
 per-image rejection policy to that CPU loader's sampled base-color images.
-Extract the markers you need and drop the scene data when appropriate, as in
-the sample. `model.stats` reports counts rather than memory estimates or
+Extract the markers you need and drop full scene data when appropriate, or use
+the shared `GltfMarkers` sidecar as in the sample. `model.stats` reports counts rather than memory estimates or
 process/driver memory measurements.
 
 Node `world` is the glTF hierarchy: local translation, rotation, and scale composed with the parent. Mesh positions stay in mesh-local space on `GltfScene`. `GltfModel` has already multiplied them by `world`.
@@ -765,6 +803,7 @@ The committed files below make builds and tests independent of Blender. The room
 | --- | --- |
 | `examples/assets/triangle.gltf` and `triangle.glb` | A small hierarchy, one box collider (`crate_collider`, extras), one spawn (`player_spawn`, name suffix), and a 1×1 base-color image (`pixel`, RGBA 10, 20, 30, 255). |
 | `examples/assets/textured_quad.glb` | A 4×4 checkerboard quad used by `examples/gltf_textured.rs`. |
+| `examples/support/gltf_markers_fixture.rs` | Adds original parented/duplicate-name markers to the checkerboard in memory for `gltf_pollable` and sidecar tests. |
 | `examples/assets/room.glb` | Original 10-node room: four visible cubes, four box-collider empties, one sphere trigger and one spawn. No textures or external files. |
 | `examples/assets/gen_room_blender.py` | Regenerates the room with Blender 4.5+; resets a separate headless scene and exports explicit roles, empty shapes and tags with `export_extras=True`. |
 | `examples/assets/gen_triangle_gltf.py` | Regenerates the triangle pair. Does not need Blender. |

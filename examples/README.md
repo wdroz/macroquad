@@ -544,13 +544,21 @@ reminder and exits. Escape quits the feature-enabled sample.
 
 ## `gltf_pollable`
 
-Requires `--features gltf`. With no argument it loads the small checkerboard;
+Requires `--features gltf`. With no argument it loads the small checkerboard
+with original parented markers (three solids, one trigger and three spawns);
 an optional GLB path is read with `load_file` first. It starts paused so the
 individual stages are easy to inspect. Space toggles continuous construction,
 N advances one unit, C cancels, R restarts, and Escape exits. A moving indicator
 continues while loading is paused. The example calls `GltfModelLoader::poll`
 once per frame, then gives the completed model to `RetainedGltfModelLoader` for
 one retained chunk upload per poll. The parsed geometry and textures are reused.
+It opts into `new_with_markers`, takes the owned marker sidecar independently
+of the model, then drops the source loader. The readout selects the player by
+tag despite duplicate spawn names; yellow points and green +X facing lines
+use rest-world marker data. This is a static snapshot, with no hierarchy or
+animation integration. The camera and both results retain glTF Y-up. Applying
+another up axis requires converting the marker and model results separately
+with the same axis before retained upload.
 
 The display shows counts for the current stage, not an overall percentage.
 Parsing, converting one primitive, and decoding one image remain synchronous;
@@ -560,6 +568,12 @@ and dropped handles release partial ownership; ordinary frames collect unused
 resources, and restart also uses the explicit retirement boundary. This is
 render-thread loading, with no worker decoding or strict frame-time guarantee.
 The example builds without `gltf` and prints a feature reminder.
+
+`tests/gltf_marker_sidecar.rs` compares the shared result with a standalone
+scene, including all collider shapes, source-order scene-local IDs, tags,
+parented facing, non-Y up, all 24 model/marker/map/pose take orders and terminal
+states. `tests/gltf_pollable.rs` also exercises sidecar parity and lifetime
+during real GPU construction, cancellation, conversion failure and cleanup.
 
 ## `gltf_materials`
 
@@ -695,7 +709,7 @@ requested/effective reporting, rounding and pacing limitations.
 | Path | Role |
 | --- | --- |
 | `assets/triangle.gltf`, `assets/triangle.glb` | Hierarchy, box collider, spawn, and a 1×1 base-color image used by the loader tests. Regenerate with `assets/gen_triangle_gltf.py`. |
-| `assets/textured_quad.glb` | Checkerboard drawn by `gltf_textured`, `gltf_retained` and `gltf_pollable`. Regenerate with `assets/gen_textured_quad.py`. |
+| `assets/textured_quad.glb` | Checkerboard drawn by `gltf_textured` and `gltf_retained`; `support/gltf_markers_fixture.rs` adds original markers in memory for `gltf_pollable` and its tests. Regenerate with `assets/gen_textured_quad.py`. |
 
 Both generators use Python and do not require Blender. Historical game-round
 prototypes, including Marble Maze and Cinder Court, and their level assets are

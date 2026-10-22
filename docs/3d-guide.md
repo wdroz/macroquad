@@ -238,8 +238,11 @@ After `take_model()` returns the completed `GltfModel`, pass it to
 It validates every chunk before uploading any buffers, then uploads at most
 one chunk per poll. The existing parsed and baked geometry and GPU textures are
 reused. `false` releases CPU geometry after conversion; `true` keeps it through
-the result's `cpu_model()`. This does not provide a shared parse with the
-separate `GltfScene` constructor.
+the result's `cpu_model()`. For static colliders, triggers and spawns alongside
+the draw model, use `GltfModelLoader::new_with_markers` and `take_markers()`.
+They reuse the existing parse without retaining CPU geometry or decoded images
+in the marker result. A separate full `GltfScene` constructor still parses
+independently when CPU geometry, images or hierarchy are needed.
 
 ```rust,no_run
 use macroquad::prelude::*;
@@ -248,7 +251,7 @@ let settings = GltfLoadOptions::default().with_image_limits(GltfImageLimits {
     max_source_pixels: Some(2048 * 2048),
     max_decoded_bytes: Some(16 * 1024 * 1024),
 });
-let mut source = GltfModelLoader::new(bytes, settings)?;
+let mut source = GltfModelLoader::new_with_markers(bytes, settings)?;
 let cpu = loop {
     if is_key_pressed(KeyCode::Escape) {
         source.cancel();
@@ -260,7 +263,10 @@ let cpu = loop {
     if let Some(model) = source.take_model() { break model; }
     next_frame().await;
 };
-drop(source); // Releases the source-byte borrow and remaining parse metadata.
+let markers = source.take_markers().unwrap(); // Independent of take_model.
+let player = markers.spawns.iter()
+    .find(|spawn| markers.marker_tag(spawn.node) == Some("player"));
+drop(source); // Releases the source-byte borrow and untaken sidecars.
 let mut upload = RetainedGltfModelLoader::new(cpu, false);
 loop {
     if is_key_pressed(KeyCode::Escape) {
@@ -298,6 +304,33 @@ The synchronous `GltfModel::from_bytes*` and `RetainedGltfModel::from_model`
 constructors remain available. See `examples/gltf_pollable.rs` for loading,
 single-unit stepping, pause, cancellation and restart with a moving screen.
 
+`GltfMarkers` owns collider/spawn lists in source preorder, plus tags and rest
+world matrices indexed by the same scene-local node IDs as the draw model.
+Duplicate names stay distinct. `solid_colliders()` and `trigger_colliders()`
+borrow original entries; `marker_tag(node)`, `rest_world(node)` and
+`marker_rotation(node)` provide static lookup, including parented facing.
+Metadata covers every loaded node, including tag-only nodes, without retaining
+parent links or local transforms. `GltfMarkers::from_scene(&scene)` copies the
+same data from an already loaded scene without copying meshes or images.
+
+Ordinary `new` does not retain a marker result. `enable_markers()` before the
+first poll also composes with `new_with_morph`; later calls return an error
+without changing progress or results. `take_markers()` returns `None` while
+pending, after failure/cancellation, without opt-in, or after a previous take.
+On completion, model, marker, material-map and pose takes are independent and
+once-only. Dropping the loader releases any untaken result. Cancellation also
+releases untaken results while it still owns the completed model; after the
+model is taken, cancellation preserves its existing no-op behavior and leaves
+remaining sidecars available. Already taken results survive cancellation,
+loader drop and release of the input bytes.
+
+Apply `with_up_axis(up)` separately to the model, marker result and any pose
+sidecar with the same `up` before retained upload. Marker conversion matches
+`GltfScene`: it rotates shapes, positions and rest world matrices, preserving
+names, tags, node indices and order. These are rest snapshots; draw instance
+transforms, hierarchy edits and animations do not update them. This avoids a
+second parse for static markers; it makes no memory or performance promise.
+
 ## Loading and materials
 
 The optional `gltf` feature provides two loading paths. `GltfScene::from_bytes`
@@ -305,7 +338,9 @@ parses hierarchy, mesh data, colliders, triggers, spawns, and sampled base-color
 images without opening a window. `GltfModel::from_bytes` requires a running
 macroquad application and uploads textures while producing drawable chunks.
 The two calls parse independently. Their `with_up_axis` helpers must use the
-same axis before converting the draw model to retained geometry.
+same axis before converting the draw model to retained geometry. Use the
+[pollable marker sidecar](#pollable-gltf-construction) when only static markers
+are needed alongside drawing.
 
 Marker roles prefer recognized `mq_role` extras, then case-sensitive name
 endings `_collider`, `_trigger`, and `_spawn`. One optional `.<digits>` Blender

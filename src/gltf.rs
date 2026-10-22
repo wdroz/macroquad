@@ -57,7 +57,9 @@
 //! reject oversized source images before decoding; its RGBA8 estimate does
 //! not bound decoder scratch memory or total scene memory. If only drawing is needed, load a
 //! [`crate::gltf_draw::GltfModel`] directly; parse a [`GltfScene`] as well when
-//! the application needs its CPU geometry, images, node hierarchy, or markers.
+//! the application needs its CPU geometry, images or node hierarchy. For static
+//! markers alone, [`crate::gltf_draw::GltfModelLoader::new_with_markers`] returns
+//! an owned [`GltfMarkers`] sidecar from the draw loader's existing parse.
 //! A [`crate::gltf_draw::RetainedGltfModel`] can share the uploaded geometry
 //! across draws, but its instance transform does not move this scene's markers.
 //!
@@ -125,12 +127,14 @@ use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
 use crate::math::{Aabb, Capsule, Obb, Sphere, SweepHit};
 
+mod animation;
 pub(crate) mod image_limits;
+mod markers;
 pub(crate) mod material_maps;
 mod morph;
-mod animation;
 pub use animation::*;
 pub use image_limits::GltfImageLimits;
+pub use markers::GltfMarkers;
 pub use material_maps::{
     GltfMaterialMap, GltfMaterialMaps, GltfPrimitiveMaterialMaps, GltfUvTransform,
 };
@@ -903,18 +907,7 @@ impl GltfScene {
     /// assert_eq!(scene.marker_rotation(usize::MAX), None);
     /// ```
     pub fn marker_rotation(&self, node: usize) -> Option<Quat> {
-        let world = self.nodes.get(node)?.world;
-        let determinant = world.determinant();
-        if !world.is_finite() || determinant == 0.0 {
-            return None;
-        }
-        let (_, rotation, _) = world.to_scale_rotation_translation();
-        let length = rotation.length();
-        if rotation.is_finite() && length.is_finite() && length > 0.0 {
-            Some(rotation / length)
-        } else {
-            None
-        }
+        markers::world_rotation(self.nodes.get(node)?.world)
     }
 
     /// Rotates the scene so glTF +Y points along `up`.
@@ -941,6 +934,9 @@ impl GltfScene {
     /// [`crate::gltf_draw::GltfModel`] parses the file on its own. Call
     /// [`GltfModel::with_up_axis`](crate::gltf_draw::GltfModel::with_up_axis)
     /// with the same `up` so the drawn vertices match these markers.
+    /// For markers alone alongside drawing, use the shared-parse
+    /// [`crate::gltf_draw::GltfModelLoader::new_with_markers`] and convert its
+    /// [`GltfMarkers`] result with the same `up` instead of loading this scene.
     ///
     /// # Example
     ///
