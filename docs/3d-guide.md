@@ -1281,6 +1281,63 @@ let first = if sphere_hit.hit.t < box_hit.hit.t {
 assert!(first.t > 0.0);
 ```
 
+With `gltf` enabled, `GltfColliderShape::ray_intersect(origin, direction)`
+dispatches to the existing AABB, OBB, sphere or capsule ray query without
+allocation. It preserves the complete `RayHit` exactly, including each
+primitive's inside/boundary-origin normals, zero/nonunit-direction behavior,
+invalid-input rules and numerical limits. It does not run the stricter bounds
+validation first or normalize the ray. `t` is the parameter of
+`origin + direction * t`, a world distance only for a unit direction. The
+receiver, ray, point and normal are in world space, with no assumed up axis.
+A shape returned by `hierarchy.collider_shape(&scene, collider)` is one static
+snapshot; it does not follow subsequent pose changes.
+
+Picking policy belongs to the caller. This complete-list recipe excludes
+triggers, restricts hits to a closed parameter range, and keeps the lower
+`scene.colliders` index on exact equal-time hits:
+
+```rust
+use macroquad::prelude::*;
+
+fn pick_solid(scene: &GltfScene, ray: &Ray, max_t: f32) -> Option<(usize, RayHit)> {
+    if !ray.origin.is_finite() || !ray.direction.is_finite() || max_t.is_nan() || max_t < 0.0 {
+        return None;
+    }
+    let mut nearest: Option<(usize, RayHit)> = None;
+    for (index, collider) in scene.colliders.iter().enumerate() {
+        if collider.trigger {
+            continue;
+        }
+        let Some(hit) = collider.shape.ray_intersect(ray.origin, ray.direction) else {
+            continue;
+        };
+        if hit.t > max_t || nearest.is_some_and(|(_, previous)| hit.t >= previous.t) {
+            continue;
+        }
+        nearest = Some((index, hit));
+    }
+    nearest
+}
+```
+
+An optional `UniformGrid::query_ray(ray, max_t)` can supply geometric candidates
+under the caller's retained index-to-collider mapping. Its numeric order may visit a
+farther shape first; run every candidate's exact shape query and compare `t`
+before choosing a hit. Bounds alone can hit a sphere/OBB/capsule that the ray
+misses. Keep complete candidates when any bounds snapshot is unavailable, as
+in the [bounds recipe](#shape-bounds-snapshots), and rebuild after changes.
+The grid's `f64` ray slabs and the primitives' `f32` results can disagree at
+rounded finite endpoints or grazing corners, even for ordinary coordinates.
+An unbounded grid ray avoids the finite-endpoint issue but can still omit a
+rounded corner hit. If preserving every delegated result matters, scan the
+complete list, as above. The maintained
+[room recipe](../examples/support/room_scene.rs) does so for its five colliders,
+with bounded picking, explicit equal-time ordering and an opt-in trigger flag;
+its separate goal-overlap query still demonstrates the grid and bounds fallback.
+[`gltf_room`](../examples/README.md#authored-gltf-room) displays
+the selected marker and a red dot; holding T permits triggers. Neither the
+dispatcher nor the recipe picks rendered mesh triangles or moves a body.
+
 `Camera3D::screen_to_ray` unprojects a screen point into a `Ray`. The point is in pixels of the surface the camera draws to, origin at the top left, y down. A window uses logical pixels: `mouse_position_logical()` (the same units as `mouse_position()` and `screen_width()`). `mouse_position_physical()` is framebuffer pixels and misses the center when the display density is not 1. A render target uses the texture's pixel size instead of the logical window. A viewport is that camera's GL viewport, converted the same way as `Camera2D::world_to_screen`, in the same pixel space as the surface. The direction is a unit vector. A perspective ray starts at `position`, so `t` is the distance from the camera. An orthographic ray starts on the near plane and stays parallel to the look direction. `examples/picking_ray.rs` highlights the box under the mouse. `examples/ray_cast.rs` still builds its ray by hand.
 
 The viewport changes the pixel rectangle, not the projection aspect. Set

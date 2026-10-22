@@ -125,7 +125,7 @@ use std::{
 
 use glam::{Mat3, Mat4, Quat, Vec2, Vec3};
 
-use crate::math::{Aabb, Capsule, Obb, Sphere, SweepHit};
+use crate::math::{Aabb, Capsule, Obb, RayHit, Sphere, SweepHit};
 
 mod animation;
 pub(crate) mod image_limits;
@@ -360,7 +360,8 @@ pub struct GltfImage {
 /// See the module docs for which node becomes which variant. [`Self::overlaps_sphere`]
 /// and [`Self::overlaps_aabb`] test every variant; [`Self::sweep_aabb`] and
 /// [`Self::sweep_sphere`] sweep an incoming body against every variant. Games
-/// need not match on the shape by hand. [`Self::bounding_aabb`] supplies a
+/// need not match on the shape by hand. [`Self::ray_intersect`] queries one ray
+/// against every variant. [`Self::bounding_aabb`] supplies a
 /// conservative world-space snapshot for caller-owned broadphase candidates.
 ///
 /// # Example
@@ -395,6 +396,40 @@ pub enum GltfColliderShape {
 }
 
 impl GltfColliderShape {
+    /// Intersects one world-space ray with this static world-space snapshot.
+    ///
+    /// This allocation-free dispatch returns [`Aabb::ray_intersect`],
+    /// [`Obb::ray_intersect`], [`Sphere::ray_intersect`] or
+    /// [`Capsule::ray_intersect`] unchanged, including the primitive's
+    /// inside/boundary-origin normals, zero-direction behavior, invalid-input
+    /// rules and numerical limits. It does not normalize `direction` or validate
+    /// the shape separately. [`RayHit::t`] parameterizes
+    /// `origin + direction * t`; it is a world distance only for unit direction.
+    /// The point and normal are in world space, independent of the up axis.
+    ///
+    /// A shape returned by
+    /// [`GltfHierarchyPose::collider_shape`](crate::gltf_draw::GltfHierarchyPose::collider_shape)
+    /// describes only that pose and does not follow later changes. Callers
+    /// choose candidates, trigger policy, permitted ray range and nearest-hit
+    /// or equal-time policy; this method neither filters nor selects colliders.
+    ///
+    /// ```
+    /// use macroquad::prelude::*;
+    /// let shape = GltfColliderShape::Sphere(Sphere::new(Vec3::ZERO, 1.0));
+    /// let hit = shape.ray_intersect(vec3(-3.0, 0.0, 0.0), Vec3::X * 2.0).unwrap();
+    /// assert_eq!(hit.t, 1.0);
+    /// assert_eq!(hit.point, -Vec3::X);
+    /// assert_eq!(hit.normal, -Vec3::X);
+    /// ```
+    pub fn ray_intersect(&self, origin: Vec3, direction: Vec3) -> Option<RayHit> {
+        match *self {
+            GltfColliderShape::Aabb(aabb) => aabb.ray_intersect(origin, direction),
+            GltfColliderShape::Obb(obb) => obb.ray_intersect(origin, direction),
+            GltfColliderShape::Sphere(sphere) => sphere.ray_intersect(origin, direction),
+            GltfColliderShape::Capsule(capsule) => capsule.ray_intersect(origin, direction),
+        }
+    }
+
     /// Returns a checked, conservative world-space AABB for this snapshot.
     ///
     /// This allocation-free dispatcher preserves a finite, ordered [`Aabb`]

@@ -480,7 +480,18 @@ world AABB from `collider.shape.bounding_aabb()` under each collider's caller-ch
 to `scene.colliders` yourself, and query by AABB or ray. Returned indices are
 unique and numerically sorted; they do not imply nearest-hit order or solid
 roles. Keep triggers separate and still test the original collider shape.
-The helper returns a checked static snapshot: valid AABBs are preserved exactly,
+For picking, `collider.shape.ray_intersect(ray.origin, ray.direction)` returns
+the original AABB/OBB/sphere/capsule ray result unchanged. Use the same world-space
+ray direction for every candidate, enforce the caller's `max_t`, and compare
+exact hit times; a grid candidate encountered first may be farther away.
+The room scans its complete tiny collider list for picking: grid ray slabs use
+`f64` and can omit a primitive's rounded `f32` endpoint or grazing-corner hit.
+Choose equal-time and trigger policy explicitly. The
+[ray recipe](3d-guide.md#rays) keeps source-order ties and excludes triggers;
+the maintained room also offers an explicit trigger-picking flag. `t` is world
+distance only for a unit direction, and the helper adds no shape validation,
+normalization or nearest-hit policy beyond the delegated primitive query.
+The bounds helper returns a checked static snapshot: valid AABBs are preserved exactly,
 and sphere/capsule/OBB corners round outward. Degenerate finite shapes are valid;
 invalid inputs or an enclosure beyond finite `f32` return `None`. Keep complete
 candidates whenever a bound is unavailable, or test every unindexed shape
@@ -488,7 +499,8 @@ separately; do not silently skip it with `filter_map`. If the query's own bound
 is unavailable, query the complete set too. The maintained
 [room logic](../examples/support/room_scene.rs) demonstrates insertion under
 `scene.colliders` indices and explicit rebuilding, with exact trigger overlaps
-after candidate selection and a full-list fallback. Its sliding movement still
+after candidate selection, complete-list bounded ray picking with stable ties and an
+optional trigger policy, and a full-list fallback. Its sliding movement still
 uses all four solids.
 
 The [checked snapshot recipe](3d-guide.md#shape-bounds-snapshots) shows the

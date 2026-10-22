@@ -47,18 +47,38 @@ async fn main() {
             center,
             wish.normalize_or_zero() * 3. * get_frame_time().min(0.05),
         );
-        clear_background(DARKGRAY);
-        set_camera(&Camera3D {
+        let camera = Camera3D {
             position: vec3(10., 11., 13.),
             target: Vec3::ZERO,
             up: Vec3::Y,
             ..Default::default()
-        });
+        };
+        let ray = camera.screen_to_ray(mouse_position_logical());
+        // Holding T permits trigger picking; normal picking considers solids.
+        // The camera ray is unit length, so this caller limit is 40 world units.
+        let picked = room.pick(&ray, 40., is_key_down(KeyCode::T));
+        clear_background(DARKGRAY);
+        set_camera(&camera);
         model.draw(Mat4::IDENTITY);
         draw_sphere(center, room_scene::RADIUS, None, YELLOW);
         draw_sphere_wires(room.goal.center, room.goal.radius, None, GREEN);
+        if let Some((_, hit)) = picked {
+            draw_sphere(hit.point, 0.08, None, RED);
+        }
         set_default_camera();
         draw_text("WASD move | R reset | Escape quit", 12., 26., 22., WHITE);
+        draw_text("Point to pick | Hold T: triggers", 12., 78., 20., WHITE);
+        if let Some((index, hit)) = picked {
+            let collider = &room.scene.colliders[index];
+            let tag = room.scene.marker_tag(collider.node).unwrap_or("untagged");
+            draw_text(
+                &format!("Picked {tag} (node {}, t {:.2})", collider.node, hit.t),
+                12.,
+                102.,
+                20.,
+                WHITE,
+            );
+        }
         if room.reached(center) {
             draw_text("Goal reached!", 12., 52., 22., GREEN);
         }

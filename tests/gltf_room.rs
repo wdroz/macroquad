@@ -3,7 +3,7 @@
 mod room_scene;
 use macroquad::{
     gltf::{GltfColliderShape, GltfScene},
-    math::{vec3, Sphere, Vec3},
+    math::{vec3, Aabb, Capsule, Ray, Sphere, Vec3},
 };
 use serde_json::Value;
 
@@ -81,6 +81,135 @@ fn goal_bounds_rebuild_and_complete_candidate_fallback_keep_exact_queries() {
     room.rebuild_bounds();
     assert!(room.reached(moved.center));
     assert!(!room.reached(Vec3::ZERO));
+}
+
+#[test]
+fn picking_checks_far_first_candidates_triggers_ties_and_closed_range() {
+    let mut room = room_scene::Room::load();
+    let far = GltfColliderShape::Aabb(Aabb::from_center_size(Vec3::X * 8., Vec3::ONE));
+    let trigger = GltfColliderShape::Sphere(Sphere::new(Vec3::X, 0.5));
+    let near = GltfColliderShape::Capsule(Capsule::new(vec3(4., -1., 0.), vec3(4., 1., 0.), 0.5));
+    let miss = GltfColliderShape::Sphere(Sphere::new(Vec3::Y * 10., 1.));
+    for (index, shape) in [far, trigger, near, near, miss].into_iter().enumerate() {
+        room.scene.colliders[index].shape = shape;
+        room.scene.colliders[index].trigger = index == 1;
+    }
+    room.rebuild_bounds();
+    let original = room.scene.clone();
+    let ray = Ray::new(Vec3::ZERO, Vec3::X * 2.);
+    let near_hit = near.ray_intersect(ray.origin, ray.direction).unwrap();
+    let trigger_hit = trigger.ray_intersect(ray.origin, ray.direction).unwrap();
+    // Source order starts with a farther solid at index 0. Equal hit times
+    // at indices 2/3 keep index 2; trigger 1 is included only by caller choice.
+    assert!(far.ray_intersect(ray.origin, ray.direction).unwrap().t > near_hit.t);
+    assert_eq!(room.pick(&ray, 10., false), Some((2, near_hit)));
+    assert_eq!(room.pick(&ray, near_hit.t, false), Some((2, near_hit)));
+    assert_eq!(room.pick(&ray, near_hit.t - 0.001, false), None);
+    assert_eq!(room.pick(&ray, 10., true), Some((1, trigger_hit)));
+    assert_eq!(room.pick(&ray, f32::INFINITY, false), Some((2, near_hit)));
+    assert_eq!(room.scene, original);
+
+    // An unrepresentable, distant enclosure disables the goal-query grid.
+    // Complete-list picking keeps the same nearest/trigger/tie/limit policy.
+    let unbounded = GltfColliderShape::Sphere(Sphere::new(Vec3::X * f32::MAX, 1.));
+    assert!(unbounded.bounding_aabb().is_none());
+    room.scene.colliders[4].shape = unbounded;
+    room.rebuild_bounds();
+    assert_eq!(room.pick(&ray, 10., false), Some((2, near_hit)));
+    assert_eq!(room.pick(&ray, near_hit.t, false), Some((2, near_hit)));
+    assert_eq!(room.pick(&ray, 10., true), Some((1, trigger_hit)));
+
+    let stationary = Ray::new(Vec3::X, Vec3::ZERO);
+    let inside = room.pick(&stationary, 0., true).unwrap();
+    assert_eq!(inside.0, 1);
+    assert_eq!(inside.1.t, 0.);
+    assert_eq!(inside.1.normal, Vec3::ZERO);
+    assert!(room.pick(&stationary, 0., false).is_none());
+    for max_t in [-1., f32::NEG_INFINITY, f32::NAN] {
+        assert!(room.pick(&ray, max_t, true).is_none());
+    }
+    for invalid in [
+        Ray::new(Vec3::NAN, Vec3::X),
+        Ray::new(Vec3::ZERO, Vec3::INFINITY),
+    ] {
+        assert!(room.pick(&invalid, 10., true).is_none());
+    }
+    for collider in &mut room.scene.colliders {
+        collider.trigger = true;
+    }
+    assert!(room.pick(&ray, 10., false).is_none());
+    assert_eq!(room.pick(&ray, 10., true), Some((1, trigger_hit)));
+}
+
+#[test]
+fn picking_keeps_rounded_primitive_hits_at_the_closed_parameter_limit() {
+    let mut room = room_scene::Room::load();
+    let shape = GltfColliderShape::Aabb(Aabb::from_min_max(
+        vec3(7., -1., -1.),
+        vec3(8., 1., 1.),
+    ));
+    for collider in &mut room.scene.colliders {
+        collider.shape = GltfColliderShape::Sphere(Sphere::new(Vec3::Y * 10., 1.));
+        collider.trigger = false;
+    }
+    room.scene.colliders[0].shape = shape;
+    room.rebuild_bounds();
+    let ray = Ray::new(Vec3::ZERO, Vec3::X * 5.);
+    let hit = shape.ray_intersect(ray.origin, ray.direction).unwrap();
+    // The delegated f32 entry time rounds down. A grid query bounded at that
+    // time would end before x = 7 in f64 and discard this valid closed-range hit.
+    assert!(f64::from(ray.direction.x) * f64::from(hit.t) < 7.);
+    let before = f32::from_bits(hit.t.to_bits() - 1);
+    assert_eq!(room.pick(&ray, hit.t, false), Some((0, hit)));
+    assert!(room.pick(&ray, before, false).is_none());
+
+    // A corner admitted by f32 slab rounding can also be rejected by an
+    // unbounded f64 grid ray. Full-list picking keeps the delegated result.
+    let corner = GltfColliderShape::Aabb(Aabb::from_min_max(
+        vec3(7., -1., -1.),
+        vec3(8., f32::from_bits(7f32.to_bits() - 1), 1.),
+    ));
+    room.scene.colliders[0].shape = corner;
+    room.rebuild_bounds();
+    let diagonal = Ray::new(Vec3::ZERO, vec3(5., 5., 0.));
+    let corner_hit = corner.ray_intersect(diagonal.origin, diagonal.direction).unwrap();
+    assert_eq!(corner_hit.t, hit.t);
+    assert_eq!(room.pick(&diagonal, corner_hit.t, false), Some((0, corner_hit)));
+    assert!(room.pick(&diagonal, before, false).is_none());
+
+    // Disabling the goal-query grid cannot change either picking result.
+    room.scene.colliders[4].shape =
+        GltfColliderShape::Sphere(Sphere::new(Vec3::X * f32::MAX, 1.));
+    room.rebuild_bounds();
+    assert_eq!(room.pick(&diagonal, corner_hit.t, false), Some((0, corner_hit)));
+    assert!(room.pick(&diagonal, before, false).is_none());
+    room.scene.colliders[0].shape = shape;
+    assert_eq!(room.pick(&ray, hit.t, false), Some((0, hit)));
+    assert!(room.pick(&ray, before, false).is_none());
+}
+
+#[test]
+fn picking_does_not_substitute_bounding_boxes_for_exact_shapes() {
+    let mut room = room_scene::Room::load();
+    for collider in &mut room.scene.colliders {
+        collider.shape = GltfColliderShape::Sphere(Sphere::new(Vec3::X * 4., 1.));
+        collider.trigger = false;
+    }
+    let far = GltfColliderShape::Aabb(Aabb::from_center_size(Vec3::X * 8., Vec3::splat(2.)));
+    room.scene.colliders[4].shape = far;
+    room.rebuild_bounds();
+    let ray = Ray::new(vec3(0., 0.9, 0.9), Vec3::X * 2.);
+    let sphere = room.scene.colliders[0].shape;
+    assert!(sphere
+        .bounding_aabb()
+        .unwrap()
+        .ray_intersect(ray.origin, ray.direction)
+        .is_some());
+    assert!(sphere.ray_intersect(ray.origin, ray.direction).is_none());
+    assert_eq!(
+        room.pick(&ray, 10., false),
+        Some((4, far.ray_intersect(ray.origin, ray.direction).unwrap()))
+    );
 }
 
 #[test]

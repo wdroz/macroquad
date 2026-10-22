@@ -784,19 +784,34 @@ The guides are [`docs/3d-guide.md`](../docs/3d-guide.md), [`docs/blender-to-macr
 `cargo run --features gltf --example gltf_room` loads the committed original
 [room](assets/room.glb), uploads its four meshes once and uses tagged empty
 colliders, a duplicate-suffixed spawn and a sphere trigger through public APIs.
-WASD moves, R resets/rebuilds marker bounds and Escape exits. The room keeps glTF Y-up.
+WASD moves, R resets/rebuilds marker bounds and Escape exits. Point at a marker
+to pick a solid; hold T to include triggers. A red dot and tag/node/time HUD
+show the nearest permitted hit within 40 world units. The room keeps glTF Y-up.
 Its [shared logic](support/room_scene.rs) inserts checked
 `GltfColliderShape::bounding_aabb()` snapshots under caller-owned indices into
 `scene.colliders`, and shows explicit `UniformGrid::rebuild` after world-shape
 changes. Current goal queries use grid candidates followed by exact shape
 overlaps; any unavailable collider/query bound falls back to complete candidates.
+Picking uses `GltfColliderShape::ray_intersect` on all five colliders, then
+compares exact hit times rather than using source order. Its caller policy keeps
+the lower `scene.colliders` index on equal times, applies a closed `max_t`
+range and explicitly chooses whether triggers participate. The dispatch keeps
+the primitive result, world-space snapshot and ray parameterization unchanged.
+Complete-list picking preserves delegated hits that can differ from the grid's
+`f64` ray slabs at rounded finite endpoints or grazing corners. The exact
+primitive hit time enforces the caller limit.
 Sliding keeps the full solid list, since slide deflection/recovery needs a
 separate candidate policy. Bounds are snapshots, not contact or sweep results.
 `cargo test --features gltf --test gltf_room` checks the same loading contract,
-wall blocking, trigger traversal, bounds rebuild/fallback and duplicate-name fallback without a window
+wall blocking, trigger traversal, bounds rebuild/fallback, far-first picking,
+equal-time/trigger/range policy and duplicate-name fallback without a window
 or Blender. See the [Blender guide](../docs/blender-to-macroquad.md#samples-in-this-repository)
 for headless regeneration and the separate six-object tutorial.
 `cargo test --features gltf --test gltf_bounds` compares bounds dispatch with
 the primitives, verifies allocation-free snapshots and checks grid candidates
 against complete narrowphase queries for posed and non-Y-up shapes. See the
 [shape bounds guide](../docs/3d-guide.md#shape-bounds-snapshots).
+`cargo test --features gltf --test gltf_ray` checks bit-for-bit primitive ray
+parity for all variants, inside/boundary/zero/nonunit and invalid inputs,
+degenerate shapes, posed/non-Y-up snapshots and allocation-free dispatch.
+See the [ray guide](../docs/3d-guide.md#rays) for caller-owned picking policy.

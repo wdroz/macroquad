@@ -1,6 +1,6 @@
 //! Shared public-API room contract; no window or Blender needed.
 use macroquad::gltf::{GltfColliderShape, GltfScene};
-use macroquad::math::{slide_sphere_solids, vec3, Aabb, Sphere, UniformGrid, Vec3};
+use macroquad::math::{slide_sphere_solids, vec3, Aabb, Ray, RayHit, Sphere, UniformGrid, Vec3};
 
 pub const BYTES: &[u8] = include_bytes!("../assets/room.glb");
 pub const RADIUS: f32 = 0.4;
@@ -86,7 +86,7 @@ impl Room {
         }
     }
 
-    /// Rebuild goal-query bounds after replacing world-space shape snapshots.
+    /// Rebuild query bounds after replacing world-space shape snapshots.
     /// A posed adaptation must preserve unchanged authored scene/collider data:
     /// derive collider_shape from that data for each pose, then replace query
     /// copies. Reusing an already posed collider would compound its pose delta.
@@ -117,6 +117,38 @@ impl Room {
         // The full tiny solid set also covers slide deflection/recovery.
         // Triggers are queried separately and never block the player.
         slide_sphere_solids(center, RADIUS, delta, &self.solids, &[], &[], &[])
+    }
+
+    /// Caller-owned picking: closed parameter range, optional triggers, and
+    /// lowest scene.colliders index on exact ties, regardless of visit order.
+    /// The primitive direction and complete RayHit are preserved unchanged.
+    pub fn pick(&self, ray: &Ray, max_t: f32, include_triggers: bool) -> Option<(usize, RayHit)> {
+        if !ray.origin.is_finite() || !ray.direction.is_finite() || max_t.is_nan() || max_t < 0.0 {
+            return None;
+        }
+        let mut nearest: Option<(usize, RayHit)> = None;
+        // Scan this tiny complete list. Grid ray slabs use f64 while primitive
+        // results use f32: endpoint/corner rounding can otherwise omit a
+        // delegated hit, even for an unbounded grid ray. The grid remains useful
+        // for the separate goal-overlap recipe below.
+        for (index, collider) in self.scene.colliders.iter().enumerate() {
+            if collider.trigger && !include_triggers {
+                continue;
+            }
+            let Some(hit) = collider.shape.ray_intersect(ray.origin, ray.direction) else {
+                continue;
+            };
+            if hit.t > max_t {
+                continue;
+            }
+            if let Some((previous_index, previous)) = nearest {
+                if hit.t > previous.t || (hit.t == previous.t && index >= previous_index) {
+                    continue;
+                }
+            }
+            nearest = Some((index, hit));
+        }
+        nearest
     }
 
     pub fn reached(&self, center: Vec3) -> bool {
