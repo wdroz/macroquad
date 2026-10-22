@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Document zoom and pan</title>
+<link rel="icon" href="data:,">
+<style>html,body{margin:0;width:100%;height:100%;overflow:hidden}canvas{width:100%;height:100%;display:block}</style>
+<canvas id="glcanvas" tabindex="1"></canvas>
+<!-- Build --example document_zoom_pan --target wasm32-unknown-unknown, copy
+the WASM beside this host, then serve the fork root over HTTP. -->
+<script src="../js/mq_js_bundle.js"></script>
+<script>load('document_zoom_pan.wasm');</script></html>

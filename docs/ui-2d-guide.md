@@ -589,6 +589,51 @@ regression; its HTML host runs the same checks on WebGL, including actual
 window DPI, an asymmetrical offscreen target/viewport, fractional disjoint
 clips, queued texture lifetime, clipped text and deferred built-in UI.
 
+## Zoom and pan a document
+
+Run `cargo run --example document_zoom_pan` for an asset-free, generated page
+that combines `Camera2D`, `with_clip_rect` and logical pointer input. The
+[example](../examples/document_zoom_pan.rs) keeps its interaction state in the
+application. Page coordinates start at the top left, with Y down. Its transform
+is `window = viewport_origin + pan + page * zoom`; `pan` is a logical offset
+inside the viewport and `zoom` is logical window units per page unit.
+
+Invert the same transform for picking. To zoom around the pointer, save the
+page point beneath it, change zoom, and solve for the new pan:
+
+```rust
+use macroquad::prelude::*;
+
+let viewport_origin = vec2(20., 120.);
+let pan = vec2(-100., -200.);
+let zoom = 1.0;
+let pointer = vec2(180., 240.); // mouse_position_logical() in a live frame
+let page_point = (pointer - viewport_origin - pan) / zoom;
+let next_zoom = 1.25;
+let next_pan = pointer - viewport_origin - page_point * next_zoom;
+assert!((viewport_origin + next_pan + page_point * next_zoom - pointer).length() < 0.001);
+```
+
+Clamp pan after zoom, dragging and scrolling: center a page axis smaller than
+the viewport, and otherwise keep that axis between `viewport_extent -
+page_extent * zoom` and zero. At a bound, this policy can move the saved
+pointer anchor so the page cannot be dragged away. The example's headless
+tests cover the inverse mapping, anchor preservation when unconstrained,
+bounds and resize policy.
+
+Wheel input and page hit testing first check the visible logical viewport;
+the render clip alone does not gate them. Draw with the matching page camera
+selected before `with_clip_rect(viewport, ...)`, then restore the default
+camera for the header and footer after the scope. Keep input, pan and the
+clip in logical units at every DPI; the window clip helper converts to
+framebuffer pixels.
+
+The [example index](../examples/README.md#document_zoom_pan) lists the controls,
+fit/reset and resize behavior, and the build/copy steps for its native and
+[WebGL host](../examples/document_zoom_pan.html). Inspect real input at
+390 x 400 and desktop sizes at browser DPR 1 and 2, including wheel/clicks
+outside the viewport and document edges crossing beneath the restored HUD.
+
 ## Wrap and draw text explicitly
 
 `wrap_text` measures words with a chosen font, size and scale and inserts line

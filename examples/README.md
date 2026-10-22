@@ -27,6 +27,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | Rounded outlines | `rounded_outlines_check` | Inward, radius/width-clamped outlines; shared native/WebGL alpha, camera and clipping regression |
 | Rounded panels | `rounded_panels`, `rounded_panels_check` | Filled radius-clamped panels and shared native/WebGL single-alpha-coverage regression; see the [UI and 2D guide](../docs/ui-2d-guide.md#draw-a-rounded-panel) |
 | Custom clipping | `scoped_clipping`, `scoped_clipping_check` | Nested document/image/text clips, precise empty intersections, DPI/target/viewport coordinates and restored HUD/UI state; see the [UI and 2D guide](../docs/ui-2d-guide.md#clip-custom-document-content) |
+| Document interaction | `document_zoom_pan` | Generated page, pointer-anchored zoom, bounded drag/scroll, viewport-gated picking, fit/reset and resize; see the [recipe](../docs/ui-2d-guide.md#zoom-and-pan-a-document) and [WebGL host](document_zoom_pan.html) |
 | Responsive layout | `responsive_layout`, `responsive_layout_check` | Explicit padding/gaps, available-width sizing, row/column/free placement, alignment and oversized scrolling settings at compact/desktop sizes; see the [UI and 2D guide](../docs/ui-2d-guide.md#size-rows-columns-and-scrolling-settings) |
 | Wrapped UI labels | `wrapped_labels_check` | Opt-in width wrapping, measured multiline height, skin margins/custom fonts, narrow glyphs, row/column geometry, group clipping and scroll reachability after resize; [guide](../docs/ui-2d-guide.md#wrap-and-draw-text-explicitly), [WebGL host](wrapped_labels_check.html) |
 | Keyboard buttons | `keyboard_buttons`, `keyboard_buttons_check` | Stable button IDs, mixed editbox Tab traversal, disabled controls, press-once activation and modal focus containment/restoration; see the [UI and 2D guide](../docs/ui-2d-guide.md#make-buttons-usable-from-the-keyboard) |
@@ -87,6 +88,7 @@ cargo run --example rounded_panels_check
 cargo run --example rounded_outlines_check
 cargo run --example scoped_clipping
 cargo run --example scoped_clipping_check
+cargo run --example document_zoom_pan
 cargo run --example responsive_layout
 cargo run --example responsive_layout_check
 cargo run --example wrapped_labels_check
@@ -168,6 +170,11 @@ for a scrolling document whose images and text share a nested clip. The
 scope restores the HUD clip afterward. Select the camera first and clear the
 surface outside the scope; built-in UI groups clip their own deferred widgets.
 
+Continue with `document_zoom_pan` to compose that clip with a camera and logical
+input. The application owns the page transform, zoom anchor, bounds and resize
+policy; the [document recipe](../docs/ui-2d-guide.md#zoom-and-pan-a-document)
+explains the mapping. Its generated page needs no assets or optional features.
+
 `responsive_layout` demonstrates a padded settings column, wrapped text,
 scrollable oversized content and a separate action row. Resize to 390 x 400,
 scroll to the final setting, and check that Resume and Apply remain reachable.
@@ -197,8 +204,8 @@ the sprite, target picking, HUD, clipping and pause modal in a maintained
 example with application-owned input and clock gating. The
 [UI and 2D guide](../docs/ui-2d-guide.md) connects these APIs and coordinate spaces.
 
-Each of these demos has a matching `_check` example with a shared native/WebGL
-fixture. Run the native fixture with `cargo run --example <name>_check`. For
+The paired `_check` examples above run shared native/WebGL fixtures. Run the
+native fixture with `cargo run --example <name>_check`. For
 WebGL, build and serve the matching HTML host over HTTP, for example:
 
 ```sh
@@ -215,6 +222,42 @@ for the other hosts.
 The paired HTML files load this checkout's JavaScript bundle. Use actual
 window resizing and input after the pixel checks, and inspect at both browser
 DPR 1 and 2; compiling WASM alone does not verify rendering or input.
+
+## `document_zoom_pan`
+
+A generated 600 x 800 page uses a downward-positive `Camera2D` and a logical
+`with_clip_rect` viewport. Wheel scrolls on both axes; Ctrl+wheel zooms around
+the pointer. Drag with the left button and click the colored page marker to
+toggle its selection. A drag started inside can continue outside; releasing
+outside cannot select the note. F fits the page and R resets to 100%, centered
+on the page; the header also offers those actions. Escape quits the native
+example.
+
+Each axis centers when the scaled page fits, and otherwise clamps to the page
+edges. Bounds take precedence over a zoom anchor near an edge. Fit mode follows
+window resizing; after manual interaction, resizing preserves the page point
+beneath the viewport center, then reapplies bounds. Header/footer drawing stays
+outside the document clip. Wheel and page clicks are gated by the viewport.
+See the [mapping and clipping recipe](../docs/ui-2d-guide.md#zoom-and-pan-a-document).
+
+```sh
+cargo run --example document_zoom_pan
+cargo test --test document_zoom_pan
+cargo build --target wasm32-unknown-unknown --example document_zoom_pan
+```
+
+Copy `target/wasm32-unknown-unknown/debug/examples/document_zoom_pan.wasm` to
+`examples/document_zoom_pan.wasm`, serve the fork root over HTTP, and open
+[`examples/document_zoom_pan.html`](document_zoom_pan.html). The host uses this
+checkout's JavaScript bundle. Try 390 x 400 and desktop windows at browser DPR
+1 and 2: zoom at an interior page point, scroll/drag to each bound, resize in
+fit and manual modes, and click or wheel on the header and outside the viewport.
+Check that clipped page content stays below the header and above the footer.
+The read-only exports `document_zoom_pan_status` (0 starting, 1 ready, 2 panic),
+`document_zoom_pan_frames` and `document_zoom_pan_value(index)` expose the
+live state; the index comment in the Rust example names the values. Status
+1 reports initialization, so real input and pixel checks must still be run.
+No game assets or optional features are required.
 
 ## CPU motion and marker recipes
 
