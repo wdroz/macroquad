@@ -1672,6 +1672,19 @@ assert_eq!(hit.normal, -Vec3::X);
 assert!((hit.point.x + 0.5).abs() < 1e-4);
 ```
 
+With the `gltf` feature, `GltfColliderShape::sweep_aabb(&body, delta)` treats
+the receiver as one static world-space shape and dispatches an incoming
+world-space AABB/delta to the matching primitive sweep above. It allocates
+nothing and preserves the delegated result, including contact points,
+initial/tangent-contact rules and invalid-input behavior. The body stays
+axis-aligned for any caller-defined up axis. A shape from
+`GltfHierarchyPose::collider_shape` is queried at that snapshot; obstacle motion
+is not swept. Shapes carry no trigger role: select `scene.solid_colliders()`
+for blocking queries or choose triggers explicitly. Candidate selection,
+earliest-hit ties and response stay with the caller; the
+[Blender recipe](blender-to-macroquad.md#4-upload-once-move-and-draw) shows an
+allocation-free earliest-hit loop.
+
 ## Sphere slide
 
 `slide_sphere(center, radius, delta, aabbs, obbs)` returns the new center. The sphere moves by `delta`, stops on an `Aabb` or `Obb`, and keeps the motion along that face. A sphere that only touches a floor still strafes, so the caller does not shrink the radius. A center that starts inside a box is pushed out along that box's shortest axis before the move: a world axis for an `Aabb`, one of the box's own axes for an `Obb`. There is no gravity here.

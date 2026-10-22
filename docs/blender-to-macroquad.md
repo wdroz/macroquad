@@ -300,34 +300,46 @@ block the player. `slide_sphere_solids` does not provide grounding, stairs,
 slope limits, or a contact list. See the [3D guide](3d-guide.md) for the current
 contact, sweep, and slide contracts.
 
-For an axis-aligned player body, the completed body queries cover every imported
-solid shape directly. Select the smallest time of impact; using a center ray or
-turning an authored sphere/capsule into a box changes which obstacles it hits.
-This helper queries one translation and excludes triggers:
+For an axis-aligned player body, `collider.shape.sweep_aabb(&body, delta)`
+dispatches to the existing body sweep for every imported shape without
+allocating or converting it. The receiver is the static obstacle; `body` and
+`delta` describe the incoming motion, all in world space. The caller selects
+the smallest time of impact; using a center ray or turning an authored
+sphere/capsule into a box changes which obstacles it hits. This caller-owned
+loop queries one translation and excludes triggers:
 
 ```rust
 use macroquad::prelude::*;
 
 fn first_solid_hit(scene: &GltfScene, body: Aabb, delta: Vec3) -> Option<SweepHit> {
-    scene.solid_colliders()
-        .filter_map(|collider| match collider.shape {
-            GltfColliderShape::Aabb(shape) => body.sweep(delta, &shape),
-            GltfColliderShape::Obb(shape) => body.sweep_obb(delta, &shape),
-            GltfColliderShape::Sphere(shape) => body.sweep_sphere(delta, &shape),
-            GltfColliderShape::Capsule(shape) => body.sweep_capsule(delta, &shape),
-        })
-        .min_by(|a, b| a.t.total_cmp(&b.t))
+    let mut first: Option<SweepHit> = None;
+    for collider in scene.solid_colliders() {
+        let Some(hit) = collider.shape.sweep_aabb(&body, delta) else {
+            continue;
+        };
+        if let Some(previous) = first {
+            if hit.t >= previous.t {
+                continue; // Equal times keep the first collider in stored order.
+            }
+        }
+        first = Some(hit);
+    }
+    first
 }
 ```
 
 `hit.t` is a fraction of `delta`, and `hit.normal` points out of the static
 solid toward the moving body. A resting touch permits sideways movement; an
 initial penetration can report time zero and needs a separate contact/push-out
-policy. The helper does not provide sliding, gravity, grounding or stair
-stepping. The moving body stays axis-aligned throughout the query. A moving
-gate can supply its current `hierarchy.collider_shape(&scene, collider)` in
-place of the stored `collider.shape`; that is still one query against a static
-snapshot, not a moving-platform solver.
+policy. The dispatch preserves each primitive query's exact hit and invalid-input
+behavior. It does not select candidates, pick the nearest hit or provide
+sliding, gravity, grounding or stair stepping. Trigger roles belong to
+`GltfCollider`, so use `solid_colliders()` for blocking queries and select
+triggers explicitly when those are wanted. The moving body stays axis-aligned
+throughout the query, including non-Y-up scenes. A moving gate can supply its
+current `hierarchy.collider_shape(&scene, collider)` and call `sweep_aabb` on
+that shape in place of the stored `collider.shape`; that is still one query
+against a static snapshot, not a moving-platform solver.
 
 For repeated kinematic movement, `CharacterController::move_body` combines the
 body sweeps with sliding, ground snapping and a slope limit. Build
