@@ -298,3 +298,39 @@ fn both_entry_points_agree_for_mixed_scenes() {
         }
     }
 }
+
+#[test]
+fn final_blocked_probe_reports_an_unreached_solid() {
+    let spheres = [
+        Sphere::new(vec3(4.017455, -0.49263144, 0.), 0.71983784),
+        Sphere::new(vec3(3.7333555, -2.573938, 0.), 0.3883295),
+        Sphere::new(vec3(1.8438623, 1.0868921, 0.), 0.924533),
+        Sphere::new(vec3(4.7453685, -1.6824126, 0.), 0.85232186),
+        Sphere::new(vec3(2.4648502, -1.9580934, 0.), 0.38515154),
+    ];
+    let centers = [Vec3::ZERO, Vec3::Z * 3.];
+    let delta = vec3(9., -1.1517267, 0.);
+    let mut events = Vec::new();
+    let moved =
+        slide_spheres_solids_with_contacts(&centers, 0.5, delta, &[], &[], &spheres, &[], |e| {
+            events.push(e)
+        });
+    assert_eq!(
+        moved,
+        slide_spheres_solids(&centers, 0.5, delta, &[], &[], &spheres, &[])
+    );
+    assert_eq!(events.len(), 5);
+    assert_eq!(
+        events.iter().map(|e| e.solid_index).collect::<Vec<_>>(),
+        vec![2, 0, 3, 1, 4]
+    );
+    assert!(events.iter().all(|e| e.phase == SphereSlidePhase::Sweep
+        && e.sample_index == 0
+        && e.solid_kind == SlideSolidKind::Sphere));
+    // The fifth cast only checks whether the bounded remainder is clear.
+    // A reported candidate need not be reached by the returned translation.
+    let final_solid = spheres[events[4].solid_index];
+    let final_gap = (moved - final_solid.center).length() - 0.5 - final_solid.radius;
+    assert!((moved - vec3(3.3899245, -1.7546794, 0.)).length() < 1e-4);
+    assert!(final_gap > 0.06 && final_gap < 0.07);
+}

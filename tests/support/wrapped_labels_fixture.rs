@@ -117,6 +117,35 @@ fn check_measurement() {
             assert_eq!(size(&mut ui, "text", width), Vec2::ZERO);
         }
         assert_eq!(size(&mut ui, "text", 10.), vec2(10., 54.));
+        // Invalid wrap widths promise zero allocation, including no implicit
+        // gap or change to the position of the next row/column control.
+        for (index, layout) in [Layout::Vertical, Layout::Horizontal]
+            .into_iter()
+            .enumerate()
+        {
+            widgets::Group::new(
+                macroquad::hash!("wrapped-invalid-width", custom, index),
+                vec2(300., 100.),
+            )
+            .position(vec2(12., 12.))
+            .content_layout(LayoutSettings::new(layout).gap(vec2(9., 7.)))
+            .ui(&mut ui, |ui| {
+                let start = ui.canvas().cursor();
+                for width in [0., -1., f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                    widgets::Label::new("invisible")
+                        .wrap(width)
+                        .size(vec2(999., 999.))
+                        .ui(ui);
+                    assert_eq!(ui.canvas().cursor(), start, "invalid width {width}");
+                }
+                widgets::Label::new("").wrap(80.).ui(ui);
+                assert_ne!(
+                    ui.canvas().cursor(),
+                    start,
+                    "valid empty text reserves a line"
+                );
+            });
+        }
         let minimum = widgets::Label::new("wrapped")
             .size(vec2(999., 180.))
             .wrap(150.)
@@ -220,10 +249,157 @@ async fn check_clipped_ink() {
     );
 }
 
+/// Compare overlapping real glyphs against independently positioned text. The
+/// reference's atlas uses the UI atlas's nearest filter so its coverage can be
+/// compared pixel for pixel, including the negative left bearing of this font.
+async fn check_tight_spacing_ink() {
+    let (width, height) = miniquad::window::screen_size();
+    let target = render_target(width as u32, height as u32);
+    let camera = Camera2D {
+        render_target: Some(target.clone()),
+        ..Camera2D::from_display_rect(Rect::new(0., 0., screen_width(), screen_height()))
+    };
+    let dpi = screen_dpi_scale();
+    let position = vec2(20., 20.);
+    let font_size = 48;
+    let spacing = 2.;
+    let lines = ["g", "É"];
+    for custom in [false, true] {
+        let bytes: &[u8] = if custom {
+            include_bytes!("../../examples/DancingScriptRegular.ttf")
+        } else {
+            include_bytes!("../../src/ProggyClean.ttf")
+        };
+        let raw_font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default()).unwrap();
+        let raster_size = (font_size as f32 * dpi).ceil();
+        let metrics = lines.map(|line| raw_font.metrics(line.chars().next().unwrap(), raster_size));
+        let baseline = metrics.iter().fold(
+            raw_font
+                .horizontal_line_metrics(raster_size)
+                .unwrap()
+                .ascent
+                / dpi,
+            |baseline, metrics| baseline.max((metrics.height as f32 + metrics.ymin as f32) / dpi),
+        );
+        let mut reference_font = load_ttf_font_from_bytes(bytes).unwrap();
+        reference_font.set_filter(FilterMode::Nearest);
+        let skin = {
+            let ui = root_ui();
+            let mut skin = ui.default_skin();
+            skin.margin = 0.;
+            let builder = ui.style_builder().font_size(font_size).text_color(WHITE);
+            skin.label_style = if custom {
+                builder.font(bytes).unwrap().build()
+            } else {
+                builder.build()
+            };
+            skin
+        };
+        let mut measured = Vec2::ZERO;
+        for _ in 0..2 {
+            set_camera(&camera);
+            clear_background(BLACK);
+            {
+                let mut ui = root_ui();
+                ui.push_skin(&skin);
+                let label = widgets::Label::new("g\nÉ")
+                    .wrap(200.)
+                    .multiline(spacing)
+                    .position(position);
+                measured = label.measure(&mut ui);
+                label.ui(&mut ui);
+                ui.pop_skin();
+            }
+            next_frame().await;
+        }
+        let actual = target.texture.get_texture_data();
+        // Check the allocation against the un-clipped raster metrics as well:
+        // matching two identically short clips must not hide missing ink.
+        for (index, metrics) in metrics.iter().enumerate() {
+            let line_baseline = baseline + index as f32 * spacing;
+            let top = line_baseline - (metrics.height as f32 + metrics.ymin as f32) / dpi;
+            let bottom = line_baseline - metrics.ymin as f32 / dpi;
+            assert!(top >= -0.001 && bottom <= measured.y + 0.001);
+        }
+        assert!(measured.y >= font_size as f32 + spacing);
+        // Deferred UI clips truncate physical coordinates. Immediate clips on
+        // a render target already use target pixels, independently of DPI.
+        let clip = Rect::new(
+            (position.x * dpi).trunc(),
+            (position.y * dpi).trunc(),
+            (measured.x * dpi).trunc(),
+            (measured.y * dpi).trunc(),
+        );
+        for _ in 0..2 {
+            set_camera(&camera);
+            clear_background(BLACK);
+            with_clip_rect(clip, || {
+                for (index, line) in lines.iter().enumerate() {
+                    draw_text_ex(
+                        line,
+                        position.x,
+                        position.y + baseline + index as f32 * spacing,
+                        TextParams {
+                            font: Some(&reference_font),
+                            font_size,
+                            color: WHITE,
+                            ..Default::default()
+                        },
+                    );
+                }
+            });
+            next_frame().await;
+        }
+        let expected = target.texture.get_texture_data();
+        set_default_camera();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(directory) = std::env::var("MACROQUAD_LAYOUT_CAPTURE_DIR") {
+            actual.export_png(&format!("{directory}/wrapped-tight-{custom}.png"));
+            expected.export_png(&format!("{directory}/wrapped-tight-reference-{custom}.png"));
+        }
+        let mut visible = 0;
+        let mut changed = 0;
+        for (index, (actual, expected)) in actual
+            .bytes
+            .chunks_exact(4)
+            .zip(expected.bytes.chunks_exact(4))
+            .enumerate()
+        {
+            if actual[0] > 10 {
+                visible += 1;
+                let x = index % width as usize;
+                let y = height as usize - 1 - index / width as usize;
+                assert!(
+                    x as f32 >= clip.x
+                        && (x as f32) < clip.right()
+                        && y as f32 >= clip.y
+                        && (y as f32) < clip.bottom(),
+                    "tight-spaced ink escaped allocation, custom={custom}, dpi={dpi}"
+                );
+            }
+            // Allow one channel level for backend rounding, while comparing
+            // every pixel so misplaced baselines and missing descenders fail.
+            if actual
+                .iter()
+                .zip(expected)
+                .any(|(actual, expected)| actual.abs_diff(*expected) > 1)
+            {
+                changed += 1;
+            }
+        }
+        assert!(visible > 100, "tight-spaced text must be visible");
+        assert_eq!(
+            changed, 0,
+            "tight-spaced label differs from reference, custom={custom}, dpi={dpi}"
+        );
+    }
+}
+
 pub async fn run() -> Menu {
     check_measurement();
     next_frame().await;
     check_clipped_ink().await;
+    check_tight_spacing_ink().await;
     let mut menu = Menu::default();
     for _ in 0..5 {
         menu.draw();

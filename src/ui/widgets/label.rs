@@ -233,11 +233,14 @@ impl<'a> Label<'a> {
 
         if let Some(width) = self.wrap {
             let layout = self.wrapped_layout(&context.style.label_style, width);
+            if layout.lines.is_empty() {
+                return;
+            }
             let pos = context.window.cursor.fit(
                 layout.size,
                 self.position.map_or(Layout::Vertical, Layout::Free),
             );
-            if layout.lines.is_empty() || layout.content_width <= 0. {
+            if layout.content_width <= 0. {
                 return;
             }
             let painter = &mut context.window.painter;
