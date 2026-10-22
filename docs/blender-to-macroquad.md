@@ -355,9 +355,12 @@ For a sphere or a fixed multi-sphere hull, reuse those same four solid-only
 arrays with `slide_sphere_solids` or `slide_spheres_solids`. They already accept
 static capsule markers and return a center or one shared translation,
 respectively. If the game needs the time of one impact instead, primitive
-`Sphere` sweeps cover AABBs, OBBs and spheres; a public sphere/capsule sweep is
-still pending. See the current [sweep table](3d-guide.md#sweep) before choosing
-a query for an imported shape. Neither path sweeps a rotating body.
+`Sphere` sweeps cover AABBs, OBBs, spheres and capsules. A sphere player can use
+`Sphere::sweep_capsule` directly for one static capsule marker, with the hit
+normal and point in world space. Apply `delta * hit.t` to its center; the hit
+point belongs to the obstacle. See the current [sweep table](3d-guide.md#sweep)
+for initial-contact rules and numerical limits. Neither path sweeps a rotating
+body.
 
 Use `slide_spheres_solids_with_contacts` when a hull needs the selected solid,
 sample and outward normal for scrape/stop feedback. Its `solid_index` belongs

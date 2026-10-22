@@ -165,8 +165,8 @@ is the fixture.
 
 `Aabb`, `Sphere`, `Capsule`, `Ray`, `Plane`, `Triangle`, `Obb`, and `Frustum` live in
 `macroquad::math` and the prelude. `Contact` describes an overlapping pair,
-`SweepHit` describes an AABB moving against a static AABB, OBB, sphere or
-capsule, or a sphere moving against either box type,
+`SweepHit` describes an AABB or sphere moving against a static AABB, OBB,
+sphere or capsule,
 `slide_sphere` keeps the leftover motion along a face, and
 `slide_sphere_solids` does the same against spheres and capsules.
 `slide_spheres_solids` returns one shared translation for a fixed sphere hull.

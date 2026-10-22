@@ -1520,12 +1520,12 @@ assert_eq!(contact.normal, Vec3::Y);
 
 ## Sweep
 
-`SweepHit` is the first time a moving box or sphere meets one static solid along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static solid. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point` where that query exists, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box; `Aabb::sweep_sphere` takes a sphere; `Aabb::sweep_capsule` takes a capsule. The point and normal are in world space.
+`SweepHit` is the first time a moving box or sphere meets one static solid along a delta. `t` is the fraction of that delta, in `0..=1`. `normal` points out of the static solid. `point` is a representative contact position: an initial overlap uses the corresponding `Contact::point` where that query exists, which need not lie on the surface. `Aabb::sweep` and `Sphere::sweep_aabb` take an `Aabb`; `Aabb::sweep_obb` and `Sphere::sweep_obb` take an oriented box; both bodies have `sweep_sphere` and `sweep_capsule` for those static shapes. The point and normal are in world space.
 
 | Moving body | Static AABB | Static OBB | Static sphere | Static capsule |
 | --- | --- | --- | --- | --- |
 | AABB | `Aabb::sweep` | `Aabb::sweep_obb` | `Aabb::sweep_sphere` | `Aabb::sweep_capsule` |
-| Sphere | `Sphere::sweep_aabb` | `Sphere::sweep_obb` | `Sphere::sweep_sphere` | No public sweep |
+| Sphere | `Sphere::sweep_aabb` | `Sphere::sweep_obb` | `Sphere::sweep_sphere` | `Sphere::sweep_capsule` |
 | Capsule | No public sweep | No public sweep | No public sweep | No public sweep |
 
 All deltas translate a whole body in world coordinates; none of these queries
@@ -1565,8 +1565,53 @@ results miss; very small motion or extreme-scale cancellation can miss too.
 See its rustdoc for numerical limits. Run the asset-free, window-free
 [`sphere_sweep` example](../examples/README.md#sphere_sweep) for an off-center
 hit that a center ray misses and inward/tangential touching cases.
-The sphere/capsule cell above remains unavailable as a public `SweepHit` query;
-static capsules are already accepted by the sphere slide helpers.
+
+`Sphere::sweep_capsule` moves a complete sphere against a static capsule's
+cylinder and both rounded caps, including a capsule at an arbitrary
+orientation. The normal points out of the capsule toward the moving sphere;
+the point lies on the static capsule. At a new impact it also lies on the
+moving sphere. A capsule's endpoints describe its inner segment, so the
+rounded hull extends past each endpoint by its radius.
+
+```rust
+use macroquad::math::{Capsule, Sphere, Vec3, vec3};
+
+let body = Sphere::new(vec3(-3.0, 0.0, 0.0), 0.5);
+let post = Capsule::new(vec3(0.0, -2.0, 0.0), vec3(0.0, 2.0, 0.0), 0.5);
+let delta = vec3(6.0, 0.0, 0.0);
+let hit = body.sweep_capsule(delta, &post).unwrap();
+let center_at_impact = body.center + delta * hit.t;
+assert!((hit.t - 1.0 / 3.0).abs() < 1e-5);
+assert!((center_at_impact + Vec3::X).length() < 1e-5);
+assert!((hit.point + Vec3::X * 0.5).length() < 1e-5);
+assert_eq!(hit.normal, -Vec3::X);
+```
+
+An initial contact also returns a point on the static capsule: the nearest
+inner-segment point plus `normal * post.radius`. This differs from reversing
+`Capsule::contact_sphere`, whose point is on the sphere. When the center lies
+on a nonzero inner segment, the normal uses the perpendicular projection of
+the least-parallel world axis, with X before Y before Z for ties. A
+zero-length capsule delegates to `Sphere::sweep_sphere`, including its +X
+coincident-center convention. Equal internal candidate times prefer the
+barrel, then endpoint `a`, then endpoint `b`; cap candidate times retain the
+sphere query's `f32` precision.
+
+Penetration deeper than `1e-4` reports `t == 0`, including zero motion;
+touching/shallow pairs and future impacts require inward displacement greater
+than `1e-5`. Exact tangencies miss. A zero-time hit does not separate an
+overlap. Zero radii are allowed, but a separated point crossing a zero-radius
+segment has no inward surface and misses. Invalid inputs, an overflowing
+squared summed radius and nonfinite contact results miss. Squared motion at
+most `1e-12` cannot produce a new impact. The barrel uses `f64` calculations;
+the caps inherit `Sphere::sweep_sphere`'s finite-precision limits. Numerically
+indistinguishable near tangencies and extreme finite geometry may miss; see
+the method's rustdoc for the precise limits.
+
+Apply the permitted translation to the center, as in the sphere/sphere
+recipe. One query reports one impact; the application chooses which solid
+to test and how to continue the movement. Use `slide_sphere_solids` for
+movement against several solids with sliding and initial recovery.
 
 `Aabb::sweep` moves a box. `Sphere::sweep_aabb` moves a sphere, including hits on an edge or a corner. A start that only touches, and a delta that does not move further in, returns `None`, so a shape resting on a floor can still sweep sideways. An overlap deeper than about `1e-4` is already inside and returns `t == 0`. A discrete `overlaps` test can jump a thin wall; the sweep still reports the crossing.
 

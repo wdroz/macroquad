@@ -9,7 +9,7 @@ geometry, material regression, and video examples. The `gltf` feature enables th
 | --- | --- | --- |
 | Shapes and rays | `aabb_overlap`, `sphere_overlap`, `ray_cast`, `plane_hit`, `triangle_hit`, `obb_overlap`, `capsule_overlap` | Inclusive overlaps, hit normals, shape sizes, nearest hits |
 | Motion queries | `sweep_hit`, `sweep_obb`, `slide_solids` | Box/sphere against an AABB, sphere against oriented cover, single-sphere and rigid two-sphere slide against boxes, spheres and capsules; additional full-AABB body sweep fixtures are in the CPU tests |
-| Sphere body sweeps | `sphere_sweep` | Asset-free CPU example: off-center sphere/sphere impact, world-space surface point and normal, caller-owned translation and initial touching; run without a window using `cargo run --example sphere_sweep` |
+| Sphere body sweeps | `sphere_sweep` | Asset-free CPU example: sphere/sphere and sphere/capsule impacts, world-space surface point and normal, caller-owned translation and initial touching; run without a window using `cargo run --example sphere_sweep` |
 | Body and joint composition | `rigid_body_joint` | Checked integration, discrete pair response, one anchored distance joint, bounded fixed-step clock and joint/contact ordering diagnostics; [recipe](../docs/3d-guide.md#combine-integration-contacts-and-one-joint) |
 | Character movement | `character_controller` | Caller-owned AABB, solid-only sweeps, jumping, ceiling/wall sliding, ground snap, slope limits and optional stair stepping with diagnostics |
 | Camera and debugging | `picking_ray`, `frustum_cull`, `debug_draw` | Screen picking, conservative frustum queries, shape wireframes |
@@ -235,7 +235,7 @@ updates. Run their maintained CPU regressions from the fork root:
 
 ```sh
 cargo test --test rigid_slide --test uniform_grid --test rigid_body --test collision_response
-cargo test --test sphere_sphere_sweep --test slide_contacts --test slide_contact_allocations
+cargo test --test sphere_sphere_sweep --test sphere_capsule_sweep --test slide_contacts --test slide_contact_allocations
 cargo test --features gltf --test gltf_markers
 ```
 
@@ -263,13 +263,13 @@ shape queries; joints need caller-selected integration and pair ordering.
 ## `sphere_sweep`
 
 Run `cargo run --example sphere_sweep` for an asset-free, window-free
-`Sphere::sweep_sphere` recipe. It prints an off-center impact, the world-space
-normal and surface point, and the new center computed from `delta * hit.t`.
-Touching inward/tangential checks show why an overlap and a blocking sweep
-are different queries. The [sweep guide](../docs/3d-guide.md#sweep) lists the
-available moving/static pairs and initial-contact rules. A public
-sphere/capsule sweep remains pending; the existing slide helpers already
-accept static capsules.
+`Sphere` sweep recipe. It prints the world-space normal and surface point,
+and the new center computed from `delta * hit.t`. Touching inward/tangential
+checks show why an overlap and a blocking sweep are different queries.
+The [sweep guide](../docs/3d-guide.md#sweep) lists the available moving/static
+pairs, including `Sphere::sweep_capsule`, with initial-contact rules and
+numerical limits. The slide helpers accept those same static shape kinds
+when the application needs movement against several solids.
 
 ## `timed_sprite_check`
 

@@ -7,9 +7,9 @@
 //! sweep an [`Obb`]: the center and the delta are rotated into that box and
 //! tested with the axis-aligned query.
 
-use glam::{vec3, Vec3};
+use glam::{vec3, DVec3, Vec3};
 
-use super::{Aabb, Contact, Obb, Sphere};
+use super::{Aabb, Capsule, Contact, Obb, Sphere};
 
 /// Overlap deeper than this is "clearly inside". A shallower overlap, including
 /// a pure touch, still lets a sideways delta pass.
@@ -26,7 +26,8 @@ const INTO_SLOP: f32 = 1e-5;
 /// surface point on the box for a moving sphere. [`Aabb::sweep_sphere`] returns
 /// a shared surface point on the static sphere at a new impact, and
 /// [`Aabb::sweep_capsule`] returns one on the static capsule.
-/// [`Sphere::sweep_sphere`] returns a point on the static sphere. An initial
+/// [`Sphere::sweep_sphere`] returns a point on the static sphere, and
+/// [`Sphere::sweep_capsule`] returns one on the static capsule. An initial
 /// overlap uses the corresponding [`Contact::point`] where that query exists.
 /// The static solid is an [`Aabb`], an [`Obb`], a [`Sphere`], or a
 /// [`Capsule`](super::Capsule).
@@ -256,6 +257,133 @@ impl Sphere {
         Some(SweepHit { t, normal, point })
     }
 
+    /// Sweeps this sphere along world-space `delta` against a static `capsule`.
+    ///
+    /// Tests the barrel and both rounded caps. `t` is a fraction of `delta`,
+    /// `normal` points out of the capsule, and `point` is the closest point
+    /// on its inner segment plus `normal * capsule.radius`. At a new impact
+    /// that point is shared by both surfaces. During initial overlap it is
+    /// a representative point on the capsule, rather than the point on this
+    /// sphere returned by [`Capsule::contact_sphere`]. No motion or response
+    /// is applied; `point` is not the moving sphere's replacement center.
+    ///
+    /// Initial penetration deeper than `1e-4` reports `t == 0` with any finite
+    /// delta. A touch or shallower overlap reports a hit only when
+    /// `delta.dot(normal) < -1e-5`. Future impacts require the same inward
+    /// motion, so exact tangencies miss. For a center on a nonzero segment,
+    /// the normal is the normalized projection of the least-parallel world
+    /// axis onto the segment's perpendicular plane (X, Y, Z on ties).
+    /// Equal internal candidate times prefer the barrel, then `a`, then `b`;
+    /// cap candidate times retain the sphere query's `f32` precision.
+    ///
+    /// A zero-length segment delegates exactly to [`Sphere::sweep_sphere`],
+    /// including its coincident-center +X normal and finite-precision limits.
+    /// Zero radii are allowed; a separated point crossing a zero-radius
+    /// segment has no inward surface and misses. Negative/non-finite radii,
+    /// non-finite centers/endpoints/deltas, an overflowing squared summed
+    /// radius, or non-finite contact results miss. Squared motion at most
+    /// `1e-12` cannot produce a new impact.
+    ///
+    /// The barrel uses `f64` closest-approach calculations; cap tests reuse
+    /// [`Sphere::sweep_sphere`]. Numerically indistinguishable tangencies may
+    /// miss, and cap tests retain that query's squared-separation, impact-time
+    /// and normal-cancellation limits. Arbitrary extreme finite geometry is
+    /// not guaranteed. This query does not change the separate slide helpers.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use macroquad::math::{Capsule, Sphere, Vec3, vec3};
+    ///
+    /// let body = Sphere::new(vec3(-3.0, 0.0, 0.0), 0.5);
+    /// let post = Capsule::new(vec3(0.0, -2.0, 0.0), vec3(0.0, 2.0, 0.0), 0.5);
+    /// let delta = Vec3::X * 6.0;
+    /// let hit = body.sweep_capsule(delta, &post).unwrap();
+    /// assert!((hit.t - 1.0 / 3.0).abs() < 1e-6);
+    /// assert_eq!(hit.normal, -Vec3::X);
+    /// assert_eq!(hit.point, -Vec3::X * 0.5);
+    /// ```
+    pub fn sweep_capsule(&self, delta: Vec3, capsule: &Capsule) -> Option<SweepHit> {
+        if !delta.is_finite()
+            || !self.center.is_finite()
+            || !self.radius.is_finite()
+            || self.radius < 0.0
+            || !capsule.a.is_finite()
+            || !capsule.b.is_finite()
+            || !capsule.radius.is_finite()
+            || capsule.radius < 0.0
+        {
+            return None;
+        }
+        if capsule.a == capsule.b {
+            return self.sweep_sphere(delta, &Sphere::new(capsule.a, capsule.radius));
+        }
+        let reach = self.radius + capsule.radius;
+        if !(reach * reach).is_finite() {
+            return None;
+        }
+        let a = capsule.a.as_dvec3();
+        let segment = capsule.b.as_dvec3() - a;
+        let length = segment.length();
+        let axis = segment / length;
+        let offset = self.center.as_dvec3() - a;
+        let motion = delta.as_dvec3();
+        // Project before normalizing the segment. Normalized-axis roundoff
+        // can otherwise give an exactly coincident diagonal point a tiny
+        // axial residual, whose normalization invents an axial normal.
+        let fraction = (offset.dot(segment) / segment.length_squared()).clamp(0.0, 1.0);
+        let radial = if fraction > 0.0 && fraction < 1.0 {
+            segment.cross(offset).cross(segment) / segment.length_squared()
+        } else {
+            offset - segment * fraction
+        };
+        let on_segment = self.center.as_dvec3() - radial;
+        let distance = radial.length();
+        if distance <= reach as f64 {
+            let normal = if distance > 0.0 {
+                radial / distance
+            } else {
+                capsule_coincident_normal(axis)
+            };
+            let point = (on_segment + normal * capsule.radius as f64).as_vec3();
+            let normal = normal.as_vec3();
+            if !point.is_finite() || !normal.is_finite() {
+                return None;
+            }
+            return ((reach as f64 - distance) > TOUCH_SLOP as f64
+                || motion.dot(normal.as_dvec3()) < -(INTO_SLOP as f64))
+                .then_some(SweepHit {
+                    t: 0.0,
+                    normal,
+                    point,
+                });
+        }
+        // With no rounded hull, a future point/segment intersection supplies
+        // no unique inward surface. Keep the point/point convention.
+        if reach == 0.0 || motion.length_squared() <= 1e-12 {
+            return None;
+        }
+        let mut best =
+            sphere_capsule_barrel(offset, motion, axis, length, a, capsule.radius, reach);
+        for (endpoint, sign) in [(capsule.a, -1.0), (capsule.b, 1.0)] {
+            if let Some(hit) = self.sweep_sphere(delta, &Sphere::new(endpoint, capsule.radius)) {
+                // The full endpoint spheres lie inside the capsule. Keep
+                // only the exposed hemispheres so a rejected barrel tangent
+                // cannot be replaced by a later interior-sphere entry.
+                // A rounded f32 normal needs angular slack at the seam.
+                if hit.t == 0.0
+                    || sign * hit.normal.as_dvec3().dot(axis) < -(8.0 * f32::EPSILON as f64)
+                {
+                    continue;
+                }
+                if best.as_ref().is_none_or(|(time, _)| (hit.t as f64) < *time) {
+                    best = Some((hit.t as f64, hit));
+                }
+            }
+        }
+        best.map(|(_, hit)| hit)
+    }
+
     /// Sweeps this sphere along `delta` against the static `aabb`.
     ///
     /// `t` is in `0..=1`. The normal points out of `aabb`. A path that misses
@@ -343,6 +471,82 @@ impl Sphere {
             point,
         })
     }
+}
+
+fn capsule_coincident_normal(axis: DVec3) -> DVec3 {
+    let absolute = axis.abs();
+    let mut seed = DVec3::X;
+    let mut least = absolute.x;
+    if absolute.y < least {
+        seed = DVec3::Y;
+        least = absolute.y;
+    }
+    if absolute.z < least {
+        seed = DVec3::Z;
+    }
+    (seed - axis * seed.dot(axis)).normalize()
+}
+
+// The unbounded line's radial entry is a barrel entry only when its contact
+// lies on the finite inner segment. Keep f64 time until all features compete.
+fn sphere_capsule_barrel(
+    offset: DVec3,
+    motion: DVec3,
+    axis: DVec3,
+    length: f64,
+    a: DVec3,
+    capsule_radius: f32,
+    reach: f32,
+) -> Option<(f64, SweepHit)> {
+    // Cross products avoid subtracting a large parallel projection from a
+    // tiny radial component. Their lengths are distances to the unit axis.
+    let radial_offset = axis.cross(offset);
+    let radial_motion = axis.cross(motion);
+    let speed_sq = radial_motion.length_squared();
+    if speed_sq == 0.0 {
+        return None;
+    }
+    let middle = -radial_offset.dot(radial_motion) / speed_sq;
+    let nearest = radial_offset + radial_motion * middle;
+    let radius_sq = (reach as f64) * (reach as f64);
+    let gap = radius_sq - nearest.length_squared();
+    // Reject a tangent before rounding time to f32. The error bound follows
+    // the closest-point calculation, preserving narrow high-speed crossings
+    // that lose their positive discriminant by subtracting large terms.
+    let slack = (radial_offset.abs() + radial_motion.abs() * middle.abs()) * (16.0 * f64::EPSILON);
+    let gap_slack = 16.0 * f64::EPSILON * (radius_sq + nearest.length_squared())
+        + 2.0 * nearest.abs().dot(slack)
+        + slack.length_squared();
+    if gap <= gap_slack {
+        return None;
+    }
+    let t = middle - (gap / speed_sq).sqrt();
+    if !t.is_finite() || !(0.0..=1.0).contains(&t) {
+        return None;
+    }
+    let along = (offset + motion * t).dot(axis);
+    if !(0.0..=length).contains(&along) {
+        return None;
+    }
+    let normal = (radial_offset + radial_motion * t)
+        .cross(axis)
+        .try_normalize()?;
+    if motion.dot(normal) >= -(INTO_SLOP as f64) {
+        return None;
+    }
+    let point = (a + axis * along + normal * capsule_radius as f64).as_vec3();
+    let normal = normal.as_vec3();
+    if !point.is_finite() || !normal.is_finite() {
+        return None;
+    }
+    Some((
+        t,
+        SweepHit {
+            t: t as f32,
+            normal,
+            point,
+        },
+    ))
 }
 
 fn hit_at_start(contact: Contact) -> SweepHit {

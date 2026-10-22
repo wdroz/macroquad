@@ -5,7 +5,7 @@
 //! [`Ray`], [`Plane`], [`Triangle`], and [`Frustum`]. [`Contact`] is the overlap of two of
 //! those shapes. [`SweepHit`] is the time of impact of a moving [`Aabb`]
 //! against a static [`Aabb`], [`Obb`], [`Sphere`] or [`Capsule`], or a moving [`Sphere`]
-//! against either box. [`slide_sphere`] moves a sphere along
+//! against any of those four solids. [`slide_sphere`] moves a sphere along
 //! [`Aabb`] and [`Obb`] faces. [`slide_sphere_solids`] does the same and also
 //! slides against [`Sphere`] and [`Capsule`] solids. [`slide_spheres_solids`]
 //! returns one shared translation for a rigid group of equal-radius spheres.
@@ -29,7 +29,8 @@
 //!
 //! - Overlap and [`Contact`] queries describe the current pose, including a touch.
 //! - [`Aabb::sweep`], [`Aabb::sweep_obb`], [`Aabb::sweep_sphere`], [`Aabb::sweep_capsule`],
-//!   [`Sphere::sweep_aabb`] and [`Sphere::sweep_obb`] find the first impact along
+//!   [`Sphere::sweep_aabb`], [`Sphere::sweep_obb`], [`Sphere::sweep_sphere`] and
+//!   [`Sphere::sweep_capsule`] find the first impact along
 //!   a full movement delta; [`SweepHit::t`] is a fraction of that delta.
 //! - [`slide_sphere_solids`] returns a resolved center against static solids.
 //!   The caller owns velocity, gravity, ground state, and trigger detection.
