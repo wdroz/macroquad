@@ -79,8 +79,16 @@ animation slots, lazy unchanged-pose staging, equivalent skin-weight validation,
 small-scene query limits and cached sphere-to-mesh rejection improve their
 targeted CPU workloads. Rejected morph/AABB trials and control regressions remain
 visible, including a 5% unchanged external-AABB slowdown in the retained v2
-comparison. The report records further v3 experiments separately; cross-version
-results cannot be combined. Counters and the scheduled queue remain unchanged.
+comparison. The separate v3 series measures prepared octree rays 30.90–45.20%
+faster and combined pose application 17.68–85.78% faster, retaining a 10.02%
+(15.16 ns) empty-grid control regression. All eleven final checks and 35 native
+Windows CPU tests pass. Cross-version results cannot be combined. Counters and
+the scheduled queue remain unchanged.
+
+The native Windows reference comparison confirms ray/combined-pose gains but
+also flags unchanged mesh AABB controls 6.47–24.71% slower and position-only
+skinning 8.48% slower. These platform-specific costs remain visible and
+unresolved in the report; the maintenance is not a universal performance gain.
 
 ## Priorities
 

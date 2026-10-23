@@ -58,6 +58,8 @@ impl GltfAnimationSample {
     /// Playback time belongs to the player and is separate from this commit.
     /// Returns whether morph weights changed, not whether a transform changed;
     /// a successful transform-only sample returns `false`.
+    /// Transform-only samples use the atomic pose update directly and leave
+    /// any supplied morph instance untouched.
     /// If applying fails, a caller's preceding player `advance`/`seek` is not
     /// rolled back; keep a player clone when a clock checkpoint is needed.
     ///
@@ -76,6 +78,10 @@ impl GltfAnimationSample {
             return Err(
                 "glTF animation sample has weight channels but no morph instance".to_owned(),
             );
+        }
+        if self.weights.is_empty() {
+            self.apply_pose(pose)?;
+            return Ok(false);
         }
         let mut staged_pose = pose.clone();
         self.apply_pose(&mut staged_pose)?;

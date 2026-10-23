@@ -1,0 +1,10 @@
+{
+  "measured_run": "20261023T135654.639285Z-hour-v3-frozen-fixtures-dea183a2",
+  "measured_source_sha256": "089dc21fd54417e7fe346deb25d6ba33953ccf23ea035f2edeff6dc14660149b",
+  "validated_source_sha256": "ce43024e079aa80a01368d0ff958827a726ce83a14e07a3e9fa3649374e8c08c",
+  "engine_files_match": true,
+  "differing_files": [
+    "tests/support/gltf_animation_fixture.rs"
+  ],
+  "explanation": "Only the additional windowed test assertions were restored after the compatible measurement; all engine and benchmark source bytes match."
+}

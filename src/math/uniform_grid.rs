@@ -244,25 +244,17 @@ impl UniformGrid {
         if !ray.origin.is_finite() || !ray.direction.is_finite() || max_t.is_nan() || max_t < 0.0 {
             return Vec::new();
         }
-        let origin = ray.origin.to_array().map(f64::from);
-        let direction = ray.direction.to_array().map(f64::from);
-        let range = if direction == [0.0; 3] || max_t == 0.0 {
-            self.cell_range(origin, origin)
-        } else if max_t.is_finite() {
-            let end = std::array::from_fn::<_, 3, _>(|axis| {
-                origin[axis] + direction[axis] * f64::from(max_t)
-            });
+        let query = RayBoundsQuery::new(ray, max_t);
+        let range = if query.direction == [0.0; 3] || max_t == 0.0 {
+            self.cell_range(query.origin, query.origin)
+        } else if let Some((min, max)) = query.envelope {
             // f32 products fit exactly in f64; expand the rounded sum outward
             // once before indexing, without narrowing an endpoint back to f32.
-            let min = std::array::from_fn(|axis| next_down(origin[axis].min(end[axis])));
-            let max = std::array::from_fn(|axis| next_up(origin[axis].max(end[axis])));
-            self.cell_range(min, max)
+            self.cell_range(min.map(next_down), max.map(next_up))
         } else {
             None
         };
-        self.query(range, |bounds| {
-            ray_meets_bounds(bounds, origin, direction, f64::from(max_t))
-        })
+        self.query(range, |bounds| query.meets_bounds(bounds))
     }
 
     fn query(&self, range: Option<CellRange>, intersects: impl Fn(&Aabb) -> bool) -> Vec<u32> {
@@ -334,43 +326,69 @@ pub(super) fn valid_bounds(bounds: &Aabb) -> bool {
     bounds.min.is_finite() && bounds.max.is_finite() && bounds.min.cmple(bounds.max).all()
 }
 
-pub(super) fn ray_meets_bounds(
-    bounds: &Aabb,
+// Callers validate finite ray components and a nonnegative, non-NaN limit.
+// Cache only the coordinate envelope; keep slab divisions and their rounding.
+pub(super) struct RayBoundsQuery {
     origin: [f64; 3],
     direction: [f64; 3],
     max_t: f64,
-) -> bool {
-    let min = bounds.min.to_array();
-    let max = bounds.max.to_array();
-    let mut enter = 0.0_f64;
-    let mut exit = max_t;
-    for axis in 0..3 {
-        // A slab's subtraction may erase a tiny endpoint separation when the
-        // origin is very far away. Reject bounds outside the finite segment's
-        // coordinate envelope before comparing the rounded parametric times.
-        if max_t.is_finite() {
-            let end = origin[axis] + direction[axis] * max_t;
-            if f64::from(max[axis]) < origin[axis].min(end)
-                || f64::from(min[axis]) > origin[axis].max(end)
-            {
-                return false;
-            }
-        }
-        if direction[axis] == 0.0 {
-            if origin[axis] < f64::from(min[axis]) || origin[axis] > f64::from(max[axis]) {
-                return false;
-            }
+    envelope: Option<([f64; 3], [f64; 3])>,
+}
+
+impl RayBoundsQuery {
+    pub(super) fn new(ray: &Ray, max_t: f32) -> Self {
+        let origin = ray.origin.to_array().map(f64::from);
+        let direction = ray.direction.to_array().map(f64::from);
+        let max_t = f64::from(max_t);
+        let envelope = if max_t.is_finite() {
+            let end = std::array::from_fn::<_, 3, _>(|axis| origin[axis] + direction[axis] * max_t);
+            Some((
+                std::array::from_fn(|axis| origin[axis].min(end[axis])),
+                std::array::from_fn(|axis| origin[axis].max(end[axis])),
+            ))
         } else {
-            let a = (f64::from(min[axis]) - origin[axis]) / direction[axis];
-            let b = (f64::from(max[axis]) - origin[axis]) / direction[axis];
-            enter = enter.max(a.min(b));
-            exit = exit.min(a.max(b));
-            if enter > exit {
-                return false;
-            }
+            None
+        };
+        Self {
+            origin,
+            direction,
+            max_t,
+            envelope,
         }
     }
-    true
+
+    pub(super) fn meets_bounds(&self, bounds: &Aabb) -> bool {
+        let min = bounds.min.to_array();
+        let max = bounds.max.to_array();
+        let mut enter = 0.0_f64;
+        let mut exit = self.max_t;
+        for axis in 0..3 {
+            // A slab's subtraction may erase a tiny endpoint separation when
+            // the origin is far away. Preserve the finite-envelope rejection
+            // before comparing the rounded parametric times.
+            if let Some((low, high)) = &self.envelope {
+                if f64::from(max[axis]) < low[axis] || f64::from(min[axis]) > high[axis] {
+                    return false;
+                }
+            }
+            if self.direction[axis] == 0.0 {
+                if self.origin[axis] < f64::from(min[axis])
+                    || self.origin[axis] > f64::from(max[axis])
+                {
+                    return false;
+                }
+            } else {
+                let a = (f64::from(min[axis]) - self.origin[axis]) / self.direction[axis];
+                let b = (f64::from(max[axis]) - self.origin[axis]) / self.direction[axis];
+                enter = enter.max(a.min(b));
+                exit = exit.min(a.max(b));
+                if enter > exit {
+                    return false;
+                }
+            }
+        }
+        true
+    }
 }
 
 // Finite inputs only. Spell these out to avoid raising the crate's Rust version
@@ -388,3 +406,7 @@ fn next_up(value: f64) -> f64 {
 fn next_down(value: f64) -> f64 {
     -next_up(-value)
 }
+
+#[cfg(test)]
+#[path = "uniform_grid_ray_tests.rs"]
+mod ray_tests;

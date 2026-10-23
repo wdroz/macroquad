@@ -1,9 +1,10 @@
 # One-hour performance maintenance — 23 October 2026
 
-This user-requested continuation expands the CPU suite from 14 to 35 workloads,
+This user-requested continuation expands the CPU suite from 14 to 41 workloads
+(35 in v2, then 41 in v3),
 records every complete run in Markdown, and measures further engine changes.
-The timed work began at 13:10:17 UTC. This report is updated as each trial finishes;
-individual measurements and comparisons are immutable.
+The timed work began at 13:10:17 UTC. Individual measurements and comparisons
+are immutable; the final report preserves every trial, including refusals.
 
 The retained v2 candidate reduces skinning CPU time **34.63%** without normals
 and **24.21%** with normals, large-clip sampling **32.45%**, unchanged-pose
@@ -12,6 +13,11 @@ application **91.54%**, and the pathological wide small-scene queries **89.78% t
 checking the existing cached mesh bounds first. These are workload-specific
 results, not frame-rate claims. The unchanged external mesh AABB control still
 flags a **5.00%** slowdown; this is explicitly **not an all-green comparison**.
+
+The later compatible v3 trial reduces octree ray times **30.90–45.20%** and
+combined pose application **17.68–85.78%**. It retains a separate **10.02%**
+regression in an unchanged empty-grid AABB control, an absolute cost of 15.16 ns.
+Both series and every intermediate trial are retained below.
 
 ## Measurement rules
 
@@ -88,6 +94,103 @@ remains part of the historical record; a new suite does not resolve it.
    the directly measured grid, sphere-query and glTF gains with these stated
    limits. No mesh AABB optimization or morph production change is retained.
 
+## Additional v3 series
+
+Engine checkpoint `5d238e0` was committed and pushed with the complete v2 trial
+history. Commit `6a5755e` adds six workloads and fixes Markdown CPU metadata on
+Windows and platforms without Linux `/proc` fields. All 33 Python tooling tests
+and all 41 benchmark setup checks pass. A probe using the actual Windows host
+metadata also renders successfully.
+
+The [v3 baseline](20261023T134829.332760Z-hour-v3-baseline-41172e2a.md) is measured
+at `6a5755e` with the same WSL/compiler/sampling configuration. New controls cover
+combined pose application with changed and unchanged transforms, plus ordinary,
+flat, tiny and empty octree ray queries. Its new harness fingerprint requires a
+fresh baseline. It does not overwrite, clear or directly compare against the v2
+regression records above. The [v3 lockfile](macroquad-cpu-v3.dependencies.lock)
+and full archived sources define this separate series.
+
+The [first v3 candidate](20261023T135253.805328Z-hour-v3-prepared-rays-and-pose-3141fda6.md)
+completed timing, but comparison was **refused** because added assertions in
+`tests/support/gltf_animation_fixture.rs` changed the strict fixture fingerprint.
+This graphics test is not timed by the CPU benchmark, but the guard deliberately
+does not waive fixture differences. Its measurements remain diagnostic only.
+The subsequent candidate restores that file's exact archived baseline bytes
+while timing, then restores the additional assertions for final graphics-test
+validation. Production code and benchmark workloads are unchanged between these
+two candidates; no saved metadata is edited to manufacture compatibility.
+
+The [compatible v3 comparison](20261023T135654.639285Z-hour-v3-frozen-fixtures-dea183a2.comparison.md)
+retains the prepared-ray and transform-only combined-application changes:
+
+| Targeted workload | Baseline ns/op | Candidate ns/op | Change |
+|---|---:|---:|---:|
+| Small-scene wide grid ray | 293.14 | 254.15 | -13.30% |
+| Long grid ray scan | 30,913.95 | 27,764.61 | -10.19% |
+| Ordinary octree ray | 378.20 | 261.35 | -30.90% |
+| Flat octree long ray | 38,943.49 | 21,340.93 | -45.20% |
+| Combined pose, changed | 9,504.80 | 7,824.44 | -17.68% |
+| Combined pose, unchanged | 1,886.52 | 268.21 | -85.78% |
+
+All six improvements exceed their noise guards. Ordinary grid rays and tiny
+octree rays remain within noise; empty octrees improve 6.77%. The shared prepared
+query computes finite endpoints/envelopes once, retaining f64 division, axis
+order, zero/subnormal handling, inclusive bounds and endpoint-cancellation
+protection. Transform-only combined samples call the existing atomic pose update
+directly and leave a supplied morph instance untouched.
+
+The **unchanged small-scene empty AABB query regresses 10.02%**, from 151.23 to
+166.39 ns/op: an absolute increase of 15.16 ns. This is the only regression flag
+in this v3 comparison and remains unresolved. Its AABB algorithm was not edited
+in this trial; code generation/placement is a possible explanation, not a proven
+cause. The candidate is retained for the substantial ray/pose gains with this
+explicit cost; this is **not an all-green comparison**. The unchanged external
+mesh AABB control improves 10.14%, likewise without a new AABB algorithm claim.
+Neither observation erases the v2 flags or establishes a cross-version gain.
+
+## Native Windows measurement
+
+The [complete 41-case Windows run](20261023T140219.567078Z-hour-native-windows-smoke-f6fe1081.md)
+uses Rust 1.95.0/MSVC and the same three-execution/nine-sample settings. It verifies
+the release benchmark and automatic Markdown output on the actual Windows host,
+including its native hardware metadata. It is a separate host/toolchain series;
+its absolute times must not be compared directly with WSL results. Windows CPU
+affinity was not configured or recorded by this runner, unlike the pinned WSL
+series. No heavy build or test ran concurrently with either measured execution.
+
+A Windows reference measurement is recorded after the candidate, restoring the
+three production files from the archived v3 baseline while retaining the final
+tests and identical harness. A `finally` block restores and verifies the exact
+final source bytes afterward. This reference measures the final two optimizations
+only; it cannot establish native Windows gains for earlier v2 changes. The order
+is explicitly candidate then reference, and both records remain immutable.
+
+The [Windows reference record](20261023T140513.517017Z-hour-native-windows-reference-baseline-71a2f458.md)
+and [strict compatible comparison](20261023T140219.567078Z-hour-native-windows-smoke-f6fe1081.windows-comparison.md)
+show wide/long grid rays **20.18%/10.20%** faster, ordinary/flat octree rays
+**31.40%/13.02%** faster, and combined changed/unchanged poses **46.07%/87.69%**
+faster, all beyond their guards. The reference was measured after the candidate;
+the report makes no claim that it was a temporally prior run.
+
+Four unchanged controls regress on Windows, so the native result is also
+**not all-green**:
+
+| Unchanged control | Reference ns/op | Candidate ns/op | Regression |
+|---|---:|---:|---:|
+| External mesh AABB | 1,927.29 | 2,051.98 | +6.47% |
+| Local mesh AABB | 1,485.06 | 1,734.41 | +16.79% |
+| Interleaved mesh AABB | 1,466.40 | 1,828.72 | +24.71% |
+| Position-only skinning | 49,913.38 | 54,144.04 | +8.48% |
+
+These flags remain unresolved. Different code generation/placement and execution
+order are hypotheses, not proven causes. The measured candidate is retained with
+these explicit platform-specific costs; it is not a universal performance gain.
+The unchanged empty-grid control moves in the opposite direction on Windows
+(-33.33%); this does not erase its WSL regression. Future work should isolate the
+control sensitivity and measure representative game scenes before making a
+frame-rate claim. After this reference run, final source identity was rechecked
+and matches the already validated candidate exactly.
+
 ## Retained evidence
 
 Every run has a linked Markdown summary and compact JSON containing all original
@@ -116,10 +219,35 @@ CARGO_TARGET_DIR=/home/wdroz/macroquad-performance-target CARGO_BUILD_JOBS=2 \
 
 ## Validation
 
-Round 1 passes all eleven checks: 31 benchmark-tooling tests, native default and
+Round 1 passes [all eleven checks](validation-round1.json): 31 benchmark-tooling tests, native default and
 glTF/video builds, 590 default tests, 822 glTF/video tests, 207 default doctests,
 437 feature doctests, all examples, both all-target Clippy runs, and the glTF/video
 WebAssembly release build. Existing warning kinds are unchanged. Graphics tests
 use Xvfb/software OpenGL; these CPU changes have no physical-device runtime claim.
-Later trials receive focused checks before timing and final validation before
-commit. This maintenance leaves scheduled counters N=5, M=0, D=2 unchanged.
+Later trials receive focused checks before timing.
+
+The [final validation](validation-final.json) passes all eleven checks with
+**33 Python tooling tests, 592 default Rust tests, 826 glTF/video tests, 207 default
+doctests and 437 feature doctests**, both builds, both all-target Clippy runs,
+all examples and the WebAssembly release build. Existing warning kinds are
+unchanged. The restored windowed assertions verify populated morph weights,
+bounds and zero uploads after transform-only success and failure. Two new ray
+tests compare 42,800 numeric-edge/random finite-bit cases against the captured
+legacy predicate.
+
+[Native Windows validation](validation-windows.json) additionally passes
+**35 release CPU tests** with Rust 1.95.0/MSVC, including the ray differential
+tests, transform application, IEEE skin-weight edges, mesh pruning and grid
+queries. Independent reviews found no correctness blocker in the retained
+changes, and verified exact raw-record copies, source archives, lockfiles,
+comparison recomputation and report links.
+
+The [source identity check](final-source-identity.json) confirms every measured
+engine and benchmark source byte matches the validated tree. The sole difference
+is the restored windowed test assertions described above. Measured v3 source
+SHA-256 is `089dc21fd54417e7fe346deb25d6ba33953ccf23ea035f2edeff6dc14660149b`;
+validated source SHA-256 is
+`ce43024e079aa80a01368d0ff958827a726ce83a14e07a3e9fa3649374e8c08c`.
+
+This maintenance leaves scheduled counters N=5, M=0, D=2 unchanged. No public API,
+dependency versions, CI workflow, game assets or deployment changed.

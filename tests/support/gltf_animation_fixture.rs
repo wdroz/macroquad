@@ -146,6 +146,35 @@ pub async fn run() {
     telemetry::reset_renderer_diagnostics();
     assert!(!looped.apply(&mut pose, Some(&mut first)).unwrap());
     uploads(0);
+    // Transform-only combined updates must leave populated morph geometry,
+    // weights and bounds untouched even when an instance is supplied.
+    let mut transform_only = clip.sample(1.).unwrap();
+    transform_only.weights.clear();
+    let mut transform_pose = pose.clone();
+    let weights = first.weights(1).unwrap().to_vec();
+    let bounds = (first.model().bounds_min, first.model().bounds_max);
+    assert!(!transform_only
+        .apply(&mut transform_pose, Some(&mut first))
+        .unwrap());
+    assert_eq!(first.weights(1).unwrap(), weights);
+    assert_eq!((first.model().bounds_min, first.model().bounds_max), bounds);
+    uploads(0);
+    let world = transform_pose
+        .world(transform_pose.handle(1).unwrap())
+        .unwrap();
+    transform_only.transforms[0].1.rotation = Quat::from_array([0.; 4]);
+    assert!(transform_only
+        .apply(&mut transform_pose, Some(&mut first))
+        .is_err());
+    assert_eq!(
+        transform_pose
+            .world(transform_pose.handle(1).unwrap())
+            .unwrap(),
+        world
+    );
+    assert_eq!(first.weights(1).unwrap(), weights);
+    assert_eq!((first.model().bounds_min, first.model().bounds_max), bounds);
+    uploads(0);
     set_default_camera();
     telemetry::set_renderer_diagnostics_enabled(false);
     macroquad::logging::info!("GLTF_ANIMATION_FIXTURE_PASS");

@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use super::uniform_grid::{ray_meets_bounds, valid_bounds};
+use super::uniform_grid::{valid_bounds, RayBoundsQuery};
 use super::{Aabb, Ray};
 
 const MAX_DEPTH: u32 = 16;
@@ -206,14 +206,11 @@ impl Octree {
         if !ray.origin.is_finite() || !ray.direction.is_finite() || max_t.is_nan() || max_t < 0.0 {
             return Vec::new();
         }
-        self.query(|bounds| {
-            ray_meets_bounds(
-                bounds,
-                ray.origin.to_array().map(f64::from),
-                ray.direction.to_array().map(f64::from),
-                f64::from(max_t),
-            )
-        })
+        if self.is_empty() {
+            return Vec::new();
+        }
+        let query = RayBoundsQuery::new(ray, max_t);
+        self.query(|bounds| query.meets_bounds(bounds))
     }
 
     fn query(&self, meets: impl Fn(&Aabb) -> bool) -> Vec<u32> {

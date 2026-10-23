@@ -510,6 +510,148 @@ fn numerically_unchanged_pose_samples_preserve_authored_signed_zero_bits() {
 }
 
 #[test]
+fn transform_only_combined_application_is_atomic_with_optional_morph() {
+    // Empty geometry follows the real public loader/instance path without
+    // needing a graphics context. The draw fixture covers populated buffers.
+    let bytes = asset::pack(
+        json!({
+            "asset":{"version":"2.0"}, "scene":0,
+            "scenes":[{"nodes":[0]}],
+            "nodes":[{"name":"root","children":[1]},{"name":"child"}],
+            "buffers":[{"byteLength":4}]
+        }),
+        vec![0; 4],
+    );
+    let source = GltfMorphModel::from_bytes(&bytes).unwrap();
+    let mut morph = source.instantiate();
+    let morph_snapshot = |morph: &GltfMorphInstance| {
+        let model = morph.model();
+        (
+            model.root_names.clone(),
+            model.bounds_min,
+            model.bounds_max,
+            model.parts.len(),
+            [
+                model.stats.nodes,
+                model.stats.meshes,
+                model.stats.draw_calls,
+                model.stats.triangles,
+                model.stats.textures,
+            ],
+            (0..2)
+                .map(|node| morph.weights(node).unwrap().to_vec())
+                .collect::<Vec<_>>(),
+        )
+    };
+    let before_morph = morph_snapshot(&morph);
+    let moved = GltfLocalTransform {
+        translation: Vec3::X,
+        ..Default::default()
+    };
+    let sample = GltfAnimationSample {
+        transforms: vec![
+            (0, moved),
+            (
+                1,
+                GltfLocalTransform {
+                    translation: vec3(-0., 1., 0.),
+                    ..Default::default()
+                },
+            ),
+        ],
+        weights: Vec::new(),
+    };
+    let mut expected = source.pose().hierarchy().unwrap();
+    sample.apply_pose(&mut expected).unwrap();
+    for with_morph in [false, true] {
+        let mut pose = source.pose().hierarchy().unwrap();
+        for _ in 0..2 {
+            assert!(!sample
+                .apply(&mut pose, with_morph.then_some(&mut morph))
+                .unwrap());
+            for node in 0..2 {
+                let handle = pose.handle(node).unwrap();
+                assert_eq!(
+                    pose.local(handle)
+                        .unwrap()
+                        .to_cols_array()
+                        .map(f32::to_bits),
+                    expected
+                        .local(handle)
+                        .unwrap()
+                        .to_cols_array()
+                        .map(f32::to_bits)
+                );
+                assert_eq!(
+                    pose.world(handle)
+                        .unwrap()
+                        .to_cols_array()
+                        .map(f32::to_bits),
+                    expected
+                        .world(handle)
+                        .unwrap()
+                        .to_cols_array()
+                        .map(f32::to_bits)
+                );
+            }
+            assert_eq!(morph_snapshot(&morph), before_morph);
+        }
+        let mut bad = sample.clone();
+        bad.transforms[0].1.translation = Vec3::Z;
+        bad.transforms.push((
+            1,
+            GltfLocalTransform {
+                rotation: Quat::from_array([0.; 4]),
+                ..Default::default()
+            },
+        ));
+        assert!(bad
+            .apply(&mut pose, with_morph.then_some(&mut morph))
+            .is_err());
+        for node in 0..2 {
+            let handle = pose.handle(node).unwrap();
+            assert_eq!(
+                pose.local(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits),
+                expected
+                    .local(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits)
+            );
+            assert_eq!(
+                pose.world(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits),
+                expected
+                    .world(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits)
+            );
+        }
+        assert_eq!(morph_snapshot(&morph), before_morph);
+        assert!(!GltfAnimationSample::default()
+            .apply(&mut pose, with_morph.then_some(&mut morph))
+            .unwrap());
+        // A present weight channel still requires an instance, even if its
+        // target happens to have zero weights; preserve the error precedence.
+        bad.weights.push((0, Vec::new()));
+        assert_eq!(
+            bad.apply(&mut pose, None).unwrap_err(),
+            "glTF animation sample has weight channels but no morph instance"
+        );
+    }
+    let mut with_weights = sample;
+    with_weights.weights.push((0, Vec::new()));
+    assert!(!with_weights.apply(&mut expected, Some(&mut morph)).unwrap());
+    assert_eq!(morph_snapshot(&morph), before_morph);
+}
+
+#[test]
 fn failed_multi_node_pose_application_is_atomic() {
     let bytes = asset::glb();
     let scene = GltfScene::from_bytes(&bytes).unwrap();
