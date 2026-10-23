@@ -3,8 +3,10 @@
 This user-requested continuation expands the CPU suite from 14 to 41 workloads
 (35 in v2, then 41 in v3),
 records every complete run in Markdown, and measures further engine changes.
-The timed work began at 13:10:17 UTC. Individual measurements and comparisons
+The one-hour work window was 13:10:17–14:10:17 UTC. Individual measurements and comparisons
 are immutable; the final report preserves every trial, including refusals.
+The final engine and evidence commit is
+[`b13d1c5`](https://github.com/wdroz/macroquad/commit/b13d1c5e5cc26622ae7d7cc41a519755e6a84abe).
 
 The retained v2 candidate reduces skinning CPU time **34.63%** without normals
 and **24.21%** with normals, large-clip sampling **32.45%**, unchanged-pose
@@ -16,7 +18,7 @@ flags a **5.00%** slowdown; this is explicitly **not an all-green comparison**.
 
 The later compatible v3 trial reduces octree ray times **30.90–45.20%** and
 combined pose application **17.68–85.78%**. It retains a separate **10.02%**
-regression in an unchanged empty-grid AABB control, an absolute cost of 15.16 ns.
+regression in an unchanged empty-result AABB query, an absolute cost of 15.16 ns.
 Both series and every intermediate trial are retained below.
 
 ## Measurement rules
@@ -185,7 +187,7 @@ Four unchanged controls regress on Windows, so the native result is also
 These flags remain unresolved. Different code generation/placement and execution
 order are hypotheses, not proven causes. The measured candidate is retained with
 these explicit platform-specific costs; it is not a universal performance gain.
-The unchanged empty-grid control moves in the opposite direction on Windows
+The unchanged empty-result query control moves in the opposite direction on Windows
 (-33.33%); this does not erase its WSL regression. Future work should isolate the
 control sensitivity and measure representative game scenes before making a
 frame-rate claim. After this reference run, final source identity was rechecked

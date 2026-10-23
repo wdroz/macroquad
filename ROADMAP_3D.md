@@ -81,7 +81,7 @@ targeted CPU workloads. Rejected morph/AABB trials and control regressions remai
 visible, including a 5% unchanged external-AABB slowdown in the retained v2
 comparison. The separate v3 series measures prepared octree rays 30.90–45.20%
 faster and combined pose application 17.68–85.78% faster, retaining a 10.02%
-(15.16 ns) empty-grid control regression. All eleven final checks and 35 native
+(15.16 ns) empty-result query control regression. All eleven final checks and 35 native
 Windows CPU tests pass. Cross-version results cannot be combined. Counters and
 the scheduled queue remain unchanged.
 
