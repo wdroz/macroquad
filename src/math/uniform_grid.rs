@@ -8,7 +8,7 @@ use super::{Aabb, Ray};
 const MAX_CELLS: u64 = 4096;
 type Cell = [i32; 3];
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct CellRange {
     min: Cell,
     max: Cell,
@@ -136,7 +136,13 @@ impl UniformGrid {
             return false;
         }
         let cells = self.bounds_cells(&bounds);
-        if let Some(previous) = self.entries.remove(&index) {
+        if let Some(previous) = self.entries.insert(index, Entry { bounds, cells }) {
+            // Updating the snapshot needs only one tree lookup. When an object
+            // stays in the same cells (or the fallback), its memberships remain
+            // valid even though its precise bounds may have changed.
+            if previous.cells == cells {
+                return true;
+            }
             if let Some(range) = previous.cells {
                 range.visit(|cell| {
                     if let Some(indices) = self.cells.get_mut(&cell) {
@@ -155,7 +161,6 @@ impl UniformGrid {
         } else {
             self.fallback.insert(index);
         }
-        self.entries.insert(index, Entry { bounds, cells });
         true
     }
 

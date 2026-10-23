@@ -1,6 +1,75 @@
 use macroquad::prelude::*;
 
 #[test]
+fn replacements_with_unchanged_cells_refresh_exact_bounds() {
+    let mut grid = UniformGrid::new(1.0).unwrap();
+    // Keep the candidate count below the full-scan budget, so point queries
+    // exercise retained cell memberships as well as the updated bounds.
+    for id in [100, 101, 102] {
+        assert!(grid.insert(
+            id,
+            Aabb::from_center_size(Vec3::splat(id as f32), Vec3::splat(0.25))
+        ));
+    }
+    let before = Aabb::from_min_max(Vec3::splat(0.1), Vec3::splat(1.1));
+    let after = Aabb::from_min_max(Vec3::splat(0.8), Vec3::splat(1.8));
+    for bounds in [before, after, before, after] {
+        assert!(grid.insert(7, bounds));
+        assert_eq!(grid.len(), 4);
+        for at in [Vec3::splat(0.2), Vec3::splat(0.9), Vec3::splat(1.7)] {
+            let point = Aabb::from_min_max(at, at);
+            let expected = if bounds.overlaps(&point) {
+                vec![7]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(grid.query_aabb(&point), expected);
+            assert_eq!(grid.query_ray(&Ray::new(at, Vec3::X), 0.01), expected);
+        }
+    }
+    // An invalid replacement must preserve the latest valid snapshot.
+    assert!(!grid.insert(7, Aabb::from_min_max(Vec3::ONE, Vec3::ZERO)));
+    let old_point = Aabb::from_min_max(Vec3::splat(0.2), Vec3::splat(0.2));
+    let new_point = Aabb::from_min_max(Vec3::splat(1.7), Vec3::splat(1.7));
+    assert!(grid.query_aabb(&old_point).is_empty());
+    assert_eq!(grid.query_aabb(&new_point), vec![7]);
+}
+
+#[test]
+fn fallback_replacements_refresh_bounds_and_keep_memberships() {
+    let mut grid = UniformGrid::new(1.0).unwrap();
+    assert!(grid.insert(
+        90,
+        Aabb::from_min_max(Vec3::splat(500.0), Vec3::splat(500.0))
+    ));
+    assert!(grid.insert(3, Aabb::from_min_max(Vec3::ZERO, Vec3::ZERO)));
+    let near = Aabb::from_center_size(Vec3::ZERO, Vec3::splat(40.0));
+    let far = Aabb::from_center_size(Vec3::splat(100.0), Vec3::splat(40.0));
+    for bounds in [near, far, near, far] {
+        assert!(grid.insert(17, bounds));
+        assert_eq!(grid.len(), 3);
+        for at in [Vec3::ZERO, Vec3::splat(100.0)] {
+            let point = Aabb::from_min_max(at, at);
+            let mut expected = if at == Vec3::ZERO {
+                vec![3]
+            } else {
+                Vec::new()
+            };
+            if bounds.overlaps(&point) {
+                expected.push(17);
+            }
+            assert_eq!(grid.query_aabb(&point), expected);
+            assert_eq!(grid.query_ray(&Ray::new(at, Vec3::X), 0.1), expected);
+        }
+    }
+    // Replacement across storage paths must still remove the old fallback.
+    let final_point = Aabb::from_min_max(Vec3::splat(250.0), Vec3::splat(250.0));
+    assert!(grid.insert(17, final_point));
+    assert!(grid.query_aabb(&far).is_empty());
+    assert_eq!(grid.query_aabb(&final_point), vec![17]);
+}
+
+#[test]
 fn candidate_budget_boundaries_and_all_fallback_keep_exact_sorted_results() {
     // All three indexed entries occupy the same cell. Querying that cell reaches
     // the entry budget exactly, but only one stored AABB actually intersects.

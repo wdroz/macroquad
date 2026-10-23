@@ -339,13 +339,12 @@ impl GltfAnimationClip {
             };
             let a = &channel.values[left * channel.width..(left + 1) * channel.width];
             let b = &channel.values[right * channel.width..(right + 1) * channel.width];
-            let values = a
-                .iter()
-                .zip(b)
-                .map(|(&a, &b)| ((1. - mix) * a as f64 + mix * b as f64) as f32)
-                .collect::<Vec<_>>();
+            let interpolate =
+                |index: usize| ((1. - mix) * a[index] as f64 + mix * b[index] as f64) as f32;
             if channel.property == gltf::animation::Property::MorphTargetWeights {
-                sample.weights.push((node, values));
+                sample
+                    .weights
+                    .push((node, (0..channel.width).map(interpolate).collect()));
             } else {
                 let index = sample
                     .transforms
@@ -354,9 +353,12 @@ impl GltfAnimationClip {
                 let local = &mut sample.transforms[index].1;
                 match channel.property {
                     gltf::animation::Property::Translation => {
-                        local.translation = Vec3::from_slice(&values)
+                        local.translation =
+                            Vec3::new(interpolate(0), interpolate(1), interpolate(2))
                     }
-                    gltf::animation::Property::Scale => local.scale = Vec3::from_slice(&values),
+                    gltf::animation::Property::Scale => {
+                        local.scale = Vec3::new(interpolate(0), interpolate(1), interpolate(2))
+                    }
                     gltf::animation::Property::Rotation => {
                         let a = Quat::from_array(a.try_into().unwrap());
                         let b = Quat::from_array(b.try_into().unwrap());

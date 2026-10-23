@@ -289,6 +289,48 @@ fn outside_scene_channels_are_omitted_and_extreme_finite_interpolation_stays_fin
 }
 
 #[test]
+fn trs_interpolation_preserves_scalar_f64_results_without_temporary_vectors() {
+    let (mut doc, mut binary) = asset::document();
+    let translation = [[3e38, -0.375, 1e-30], [-3e38, 0.1875, -1e-30]];
+    let scale = [[-0.7, 2.3, 0.], [1.9, -3.1, 1.]];
+    replace_f32(&doc, &mut binary, 3, &translation.concat());
+    replace_f32(&doc, &mut binary, 5, &scale.concat());
+    doc["animations"][0]["samplers"][2]["interpolation"] = json!("LINEAR");
+    let clip = GltfAnimationData::from_bytes(&asset::pack(doc, binary))
+        .unwrap()
+        .clips
+        .remove(0);
+    for seconds in [
+        -f32::MAX,
+        0.,
+        f32::MIN_POSITIVE,
+        0.125,
+        0.7,
+        1.,
+        1.9,
+        2.,
+        f32::MAX,
+    ] {
+        let mix = (seconds as f64 / 2.).clamp(0., 1.);
+        let sample = clip.sample(seconds).unwrap();
+        for (actual, keys) in [
+            (sample.transforms[0].1.translation, translation),
+            (sample.transforms[0].1.scale, scale),
+        ] {
+            let expected = std::array::from_fn::<_, 3, _>(|index| {
+                ((1. - mix) * keys[0][index] as f64 + mix * keys[1][index] as f64) as f32
+            });
+            assert_eq!(
+                actual.to_array().map(f32::to_bits),
+                expected.map(f32::to_bits)
+            );
+        }
+        assert_eq!(sample.weights[0].1[0].to_bits(), (mix as f32).to_bits());
+        assert!(sample.transforms[0].1.rotation.is_finite());
+    }
+}
+
+#[test]
 fn failed_multi_node_pose_application_is_atomic() {
     let bytes = asset::glb();
     let scene = GltfScene::from_bytes(&bytes).unwrap();

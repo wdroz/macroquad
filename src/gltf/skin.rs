@@ -307,6 +307,9 @@ impl GltfSkinPrimitive {
         normals: &[Vec3],
         matrices: &[Mat4],
     ) -> Result<GltfSkinEvaluation, GltfError> {
+        let invalid = || {
+            GltfError::new("glTF skin deformation has invalid arrays, indices, weights or matrices")
+        };
         if self.joints.len() != positions.len()
             || self.weights.len() != positions.len()
             || !normals.is_empty() && normals.len() != positions.len()
@@ -320,40 +323,76 @@ impl GltfSkinPrimitive {
                 weights.iter().any(|w| !w.is_finite() || *w < 0.)
                     || (weights.iter().sum::<f32>() - 1.).abs() > 0.001
             })
-            || matrices
-                .iter()
-                .any(|m| !affine(*m) || !m.inverse().is_finite())
         {
-            return Err(GltfError::new(
-                "glTF skin deformation has invalid arrays, indices, weights or matrices",
-            ));
+            return Err(invalid());
         }
-        let normal_matrices = matrices
-            .iter()
-            .map(|m| m.inverse().transpose())
-            .collect::<Vec<_>>();
+        // Validate every matrix, even unused joints and position-only calls.
+        // Reuse the inverse for normals instead of computing it a second time.
+        let mut normal_matrices = Vec::with_capacity(if normals.is_empty() {
+            0
+        } else {
+            matrices.len()
+        });
+        for &matrix in matrices {
+            if !affine(matrix) {
+                return Err(invalid());
+            }
+            let inverse = matrix.inverse();
+            if !inverse.is_finite() {
+                return Err(invalid());
+            }
+            if !normals.is_empty() {
+                normal_matrices.push(inverse.transpose());
+            }
+        }
+        if normals.is_empty() {
+            self.deform_vertices::<false>(positions, normals, matrices, &normal_matrices)
+        } else {
+            self.deform_vertices::<true>(positions, normals, matrices, &normal_matrices)
+        }
+    }
+
+    // Specialize the influence loop once per call so position-only skinning
+    // does not carry a normal branch through every joint influence.
+    fn deform_vertices<const WITH_NORMALS: bool>(
+        &self,
+        positions: &[Vec3],
+        normals: &[Vec3],
+        matrices: &[Mat4],
+        normal_matrices: &[Mat4],
+    ) -> Result<GltfSkinEvaluation, GltfError> {
         let mut result = GltfSkinEvaluation {
             positions: Vec::with_capacity(positions.len()),
             normals: Vec::with_capacity(normals.len()),
         };
-        for index in 0..positions.len() {
+        for (index, ((&source_position, joints), weights)) in positions
+            .iter()
+            .zip(&self.joints)
+            .zip(&self.weights)
+            .enumerate()
+        {
+            let source_normal = if WITH_NORMALS {
+                normals[index]
+            } else {
+                Vec3::ZERO
+            };
             let mut position = Vec3::ZERO;
             let mut normal = Vec3::ZERO;
-            for (&joint, &weight) in self.joints[index].iter().zip(&self.weights[index]) {
+            for (&joint, &weight) in joints.iter().zip(weights) {
                 if weight == 0. {
                     continue;
                 }
-                position += matrices[joint as usize].transform_point3(positions[index]) * weight;
-                if !normals.is_empty() {
+                position += matrices[joint as usize].transform_point3(source_position) * weight;
+                if WITH_NORMALS {
                     normal +=
-                        normal_matrices[joint as usize].transform_vector3(normals[index]) * weight;
+                        normal_matrices[joint as usize].transform_vector3(source_normal) * weight;
                 }
             }
             if !position.is_finite() || !normal.is_finite() {
                 return Err(GltfError::new("glTF skin deformation overflow"));
             }
             result.positions.push(position);
-            if !normals.is_empty() {
+            if WITH_NORMALS {
                 result.normals.push(normal.normalize_or_zero());
             }
         }
