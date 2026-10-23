@@ -19,7 +19,7 @@ mod grid_workloads;
 #[path = "support/mesh_workloads.rs"]
 mod mesh_workloads;
 
-const SUITE_VERSION: &str = "macroquad-cpu-v2";
+const SUITE_VERSION: &str = "macroquad-cpu-v3";
 
 struct Settings {
     samples: usize,

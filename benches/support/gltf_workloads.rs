@@ -365,6 +365,89 @@ fn pose_cases(settings: &Settings) -> usize {
             },
         ) as usize;
     }
+    // Exercise the combined public API with transform-only samples. Pose
+    // cloning and all parity checks here are setup, outside measured work.
+    let mut combined_pose = pose.clone();
+    let mut expected_pose = pose.clone();
+    for sample in &samples {
+        assert!(!sample.apply(&mut combined_pose, None).unwrap());
+        sample.apply_pose(&mut expected_pose).unwrap();
+        for node in 0..257 {
+            let handle = combined_pose.handle(node).unwrap();
+            assert_eq!(
+                combined_pose
+                    .local(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits),
+                expected_pose
+                    .local(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits)
+            );
+            assert_eq!(
+                combined_pose
+                    .world(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits),
+                expected_pose
+                    .world(handle)
+                    .unwrap()
+                    .to_cols_array()
+                    .map(f32::to_bits)
+            );
+        }
+    }
+    for (benchmark, workload, changed) in [
+        (
+            "gltf.pose_combined_changed",
+            "pose257-branch16-edit17-combined-alternating2-v1",
+            true,
+        ),
+        (
+            "gltf.pose_combined_unchanged",
+            "pose257-branch16-edit17-combined-identical-v1",
+            false,
+        ),
+    ] {
+        selected += run(
+            settings,
+            benchmark,
+            workload,
+            fp,
+            if changed { 2 } else { 1 },
+            || {
+                if changed {
+                    black_box(
+                        black_box(&samples[0])
+                            .apply(black_box(&mut combined_pose), None)
+                            .unwrap(),
+                    );
+                }
+                black_box(
+                    black_box(&samples[1])
+                        .apply(black_box(&mut combined_pose), None)
+                        .unwrap(),
+                );
+                let mut digest = Digest {
+                    hits: 257,
+                    ..Default::default()
+                };
+                for node in [0, 128, 256] {
+                    for component in combined_pose
+                        .world(combined_pose.handle(node).unwrap())
+                        .unwrap()
+                        .to_cols_array()
+                    {
+                        digest.f32(component);
+                    }
+                }
+                digest
+            },
+        ) as usize;
+    }
     selected
 }
 

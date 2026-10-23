@@ -232,5 +232,106 @@ pub(super) fn cases(settings: &Settings) -> usize {
             digest
         },
     ) as usize;
+
+    let tree = Octree::new(fixture.entries.iter().copied()).unwrap();
+    let mut tree_fp = fixture.fingerprint;
+    tree_fp.bytes(&tree.max_depth().to_le_bytes());
+    for ray in &fixture.rays {
+        assert_eq!(tree.query_ray(ray, 8.0), scan.query_ray(ray, 8.0));
+    }
+    selected += run(
+        settings,
+        "octree.sparse_ray",
+        "sparse4096-depth16-bounded-ray32-v1",
+        tree_fp,
+        fixture.rays.len() as u64,
+        || {
+            let mut digest = Digest::default();
+            for ray in black_box(&fixture.rays) {
+                let result = black_box(tree.query_ray(black_box(ray), black_box(8.0)));
+                digest.ids(&result);
+            }
+            digest
+        },
+    ) as usize;
+
+    let mut scan_fp = fp;
+    scan_fp.bytes(&scan.max_depth().to_le_bytes());
+    selected += run(
+        settings,
+        "octree.flat_long_ray",
+        "sparse4096-depth0-long-finite-and-infinite-ray32-v1",
+        scan_fp,
+        rays.len() as u64,
+        || {
+            let mut digest = Digest::default();
+            for (ray, limit) in black_box(&rays) {
+                let result = black_box(scan.query_ray(black_box(ray), black_box(*limit)));
+                digest.ids(&result);
+            }
+            digest
+        },
+    ) as usize;
+
+    let tiny_rays = (0..32)
+        .map(|i| {
+            let offset = (i / 4) as f32 * 0.01;
+            match i % 4 {
+                0 => (Ray::new(vec3(-2.0, offset, 0.0), Vec3::X * 2.0), 1.0),
+                1 => (Ray::new(vec3(-2.0, 2.0 + offset, 0.0), Vec3::X), 4.0),
+                2 => (
+                    Ray::new(vec3(0.0, offset, 0.0), vec3(-0.0, 0.0, -0.0)),
+                    f32::INFINITY,
+                ),
+                _ => (Ray::new(vec3(2.0, offset, 0.0), -Vec3::X), 0.0),
+            }
+        })
+        .collect::<Vec<_>>();
+    for empty in [false, true] {
+        let bounds = Aabb::from_center_size(Vec3::ZERO, Vec3::ONE);
+        let entries = if empty { Vec::new() } else { vec![(9, bounds)] };
+        let tree = Octree::new(entries).unwrap();
+        let mut fp = Fingerprint::new();
+        fp.bytes(&(tree.len() as u64).to_le_bytes());
+        fp.bytes(&tree.max_depth().to_le_bytes());
+        if !empty {
+            fp.bytes(&9_u32.to_le_bytes());
+            fp.aabb(&bounds);
+        }
+        for (index, (ray, limit)) in tiny_rays.iter().enumerate() {
+            let expected = if !empty && index % 2 == 0 {
+                vec![9]
+            } else {
+                Vec::new()
+            };
+            assert_eq!(tree.query_ray(ray, *limit), expected);
+            fp.vec3(ray.origin);
+            fp.vec3(ray.direction);
+            fp.f32(*limit);
+        }
+        selected += run(
+            settings,
+            if empty {
+                "octree.empty_ray"
+            } else {
+                "octree.tiny_ray"
+            },
+            if empty {
+                "empty-finite-infinite-stationary-ray32-v1"
+            } else {
+                "box1-finite-infinite-stationary-ray32-hit16-v1"
+            },
+            fp,
+            tiny_rays.len() as u64,
+            || {
+                let mut digest = Digest::default();
+                for (ray, limit) in black_box(&tiny_rays) {
+                    let result = black_box(tree.query_ray(black_box(ray), black_box(*limit)));
+                    digest.ids(&result);
+                }
+                digest
+            },
+        ) as usize;
+    }
     selected
 }

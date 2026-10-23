@@ -13,3 +13,4 @@ Append new records; never replace an earlier result or discard a failed experime
 
 - [23 October 2026: baseline, rejected HashSet trial, bounded grid optimization and control diagnostics](2026-10-23/README.md).
 - [23 October 2026: animation, skinning and grid-update optimization](2026-10-23-followup/README.md).
+- [23 October 2026: one-hour continuation, wider workload coverage and retained trials](2026-10-23-hour/README.md).

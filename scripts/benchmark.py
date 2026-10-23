@@ -401,13 +401,18 @@ def run_text(artifact):
     """Human-readable companion; raw samples and provenance remain in run.json."""
     options = artifact["options"]
     host = artifact["host"]
+    cpu_models = host.get("cpu_models") or [
+        cpu["Name"] for cpu in host.get("hardware", {}).get("cpus", []) if cpu.get("Name")
+    ]
+    cpu_description = (", ".join(cpu_models) or host.get("processor")
+                       or host.get("processor_identifier") or host.get("machine") or "unknown CPU")
     lines = [
         "# CPU benchmark run", "",
         f"Run: {markdown_value(artifact['run_id'])}", "",
         f"Source commit: {markdown_value(artifact['git']['head'])}", "",
         f"Exact source SHA-256: {artifact['source']['sha256']}", "",
         f"Host: {markdown_value(host['hostname'])}; {markdown_value(host['system'])} "
-        f"{markdown_value(host['release'])}; {markdown_value(', '.join(host['cpu_models']))}.", "",
+        f"{markdown_value(host['release'])}; {markdown_value(cpu_description)}.", "",
         f"Features: {markdown_value(', '.join(options['features']) or '(default)')}; "
         f"target: {markdown_value(options['target'])}; default features disabled: {options['no_default_features']}.", "",
         f"Sampling: {options['repeats']} process executions, {options['samples']} samples each, "

@@ -2,7 +2,8 @@
 
 The [recorded runs](../benchmarks/history/README.md) include the first baseline,
 bounded grid optimization, rejected candidate and unresolved control slowdown,
-and the [animation, skinning and grid-update follow-up](../benchmarks/history/2026-10-23-followup/README.md).
+the [animation, skinning and grid-update follow-up](../benchmarks/history/2026-10-23-followup/README.md),
+and the [one-hour continuation](../benchmarks/history/2026-10-23-hour/README.md).
 Each report stores the benchmark table in Markdown alongside immutable JSON
 measurements, source patches and the dependency lockfile.
 
@@ -10,7 +11,9 @@ The fork's CPU benchmark is a reproducible measurement lane for collision math,
 uniform-grid queries and rebuilds, animation sampling, and glTF skin deformation.
 The `macroquad-cpu-v2` suite additionally covers small-scene wide grid queries,
 same-cell updates, triangle surfaces, large animation clips, morphing and pose
-updates. It starts a new measurement series; v1 and v2 are not directly comparable.
+updates. The `macroquad-cpu-v3` suite adds combined pose application and ordinary,
+flat, tiny and empty octree ray queries. Each version starts a new measurement
+series; v1, v2 and v3 are not directly comparable.
 It measures CPU work in nanoseconds per operation. It does not measure GPU time,
 rendering throughput, frame pacing, or the complete game's FPS. These require
 separate future render and end-to-end lanes with their own scene and backend

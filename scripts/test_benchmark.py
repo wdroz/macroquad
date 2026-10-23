@@ -300,6 +300,25 @@ class MarkdownReportTests(unittest.TestCase):
                 bench.write_run_markdown(directory, record)
             self.assertEqual(path.read_bytes(), original)
 
+    def test_windows_cpu_metadata_is_rendered_without_linux_proc_fields(self):
+        record = self.record()
+        record["host"] = {"hostname": "desktop", "system": "Windows", "release": "11",
+                          "hardware": {"cpus": [{"Name": "CPU A"}, {"Name": "CPU B"}]},
+                          "processor": "generic identifier"}
+        self.assertIn("Windows 11; CPU A, CPU B.", bench.run_text(record))
+
+    def test_missing_or_empty_cpu_probes_fall_back_without_losing_the_report(self):
+        for fields, expected in [
+            ({"cpu_models": [], "processor": "portable CPU"}, "portable CPU"),
+            ({"hardware": {"cpus": []}, "processor_identifier": "fallback CPU"}, "fallback CPU"),
+            ({"processor": "", "machine": "arm64"}, "arm64"),
+            ({}, "unknown CPU"),
+        ]:
+            with self.subTest(fields=fields):
+                record = self.record()
+                record["host"] = {"hostname": "host", "system": "Other", "release": "test", **fields}
+                self.assertIn(f"Other test; {expected}.", bench.run_text(record))
+
 
 class CompilerBindingTests(unittest.TestCase):
     def test_explicit_compiler_is_inherited_by_child_commands_and_restored(self):

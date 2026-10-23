@@ -73,6 +73,15 @@ regressions and all eleven validation steps pass. Engine commit `6ae238d` and
 the linked Markdown/JSON history preserve the change and evidence. This is CPU
 maintenance with no game-FPS claim or deployment. Counters remain N=5, M=0, D=2.
 
+The requested [one-hour continuation](benchmarks/history/2026-10-23-hour/README.md)
+expands workload coverage and writes every complete run in Markdown. Cached
+animation slots, lazy unchanged-pose staging, equivalent skin-weight validation,
+small-scene query limits and cached sphere-to-mesh rejection improve their
+targeted CPU workloads. Rejected morph/AABB trials and control regressions remain
+visible, including a 5% unchanged external-AABB slowdown in the retained v2
+comparison. The report records further v3 experiments separately; cross-version
+results cannot be combined. Counters and the scheduled queue remain unchanged.
+
 ## Priorities
 
 Read top to bottom across all tracks. The unchecked items in **Upcoming queue** are the only implementation queue. Completed follow-ups and foundation specifications below remain checked and retain their original order. Each upcoming item is one reviewable enhancement; apply the round counters before selecting it.
