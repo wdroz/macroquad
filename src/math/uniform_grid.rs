@@ -15,6 +15,13 @@ struct CellRange {
 }
 
 impl CellRange {
+    fn cell_count(self) -> u64 {
+        // cell_range already limits the product to MAX_CELLS.
+        (0..3)
+            .map(|axis| (i64::from(self.max[axis]) - i64::from(self.min[axis]) + 1) as u64)
+            .product()
+    }
+
     fn visit(self, mut visit: impl FnMut(Cell)) {
         self.visit_until(|cell| {
             visit(cell);
@@ -56,8 +63,10 @@ struct Entry {
 /// geometry, not contact results. Large bounds or very small cell sizes never
 /// expand into an unbounded number of cells: entries spanning more than 4096
 /// cells, or outside signed 32-bit cell coordinates, use a fallback list checked
-/// by every query. Large or unbounded queries scan the stored bounds. These
-/// fallbacks preserve results but may make a query linear in the object count.
+/// by every query. Large or unbounded queries scan the stored bounds. Queries
+/// also scan when their selected cell count exceeds the number of stored entries,
+/// bounding empty-cell traversal in small scenes. These fallbacks preserve
+/// results but may make a query linear in the object count.
 ///
 /// # Example
 ///
@@ -261,7 +270,12 @@ impl UniformGrid {
         // the bounds directly. This keeps candidate memory O(entries), even
         // when every box spans thousands of query cells.
         let budget = self.entries.len();
-        if let Some(range) = range.filter(|_| self.fallback.len() < budget) {
+        if let Some(range) = range.filter(|range| {
+            self.fallback.len() < budget
+                // Large scenes already exceed the fixed cell-range cap. Small
+                // scenes should not hash more cells than they have bounds.
+                && (budget >= MAX_CELLS as usize || range.cell_count() <= budget as u64)
+        }) {
             let mut candidates: Vec<u32> = self.fallback.iter().copied().collect();
             let complete = range.visit_until(|cell| {
                 if let Some(indices) = self.cells.get(&cell) {

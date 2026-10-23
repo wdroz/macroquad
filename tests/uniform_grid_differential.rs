@@ -1,6 +1,57 @@
 use macroquad::prelude::*;
 
 #[test]
+fn query_cell_budget_boundaries_match_complete_scans() {
+    let entries = [
+        (91, Aabb::from_min_max(Vec3::splat(0.5), Vec3::splat(0.5))),
+        (
+            2,
+            Aabb::from_min_max(vec3(2.5, 0.5, 0.5), vec3(2.5, 0.5, 0.5)),
+        ),
+        (
+            17,
+            Aabb::from_min_max(vec3(4.5, 0.5, 0.5), vec3(4.5, 0.5, 0.5)),
+        ),
+        // Keep a huge fallback entry alongside indexed candidates; changing the
+        // query traversal budget must not skip its bounds check.
+        (7, Aabb::from_center_size(Vec3::ZERO, Vec3::splat(100.0))),
+    ];
+    let mut grid = UniformGrid::new(1.0).unwrap();
+    assert_eq!(grid.rebuild(entries), 4);
+    let scanned = Octree::with_max_depth(entries, 0).unwrap();
+    for offset in [Vec3::ZERO, Vec3::splat(-3.0), Vec3::splat(200.0)] {
+        // Four cells exactly match the entry count; five exceed it. The final
+        // two ranges exercise cumulative volume across more than one axis.
+        for extent in [
+            vec3(4.0, 1.0, 1.0),
+            vec3(5.0, 1.0, 1.0),
+            vec3(2.0, 2.0, 1.0),
+            Vec3::splat(2.0),
+        ] {
+            let min = offset + Vec3::splat(0.25);
+            let max = offset + extent - Vec3::splat(0.25);
+            let query = Aabb::from_min_max(min, max);
+            let mut expected = entries
+                .iter()
+                .filter_map(|(id, bounds)| bounds.overlaps(&query).then_some(*id))
+                .collect::<Vec<_>>();
+            expected.sort_unstable();
+            assert_eq!(grid.query_aabb(&query), expected);
+            let ray = Ray::new(min, max - min);
+            assert_eq!(grid.query_ray(&ray, 1.0), scanned.query_ray(&ray, 1.0));
+        }
+    }
+    // Inclusive face endpoints remain visible across the len/len+1 boundary.
+    let ray = Ray::new(Vec3::splat(0.5), Vec3::X);
+    assert_eq!(grid.query_ray(&ray, 3.0), vec![2, 7, 91]);
+    assert_eq!(grid.query_ray(&ray, 4.0), vec![2, 7, 17, 91]);
+    grid.clear();
+    assert!(grid.query_aabb(&entries[3].1).is_empty());
+    assert!(grid.query_ray(&ray, 4.0).is_empty());
+    assert!(grid.query_ray(&ray, f32::INFINITY).is_empty());
+}
+
+#[test]
 fn replacements_with_unchanged_cells_refresh_exact_bounds() {
     let mut grid = UniformGrid::new(1.0).unwrap();
     // Keep the candidate count below the full-scan budget, so point queries

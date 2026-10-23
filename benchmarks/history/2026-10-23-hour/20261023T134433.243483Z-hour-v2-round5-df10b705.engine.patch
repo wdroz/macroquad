@@ -1,0 +1,161 @@
+--- a/src/gltf/animation.rs
++++ b/src/gltf/animation.rs
+@@ -60,6 +60,9 @@
+ #[derive(Debug)]
+ struct Channel {
+     node: Option<usize>,
++    // Resolved once after sorting the selected TRS nodes. Weight and omitted
++    // channels never access this slot.
++    transform_index: usize,
+     property: gltf::animation::Property,
+     step: bool,
+     times: Vec<f32>,
+@@ -257,6 +260,7 @@
+                 }
+                 channels.push(Channel {
+                     node: scene_node.map(|(index, _)| index),
++                    transform_index: 0,
+                     property,
+                     step,
+                     times,
+@@ -269,6 +273,15 @@
+                 .map(|(node, (local, root))| (node, local, root))
+                 .collect::<Vec<_>>();
+             transforms.sort_by_key(|&(node, _, _)| node);
++            for channel in &mut channels {
++                if channel.property != gltf::animation::Property::MorphTargetWeights {
++                    if let Some(node) = channel.node {
++                        channel.transform_index = transforms
++                            .binary_search_by_key(&node, |&(node, _, _)| node)
++                            .unwrap();
++                    }
++                }
++            }
+             clips.push(GltfAnimationClip {
+                 inner: Arc::new(ClipData {
+                     name: animation.name().map(str::to_owned),
+@@ -346,11 +359,7 @@
+                     .weights
+                     .push((node, (0..channel.width).map(interpolate).collect()));
+             } else {
+-                let index = sample
+-                    .transforms
+-                    .binary_search_by_key(&node, |&(node, _)| node)
+-                    .unwrap();
+-                let local = &mut sample.transforms[index].1;
++                let local = &mut sample.transforms[channel.transform_index].1;
+                 match channel.property {
+                     gltf::animation::Property::Translation => {
+                         local.translation =
+--- a/src/gltf/skin.rs
++++ b/src/gltf/skin.rs
+@@ -320,8 +320,12 @@
+                 .flatten()
+                 .any(|&j| j as usize >= matrices.len())
+             || self.weights.iter().any(|weights| {
+-                weights.iter().any(|w| !w.is_finite() || *w < 0.)
+-                    || (weights.iter().sum::<f32>() - 1.).abs() > 0.001
++                weights.iter().any(|weight| {
++                    // Positive finite IEEE-754 values occupy 0..=MAX's bits.
++                    // Negative zero is the only accepted sign-bit value.
++                    let bits = weight.to_bits();
++                    bits > f32::MAX.to_bits() && bits != (-0.0_f32).to_bits()
++                }) || (weights.iter().sum::<f32>() - 1.).abs() > 0.001
+             })
+         {
+             return Err(invalid());
+--- a/src/gltf_draw/pose.rs
++++ b/src/gltf_draw/pose.rs
+@@ -372,9 +372,9 @@
+         &mut self,
+         locals: &[(usize, GltfLocalTransform)],
+     ) -> Result<(), String> {
+-        let mut staged = self.clone();
++        let mut staged = None;
+         for &(node, mut local) in locals {
+-            let handle = staged
++            let handle = self
+                 .handle(node)
+                 .ok_or_else(|| format!("glTF animation pose node {node} does not exist"))?;
+             if !local.translation.is_finite()
+@@ -393,8 +393,19 @@
+                     "glTF animation pose node {node} local matrix must be finite and affine"
+                 ));
+             }
+-            staged.local[handle.0] = matrix;
+-        }
++            // Equality of floats treats signed zeros as equal, but callers can
++            // inspect exact local matrices. Only skip an identical bit pattern.
++            // Continue validating every entry, including duplicate node edits.
++            if staged.is_some()
++                || matrix.to_cols_array().map(f32::to_bits)
++                    != self.local[handle.0].to_cols_array().map(f32::to_bits)
++            {
++                staged.get_or_insert_with(|| self.clone()).local[handle.0] = matrix;
++            }
++        }
++        let Some(mut staged) = staged else {
++            return Ok(());
++        };
+         let mut changed = vec![false; self.world.len()];
+         for node in 0..self.world.len() {
+             let parent = staged.rest.parents[node];
+--- a/src/math/triangle_mesh.rs
++++ b/src/math/triangle_mesh.rs
+@@ -103,6 +103,13 @@
+         }
+         let p = wide(sphere.center);
+         let r2 = (sphere.radius as f64).powi(2);
++        if self.triangles.len() > 1 {
++            let bounds = self.bounds.as_ref().unwrap();
++            let closest_bound = p.clamp(wide(bounds.min), wide(bounds.max));
++            if p.distance_squared(closest_bound) > r2 {
++                return false;
++            }
++        }
+         self.triangles
+             .iter()
+             .zip(&self.triangle_bounds)
+--- a/src/math/uniform_grid.rs
++++ b/src/math/uniform_grid.rs
+@@ -15,6 +15,13 @@
+ }
+ 
+ impl CellRange {
++    fn cell_count(self) -> u64 {
++        // cell_range already limits the product to MAX_CELLS.
++        (0..3)
++            .map(|axis| (i64::from(self.max[axis]) - i64::from(self.min[axis]) + 1) as u64)
++            .product()
++    }
++
+     fn visit(self, mut visit: impl FnMut(Cell)) {
+         self.visit_until(|cell| {
+             visit(cell);
+@@ -56,8 +63,10 @@
+ /// geometry, not contact results. Large bounds or very small cell sizes never
+ /// expand into an unbounded number of cells: entries spanning more than 4096
+ /// cells, or outside signed 32-bit cell coordinates, use a fallback list checked
+-/// by every query. Large or unbounded queries scan the stored bounds. These
+-/// fallbacks preserve results but may make a query linear in the object count.
++/// by every query. Large or unbounded queries scan the stored bounds. Queries
++/// also scan when their selected cell count exceeds the number of stored entries,
++/// bounding empty-cell traversal in small scenes. These fallbacks preserve
++/// results but may make a query linear in the object count.
+ ///
+ /// # Example
+ ///
+@@ -261,7 +270,12 @@
+         // the bounds directly. This keeps candidate memory O(entries), even
+         // when every box spans thousands of query cells.
+         let budget = self.entries.len();
+-        if let Some(range) = range.filter(|_| self.fallback.len() < budget) {
++        if let Some(range) = range.filter(|range| {
++            self.fallback.len() < budget
++                // Large scenes already exceed the fixed cell-range cap. Small
++                // scenes should not hash more cells than they have bounds.
++                && (budget >= MAX_CELLS as usize || range.cell_count() <= budget as u64)
++        }) {
+             let mut candidates: Vec<u32> = self.fallback.iter().copied().collect();
+             let complete = range.visit_until(|cell| {
+                 if let Some(indices) = self.cells.get(&cell) {

@@ -318,6 +318,66 @@ fn manual_arrays_overflow_and_extreme_normals_are_checked_without_mutation() {
 }
 
 #[test]
+fn final_morph_validation_preserves_error_precedence_and_source_data() {
+    let mut input = GltfMorphPrimitive {
+        positions: vec![Vec3::ZERO; 3],
+        normals: vec![Vec3::Z; 3],
+        targets: vec![GltfMorphTarget {
+            position_deltas: vec![Vec3::ZERO, Vec3::ZERO, Vec3::splat(f32::MAX)],
+            normal_deltas: vec![Vec3::ZERO, Vec3::splat(f32::MAX), Vec3::ZERO],
+        }],
+    };
+    let before = input.clone();
+    assert_eq!(
+        input.evaluate(&[2.]).unwrap_err().to_string(),
+        "evaluated positions requires 3 finite VEC3 values, got 3"
+    );
+    assert_eq!(input, before);
+    input.targets[0].position_deltas[2] = Vec3::ZERO;
+    let before = input.clone();
+    assert_eq!(
+        input.evaluate(&[2.]).unwrap_err().to_string(),
+        "evaluated normals requires 3 finite VEC3 values, got 3"
+    );
+    assert_eq!(input, before);
+    // Even zero-weight target values must still be validated before evaluation.
+    input.targets[0].normal_deltas[2] = Vec3::splat(f32::NAN);
+    assert!(input
+        .evaluate(&[0.])
+        .unwrap_err()
+        .to_string()
+        .starts_with("NORMAL deltas"));
+}
+
+#[test]
+fn morph_bounds_and_untouched_normals_preserve_exact_zero_bits() {
+    let input = GltfMorphPrimitive {
+        positions: vec![vec3(-0., 0., -0.), vec3(0., -0., 0.)],
+        normals: vec![vec3(-0., 0., 2.), vec3(0., -0., 0.)],
+        targets: vec![GltfMorphTarget::default()],
+    };
+    let expected_bounds = Aabb::from_points(input.positions.iter().copied()).unwrap();
+    for weight in [0., -0., 2.] {
+        let result = input.evaluate(&[weight]).unwrap();
+        for (actual, expected) in result.normals.iter().zip(&input.normals) {
+            assert_eq!(
+                actual.to_array().map(f32::to_bits),
+                expected.to_array().map(f32::to_bits)
+            );
+        }
+        let bounds = result.bounds.unwrap();
+        assert_eq!(
+            bounds.min.to_array().map(f32::to_bits),
+            expected_bounds.min.to_array().map(f32::to_bits)
+        );
+        assert_eq!(
+            bounds.max.to_array().map(f32::to_bits),
+            expected_bounds.max.to_array().map(f32::to_bits)
+        );
+    }
+}
+
+#[test]
 fn selected_graph_validation_and_image_independence_match_cpu_contract() {
     let image = edited(&face(), |json, _| {
         json["images"] = json!([{"uri":"external-face.png"}]);

@@ -1,0 +1,240 @@
+--- a/src/gltf/animation.rs
++++ b/src/gltf/animation.rs
+@@ -60,6 +60,9 @@
+ #[derive(Debug)]
+ struct Channel {
+     node: Option<usize>,
++    // Resolved once after sorting the selected TRS nodes. Weight and omitted
++    // channels never access this slot.
++    transform_index: usize,
+     property: gltf::animation::Property,
+     step: bool,
+     times: Vec<f32>,
+@@ -257,6 +260,7 @@
+                 }
+                 channels.push(Channel {
+                     node: scene_node.map(|(index, _)| index),
++                    transform_index: 0,
+                     property,
+                     step,
+                     times,
+@@ -269,6 +273,15 @@
+                 .map(|(node, (local, root))| (node, local, root))
+                 .collect::<Vec<_>>();
+             transforms.sort_by_key(|&(node, _, _)| node);
++            for channel in &mut channels {
++                if channel.property != gltf::animation::Property::MorphTargetWeights {
++                    if let Some(node) = channel.node {
++                        channel.transform_index = transforms
++                            .binary_search_by_key(&node, |&(node, _, _)| node)
++                            .unwrap();
++                    }
++                }
++            }
+             clips.push(GltfAnimationClip {
+                 inner: Arc::new(ClipData {
+                     name: animation.name().map(str::to_owned),
+@@ -346,11 +359,7 @@
+                     .weights
+                     .push((node, (0..channel.width).map(interpolate).collect()));
+             } else {
+-                let index = sample
+-                    .transforms
+-                    .binary_search_by_key(&node, |&(node, _)| node)
+-                    .unwrap();
+-                let local = &mut sample.transforms[index].1;
++                let local = &mut sample.transforms[channel.transform_index].1;
+                 match channel.property {
+                     gltf::animation::Property::Translation => {
+                         local.translation =
+--- a/src/gltf/skin.rs
++++ b/src/gltf/skin.rs
+@@ -320,8 +320,12 @@
+                 .flatten()
+                 .any(|&j| j as usize >= matrices.len())
+             || self.weights.iter().any(|weights| {
+-                weights.iter().any(|w| !w.is_finite() || *w < 0.)
+-                    || (weights.iter().sum::<f32>() - 1.).abs() > 0.001
++                weights.iter().any(|weight| {
++                    // Positive finite IEEE-754 values occupy 0..=MAX's bits.
++                    // Negative zero is the only accepted sign-bit value.
++                    let bits = weight.to_bits();
++                    bits > f32::MAX.to_bits() && bits != (-0.0_f32).to_bits()
++                }) || (weights.iter().sum::<f32>() - 1.).abs() > 0.001
+             })
+         {
+             return Err(invalid());
+--- a/src/gltf_draw/pose.rs
++++ b/src/gltf_draw/pose.rs
+@@ -372,9 +372,9 @@
+         &mut self,
+         locals: &[(usize, GltfLocalTransform)],
+     ) -> Result<(), String> {
+-        let mut staged = self.clone();
++        let mut staged = None;
+         for &(node, mut local) in locals {
+-            let handle = staged
++            let handle = self
+                 .handle(node)
+                 .ok_or_else(|| format!("glTF animation pose node {node} does not exist"))?;
+             if !local.translation.is_finite()
+@@ -393,8 +393,19 @@
+                     "glTF animation pose node {node} local matrix must be finite and affine"
+                 ));
+             }
+-            staged.local[handle.0] = matrix;
+-        }
++            // Equality of floats treats signed zeros as equal, but callers can
++            // inspect exact local matrices. Only skip an identical bit pattern.
++            // Continue validating every entry, including duplicate node edits.
++            if staged.is_some()
++                || matrix.to_cols_array().map(f32::to_bits)
++                    != self.local[handle.0].to_cols_array().map(f32::to_bits)
++            {
++                staged.get_or_insert_with(|| self.clone()).local[handle.0] = matrix;
++            }
++        }
++        let Some(mut staged) = staged else {
++            return Ok(());
++        };
+         let mut changed = vec![false; self.world.len()];
+         for node in 0..self.world.len() {
+             let parent = staged.rest.parents[node];
+--- a/src/math/triangle_mesh.rs
++++ b/src/math/triangle_mesh.rs
+@@ -77,13 +77,24 @@
+     }
+ 
+     /// Whether a finite, non-inverted box touches the triangle surface.
+-    /// Invalid boxes miss. Uses cached bounds followed by a triangle/box
++    /// Invalid boxes miss. Uses cached mesh and triangle bounds, then a triangle/box
+     /// separating-axis test, including all nine edge/box-axis cross products.
+     pub fn overlaps_aabb(&self, bounds: &Aabb) -> bool {
+         if !bounds.min.is_finite() || !bounds.max.is_finite() || !bounds.min.cmple(bounds.max).all()
+         {
+             return false;
+         }
++        // A singleton's triangle bound already is the complete mesh bound.
++        if self.triangles.len() > 1 && !self.bounds.as_ref().unwrap().overlaps(bounds) {
++            return false;
++        }
++        self.overlaps_aabb_triangles(bounds)
++    }
++
++    // Keep the linear scan's code independent of the whole-mesh gate. A query
++    // that reaches it uses the original triangle order and narrowphase tests.
++    #[inline(never)]
++    fn overlaps_aabb_triangles(&self, bounds: &Aabb) -> bool {
+         self.triangles
+             .iter()
+             .zip(&self.triangle_bounds)
+@@ -103,6 +114,13 @@
+         }
+         let p = wide(sphere.center);
+         let r2 = (sphere.radius as f64).powi(2);
++        if self.triangles.len() > 1 {
++            let bounds = self.bounds.as_ref().unwrap();
++            let closest_bound = p.clamp(wide(bounds.min), wide(bounds.max));
++            if p.distance_squared(closest_bound) > r2 {
++                return false;
++            }
++        }
+         self.triangles
+             .iter()
+             .zip(&self.triangle_bounds)
+--- a/src/math/uniform_grid.rs
++++ b/src/math/uniform_grid.rs
+@@ -56,8 +56,10 @@
+ /// geometry, not contact results. Large bounds or very small cell sizes never
+ /// expand into an unbounded number of cells: entries spanning more than 4096
+ /// cells, or outside signed 32-bit cell coordinates, use a fallback list checked
+-/// by every query. Large or unbounded queries scan the stored bounds. These
+-/// fallbacks preserve results but may make a query linear in the object count.
++/// by every query. Large or unbounded queries scan the stored bounds. Queries
++/// also scan when their selected cell count exceeds the number of stored entries,
++/// bounding empty-cell traversal in small scenes. These fallbacks preserve
++/// results but may make a query linear in the object count.
+ ///
+ /// # Example
+ ///
+@@ -135,7 +137,7 @@
+         if !valid_bounds(&bounds) {
+             return false;
+         }
+-        let cells = self.bounds_cells(&bounds);
++        let cells = self.bounds_cells::<false>(&bounds, MAX_CELLS);
+         if let Some(previous) = self.entries.insert(index, Entry { bounds, cells }) {
+             // Updating the snapshot needs only one tree lookup. When an object
+             // stays in the same cells (or the fallback), its memberships remain
+@@ -201,7 +203,10 @@
+         if !valid_bounds(bounds) {
+             return Vec::new();
+         }
+-        self.query(self.bounds_cells(bounds), |entry| entry.overlaps(bounds))
++        self.query(
++            self.bounds_cells::<true>(bounds, self.query_cell_limit()),
++            |entry| entry.overlaps(bounds),
++        )
+     }
+ 
+     /// Returns indices whose stored bounds meet the ray at `0 <= t <= max_t`.
+@@ -237,8 +242,9 @@
+         }
+         let origin = ray.origin.to_array().map(f64::from);
+         let direction = ray.direction.to_array().map(f64::from);
++        let max_cells = self.query_cell_limit();
+         let range = if direction == [0.0; 3] || max_t == 0.0 {
+-            self.cell_range(origin, origin)
++            self.cell_range::<true>(origin, origin, max_cells)
+         } else if max_t.is_finite() {
+             let end = std::array::from_fn::<_, 3, _>(|axis| {
+                 origin[axis] + direction[axis] * f64::from(max_t)
+@@ -247,7 +253,7 @@
+             // once before indexing, without narrowing an endpoint back to f32.
+             let min = std::array::from_fn(|axis| next_down(origin[axis].min(end[axis])));
+             let max = std::array::from_fn(|axis| next_up(origin[axis].max(end[axis])));
+-            self.cell_range(min, max)
++            self.cell_range::<true>(min, max, max_cells)
+         } else {
+             None
+         };
+@@ -285,14 +291,27 @@
+             .collect()
+     }
+ 
+-    fn bounds_cells(&self, bounds: &Aabb) -> Option<CellRange> {
+-        self.cell_range(
++    fn query_cell_limit(&self) -> u64 {
++        (self.entries.len() as u64).min(MAX_CELLS)
++    }
++
++    fn bounds_cells<const QUERY: bool>(&self, bounds: &Aabb, max_cells: u64) -> Option<CellRange> {
++        self.cell_range::<QUERY>(
+             bounds.min.to_array().map(f64::from),
+             bounds.max.to_array().map(f64::from),
++            max_cells,
+         )
+     }
+ 
+-    fn cell_range(&self, min: [f64; 3], max: [f64; 3]) -> Option<CellRange> {
++    fn cell_range<const QUERY: bool>(
++        &self,
++        min: [f64; 3],
++        max: [f64; 3],
++        max_cells: u64,
++    ) -> Option<CellRange> {
++        // Specialize insertion with its constant expansion bound, while queries
++        // reuse the same volume calculation to cap traversal by scene size.
++        let max_cells = if QUERY { max_cells } else { MAX_CELLS };
+         let mut range = CellRange {
+             min: [0; 3],
+             max: [0; 3],
+@@ -308,7 +327,7 @@
+             range.max[axis] = high as i32;
+             let width = (i64::from(range.max[axis]) - i64::from(range.min[axis]) + 1) as u64;
+             count = count.checked_mul(width)?;
+-            if count > MAX_CELLS {
++            if count > max_cells {
+                 return None;
+             }
+         }

@@ -372,9 +372,9 @@ impl GltfHierarchyPose {
         &mut self,
         locals: &[(usize, GltfLocalTransform)],
     ) -> Result<(), String> {
-        let mut staged = self.clone();
+        let mut staged = None;
         for &(node, mut local) in locals {
-            let handle = staged
+            let handle = self
                 .handle(node)
                 .ok_or_else(|| format!("glTF animation pose node {node} does not exist"))?;
             if !local.translation.is_finite()
@@ -393,8 +393,19 @@ impl GltfHierarchyPose {
                     "glTF animation pose node {node} local matrix must be finite and affine"
                 ));
             }
-            staged.local[handle.0] = matrix;
+            // Equality of floats treats signed zeros as equal, but callers can
+            // inspect exact local matrices. Only skip an identical bit pattern.
+            // Continue validating every entry, including duplicate node edits.
+            if staged.is_some()
+                || matrix.to_cols_array().map(f32::to_bits)
+                    != self.local[handle.0].to_cols_array().map(f32::to_bits)
+            {
+                staged.get_or_insert_with(|| self.clone()).local[handle.0] = matrix;
+            }
         }
+        let Some(mut staged) = staged else {
+            return Ok(());
+        };
         let mut changed = vec![false; self.world.len()];
         for node in 0..self.world.len() {
             let parent = staged.rest.parents[node];

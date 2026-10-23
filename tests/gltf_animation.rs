@@ -331,6 +331,185 @@ fn trs_interpolation_preserves_scalar_f64_results_without_temporary_vectors() {
 }
 
 #[test]
+fn shuffled_channels_resolve_distinct_trs_slots_and_keep_weight_node_ids() {
+    fn append_values(
+        doc: &mut Value,
+        binary: &mut Vec<u8>,
+        values: &[f32],
+        width: usize,
+        kind: &str,
+    ) -> usize {
+        let view = doc["bufferViews"].as_array().unwrap().len();
+        let accessor = doc["accessors"].as_array().unwrap().len();
+        let offset = binary.len();
+        binary.extend(values.iter().flat_map(|value| value.to_le_bytes()));
+        doc["bufferViews"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"buffer":0,"byteOffset":offset,"byteLength":values.len()*4}));
+        doc["accessors"].as_array_mut().unwrap().push(
+            json!({"bufferView":view,"componentType":5126,"count":values.len()/width,"type":kind}),
+        );
+        accessor
+    }
+    let (mut doc, mut binary) = asset::document();
+    let translations = [[9., -1., 0.25], [12., 4., -2.]];
+    let scales = [[2., 3., 4.], [4., 2., 1.]];
+    let rotations = [Quat::from_rotation_y(0.4), Quat::from_rotation_y(-0.9)];
+    let translation = append_values(&mut doc, &mut binary, &translations.concat(), 3, "VEC3");
+    let rotation = append_values(
+        &mut doc,
+        &mut binary,
+        &rotations.map(|rotation| rotation.to_array()).concat(),
+        4,
+        "VEC4",
+    );
+    let scale = append_values(&mut doc, &mut binary, &scales.concat(), 3, "VEC3");
+    for output in [translation, rotation, scale] {
+        doc["animations"][0]["samplers"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"input":2,"output":output,"interpolation":"LINEAR"}));
+    }
+    // Document node 2 is scene node 0; document node 0 is scene node 1.
+    // Document node 1 is outside the scene and must remain omitted.
+    doc["animations"][0]["channels"] = json!([
+        {"sampler":6,"target":{"node":2,"path":"scale"}},
+        {"sampler":1,"target":{"node":0,"path":"rotation"}},
+        {"sampler":0,"target":{"node":1,"path":"translation"}},
+        {"sampler":4,"target":{"node":2,"path":"translation"}},
+        {"sampler":3,"target":{"node":0,"path":"weights"}},
+        {"sampler":0,"target":{"node":0,"path":"translation"}},
+        {"sampler":5,"target":{"node":2,"path":"rotation"}},
+        {"sampler":2,"target":{"node":0,"path":"scale"}}
+    ]);
+    let reordered = GltfAnimationData::from_bytes(&asset::pack(doc, binary))
+        .unwrap()
+        .clips
+        .remove(0);
+    let original = clip();
+    for seconds in [0., 0.5, 1., 1.5, 2.] {
+        let expected_child = original.sample(seconds).unwrap();
+        let sample = reordered.sample(seconds).unwrap();
+        assert_eq!(sample.transforms.len(), 2);
+        assert_eq!(sample.transforms[0].0, 0);
+        assert_eq!(sample.transforms[1], expected_child.transforms[0]);
+        assert_eq!(sample.weights, expected_child.weights);
+        let mix = seconds as f64 / 2.;
+        for (actual, keys) in [
+            (sample.transforms[0].1.translation, translations),
+            (sample.transforms[0].1.scale, scales),
+        ] {
+            let expected = std::array::from_fn::<_, 3, _>(|index| {
+                ((1. - mix) * keys[0][index] as f64 + mix * keys[1][index] as f64) as f32
+            });
+            assert_eq!(
+                actual.to_array().map(f32::to_bits),
+                expected.map(f32::to_bits)
+            );
+        }
+        let [a, b] = rotations.map(Quat::normalize);
+        let expected_rotation = if mix == 0. {
+            a
+        } else if mix == 1. {
+            b
+        } else {
+            a.slerp(b, mix as f32).normalize()
+        };
+        assert_eq!(
+            sample.transforms[0].1.rotation.to_array().map(f32::to_bits),
+            expected_rotation.to_array().map(f32::to_bits)
+        );
+    }
+}
+
+#[test]
+fn repeated_pose_samples_keep_duplicate_order_and_validate_every_entry() {
+    let scene = GltfScene::from_bytes(
+        br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{"children":[1]},{}]}"#,
+    )
+    .unwrap();
+    let mut pose = GltfModelPose::from_scene(&scene).hierarchy().unwrap();
+    let rest = GltfLocalTransform::default();
+    let moved = GltfLocalTransform {
+        translation: Vec3::Y,
+        ..rest
+    };
+    let sample = GltfAnimationSample {
+        transforms: vec![(0, rest), (0, moved), (0, rest), (1, moved)],
+        weights: Vec::new(),
+    };
+    sample.apply_pose(&mut pose).unwrap();
+    assert_eq!(pose.local(pose.handle(0).unwrap()).unwrap(), Mat4::IDENTITY);
+    assert_eq!(pose.world(pose.handle(1).unwrap()).unwrap(), moved.matrix());
+    // The duplicate parent edits have no final effect; the child is unchanged.
+    sample.apply_pose(&mut pose).unwrap();
+    GltfAnimationSample::default()
+        .apply_pose(&mut pose)
+        .unwrap();
+    let before = (0..2)
+        .map(|node| {
+            let handle = pose.handle(node).unwrap();
+            (pose.local(handle).unwrap(), pose.world(handle).unwrap())
+        })
+        .collect::<Vec<_>>();
+    let invalid = GltfLocalTransform {
+        rotation: Quat::from_array([0.; 4]),
+        ..rest
+    };
+    for edits in [
+        vec![(0, rest), (usize::MAX, rest)],
+        vec![(0, invalid), (0, rest)],
+        vec![(0, moved), (1, invalid), (1, moved)],
+        vec![(1, moved), (0, invalid)],
+    ] {
+        assert!(GltfAnimationSample {
+            transforms: edits,
+            weights: Vec::new()
+        }
+        .apply_pose(&mut pose)
+        .is_err());
+        for (node, &(local, world)) in before.iter().enumerate() {
+            let handle = pose.handle(node).unwrap();
+            assert_eq!(pose.local(handle).unwrap(), local);
+            assert_eq!(pose.world(handle).unwrap(), world);
+        }
+    }
+}
+
+#[test]
+fn numerically_unchanged_pose_samples_preserve_authored_signed_zero_bits() {
+    let scene = GltfScene::from_bytes(
+        br#"{"asset":{"version":"2.0"},"scenes":[{"nodes":[0]}],"nodes":[{}]}"#,
+    )
+    .unwrap();
+    let mut pose = GltfModelPose::from_scene(&scene).hierarchy().unwrap();
+    let node = pose.handle(0).unwrap();
+    let original_world = pose.world(node).unwrap();
+    for zero in [-0.0_f32, 0.0, -0.0] {
+        let local = GltfLocalTransform {
+            translation: vec3(zero, 0., 0.),
+            ..Default::default()
+        };
+        let sample = GltfAnimationSample {
+            transforms: vec![(0, local)],
+            weights: Vec::new(),
+        };
+        for _ in 0..2 {
+            sample.apply_pose(&mut pose).unwrap();
+            assert_eq!(
+                pose.local(node).unwrap().to_cols_array().map(f32::to_bits),
+                local.matrix().to_cols_array().map(f32::to_bits)
+            );
+            assert_eq!(
+                pose.world(node).unwrap().to_cols_array().map(f32::to_bits),
+                original_world.to_cols_array().map(f32::to_bits)
+            );
+        }
+    }
+}
+
+#[test]
 fn failed_multi_node_pose_application_is_atomic() {
     let bytes = asset::glb();
     let scene = GltfScene::from_bytes(&bytes).unwrap();

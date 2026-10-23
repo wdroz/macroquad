@@ -187,3 +187,75 @@ fn both_skinning_paths_reject_deformation_overflow() {
         .unwrap_err();
     assert!(error.to_string().contains("deformation overflow"));
 }
+
+#[test]
+fn weight_validation_matches_finite_nonnegative_contract_for_ieee_edge_values() {
+    let mut bits = vec![
+        0,
+        0x8000_0000, // Both signed zeros.
+        1,
+        0x8000_0001,
+        0x007f_ffff,
+        0x807f_ffff, // Smallest/largest subnormals.
+        0x0080_0000,
+        0x8080_0000, // Smallest normal magnitudes.
+        0x3f80_0000,
+        0xbf80_0000,
+        0x7f7f_ffff,
+        0xff7f_ffff,
+        0x7f80_0000,
+        0xff80_0000, // Infinities.
+        0x7f80_0001,
+        0xff80_0001,
+        0x7fc0_0000,
+        0xffc0_0000,
+        0x7fff_ffff,
+        0xffff_ffff, // Multiple quiet/signaling NaN payloads.
+    ];
+    let mut seed = 0xc012_5eed_u32;
+    for _ in 0..256 {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        bits.push(seed);
+    }
+    for value in bits
+        .into_iter()
+        .map(f32::from_bits)
+        .chain([0.0005, 0.9995, 1.0005])
+    {
+        for slot in 0..8 {
+            let mut weights = [1., 0., 0., 0., 0., 0., 0., 0.];
+            weights[slot] = value;
+            let valid = weights
+                .iter()
+                .all(|weight| weight.is_finite() && *weight >= 0.)
+                && (weights.iter().sum::<f32>() - 1.).abs() <= 0.001;
+            let skin = GltfSkinPrimitive {
+                joints: vec![[0; 8]],
+                weights: vec![weights],
+            };
+            for normals in [&[][..], &[Vec3::Y][..]] {
+                let result = skin.deform(&[Vec3::X], normals, &[Mat4::IDENTITY]);
+                assert_eq!(
+                    result.is_ok(),
+                    valid,
+                    "weight bits {:08x}, slot {slot}",
+                    value.to_bits()
+                );
+                if let Err(error) = result {
+                    assert_eq!(
+                        error.to_string(),
+                        "glTF skin deformation has invalid arrays, indices, weights or matrices"
+                    );
+                }
+            }
+        }
+    }
+    // Every value is individually valid, but the ordered sum can overflow.
+    let overflow = GltfSkinPrimitive {
+        joints: vec![[0; 8]],
+        weights: vec![[f32::MAX; 8]],
+    };
+    assert!(overflow
+        .deform(&[Vec3::ZERO], &[], &[Mat4::IDENTITY])
+        .is_err());
+}

@@ -60,6 +60,9 @@ struct ClipData {
 #[derive(Debug)]
 struct Channel {
     node: Option<usize>,
+    // Resolved once after sorting the selected TRS nodes. Weight and omitted
+    // channels never access this slot.
+    transform_index: usize,
     property: gltf::animation::Property,
     step: bool,
     times: Vec<f32>,
@@ -257,6 +260,7 @@ impl GltfAnimationData {
                 }
                 channels.push(Channel {
                     node: scene_node.map(|(index, _)| index),
+                    transform_index: 0,
                     property,
                     step,
                     times,
@@ -269,6 +273,15 @@ impl GltfAnimationData {
                 .map(|(node, (local, root))| (node, local, root))
                 .collect::<Vec<_>>();
             transforms.sort_by_key(|&(node, _, _)| node);
+            for channel in &mut channels {
+                if channel.property != gltf::animation::Property::MorphTargetWeights {
+                    if let Some(node) = channel.node {
+                        channel.transform_index = transforms
+                            .binary_search_by_key(&node, |&(node, _, _)| node)
+                            .unwrap();
+                    }
+                }
+            }
             clips.push(GltfAnimationClip {
                 inner: Arc::new(ClipData {
                     name: animation.name().map(str::to_owned),
@@ -346,11 +359,7 @@ impl GltfAnimationClip {
                     .weights
                     .push((node, (0..channel.width).map(interpolate).collect()));
             } else {
-                let index = sample
-                    .transforms
-                    .binary_search_by_key(&node, |&(node, _)| node)
-                    .unwrap();
-                let local = &mut sample.transforms[index].1;
+                let local = &mut sample.transforms[channel.transform_index].1;
                 match channel.property {
                     gltf::animation::Property::Translation => {
                         local.translation =

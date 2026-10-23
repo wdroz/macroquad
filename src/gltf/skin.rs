@@ -320,8 +320,12 @@ impl GltfSkinPrimitive {
                 .flatten()
                 .any(|&j| j as usize >= matrices.len())
             || self.weights.iter().any(|weights| {
-                weights.iter().any(|w| !w.is_finite() || *w < 0.)
-                    || (weights.iter().sum::<f32>() - 1.).abs() > 0.001
+                weights.iter().any(|weight| {
+                    // Positive finite IEEE-754 values occupy 0..=MAX's bits.
+                    // Negative zero is the only accepted sign-bit value.
+                    let bits = weight.to_bits();
+                    bits > f32::MAX.to_bits() && bits != (-0.0_f32).to_bits()
+                }) || (weights.iter().sum::<f32>() - 1.).abs() > 0.001
             })
         {
             return Err(invalid());

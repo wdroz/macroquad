@@ -103,6 +103,13 @@ impl TriangleMesh {
         }
         let p = wide(sphere.center);
         let r2 = (sphere.radius as f64).powi(2);
+        if self.triangles.len() > 1 {
+            let bounds = self.bounds.as_ref().unwrap();
+            let closest_bound = p.clamp(wide(bounds.min), wide(bounds.max));
+            if p.distance_squared(closest_bound) > r2 {
+                return false;
+            }
+        }
         self.triangles
             .iter()
             .zip(&self.triangle_bounds)
