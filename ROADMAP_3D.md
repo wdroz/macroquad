@@ -62,6 +62,17 @@ comparison or a game-FPS claim. Counters remain N=5, M=0, D=2; the scheduled fix
 and implementation queue are unchanged. Local evidence is in
 `experiments/macroquad-coffee-break/artifacts/performance-oct23/validation.json`.
 
+The subsequent user-requested [animation, skinning and grid-update pass](benchmarks/history/2026-10-23-followup/README.md)
+removes temporary transform vectors, redundant joint inversions/normal work and
+grid entry/membership churn. Its unchanged 14-case CPU suite measures 25.92% less
+time for rebuilds, 21.49% for animation samples and 12.39% for position-only
+skinning, with no regression flag. The 8.16% normals decrease remains within its
+noise guard. Unchanged scan/query timings also shift; their cause and the earlier
+control regression remain unresolved. Exact output checksums match; six new
+regressions and all eleven validation steps pass. Engine commit `6ae238d` and
+the linked Markdown/JSON history preserve the change and evidence. This is CPU
+maintenance with no game-FPS claim or deployment. Counters remain N=5, M=0, D=2.
+
 ## Priorities
 
 Read top to bottom across all tracks. The unchecked items in **Upcoming queue** are the only implementation queue. Completed follow-ups and foundation specifications below remain checked and retain their original order. Each upcoming item is one reviewable enhancement; apply the round counters before selecting it.

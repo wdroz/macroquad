@@ -1,7 +1,10 @@
 # Performance history
 
 The [recorded runs](../benchmarks/history/README.md) include the first baseline,
-bounded grid optimization, rejected candidate and unresolved control slowdown.
+bounded grid optimization, rejected candidate and unresolved control slowdown,
+and the [animation, skinning and grid-update follow-up](../benchmarks/history/2026-10-23-followup/README.md).
+Each report stores the benchmark table in Markdown alongside immutable JSON
+measurements, source patches and the dependency lockfile.
 
 The fork's CPU benchmark is a reproducible measurement lane for collision math,
 uniform-grid queries and rebuilds, animation sampling, and glTF skin deformation.
