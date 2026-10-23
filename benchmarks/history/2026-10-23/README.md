@@ -68,7 +68,8 @@ CPU microbenchmarks only; these measurements do not establish frame time, GPU th
   configuration, raw samples, output checksums and distributions. The full local
   archives/logs remain in `experiments/macroquad-coffee-break/artifacts/performance-oct23/runs/`.
 - `dependencies.lock` preserves the exact Cargo lockfile. Each `.engine.patch`
-  preserves that candidate's grid change against the untouched original engine.
+  preserves that candidate's grid change against the untouched original engine,
+  with line endings normalized for review (exact bytes remain in `source.zip`).
   The harness and runner are committed alongside this history; full `source.zip`
   archives are retained locally for exact working-tree recovery.
 - The initial HashSet trial improved dense queries but regressed ordinary queries
