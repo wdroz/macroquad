@@ -47,6 +47,10 @@ macroquad-tiled = { path = "./tiled" }
 macroquad-profiler = { path = "./profiler" }
 macroquad-platformer = { path = "./physics-platformer" }
 
+[[bench]]
+name = "fork_performance"
+harness = false
+
 # workaround to fix the examples
 # this allows to use macroquad-particles in examples without two versions of macroquad
 [patch.crates-io]

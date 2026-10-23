@@ -16,13 +16,23 @@ struct CellRange {
 
 impl CellRange {
     fn visit(self, mut visit: impl FnMut(Cell)) {
+        self.visit_until(|cell| {
+            visit(cell);
+            true
+        });
+    }
+
+    fn visit_until(self, mut visit: impl FnMut(Cell) -> bool) -> bool {
         for x in self.min[0]..=self.max[0] {
             for y in self.min[1]..=self.max[1] {
                 for z in self.min[2]..=self.max[2] {
-                    visit([x, y, z]);
+                    if !visit([x, y, z]) {
+                        return false;
+                    }
                 }
             }
         }
+        true
     }
 }
 
@@ -242,23 +252,32 @@ impl UniformGrid {
     }
 
     fn query(&self, range: Option<CellRange>, intersects: impl Fn(&Aabb) -> bool) -> Vec<u32> {
-        if let Some(range) = range {
-            let mut candidates = self.fallback.clone();
-            range.visit(|cell| {
+        // Once collected cell memberships would reach the entry count, scan
+        // the bounds directly. This keeps candidate memory O(entries), even
+        // when every box spans thousands of query cells.
+        let budget = self.entries.len();
+        if let Some(range) = range.filter(|_| self.fallback.len() < budget) {
+            let mut candidates: Vec<u32> = self.fallback.iter().copied().collect();
+            let complete = range.visit_until(|cell| {
                 if let Some(indices) = self.cells.get(&cell) {
-                    candidates.extend(indices);
+                    if indices.len() >= budget - candidates.len() {
+                        return false;
+                    }
+                    candidates.extend_from_slice(indices);
                 }
+                true
             });
-            candidates
-                .into_iter()
-                .filter(|index| intersects(&self.entries[index].bounds))
-                .collect()
-        } else {
-            self.entries
-                .iter()
-                .filter_map(|(&index, entry)| intersects(&entry.bounds).then_some(index))
-                .collect()
+            if complete {
+                candidates.sort_unstable();
+                candidates.dedup();
+                candidates.retain(|index| intersects(&self.entries[index].bounds));
+                return candidates;
+            }
         }
+        self.entries
+            .iter()
+            .filter_map(|(&index, entry)| intersects(&entry.bounds).then_some(index))
+            .collect()
     }
 
     fn bounds_cells(&self, bounds: &Aabb) -> Option<CellRange> {
@@ -296,7 +315,12 @@ pub(super) fn valid_bounds(bounds: &Aabb) -> bool {
     bounds.min.is_finite() && bounds.max.is_finite() && bounds.min.cmple(bounds.max).all()
 }
 
-pub(super) fn ray_meets_bounds(bounds: &Aabb, origin: [f64; 3], direction: [f64; 3], max_t: f64) -> bool {
+pub(super) fn ray_meets_bounds(
+    bounds: &Aabb,
+    origin: [f64; 3],
+    direction: [f64; 3],
+    max_t: f64,
+) -> bool {
     let min = bounds.min.to_array();
     let max = bounds.max.to_array();
     let mut enter = 0.0_f64;

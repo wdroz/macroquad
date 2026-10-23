@@ -1,0 +1,74 @@
+{
+  "baseline_run_id": "20261023T114728.856427Z-baseline-control-d831acf2",
+  "benchmarks": [
+    {
+      "baseline": {
+        "count": 27,
+        "iqr_ns": 33.633697499999926,
+        "mad_ns": 14.610656999999946,
+        "max_ns": 2040.5979,
+        "mean_ns": 1979.7555722962964,
+        "median_ns": 1982.637451,
+        "min_ns": 1938.215881,
+        "p95_ns": 2028.6519957,
+        "relative_mad_percent": 0.736930344608927,
+        "stdev_ns": 27.65558208992144
+      },
+      "benchmark": "grid.sparse_full_scan",
+      "candidate": {
+        "count": 27,
+        "iqr_ns": 47.75546249999934,
+        "mad_ns": 27.25854500000014,
+        "max_ns": 2254.125671,
+        "mean_ns": 2207.797302259259,
+        "median_ns": 2203.30896,
+        "min_ns": 2156.164124,
+        "p95_ns": 2242.9199771,
+        "relative_mad_percent": 1.2371639881135936,
+        "stdev_ns": 27.935527336612836
+      },
+      "effective_threshold_percent": 5.0,
+      "median_change_percent": 11.13019976943832,
+      "noise_percent": 1.2371639881135936,
+      "p95_change_percent": 10.562086639510838,
+      "status": "regression"
+    },
+    {
+      "baseline": {
+        "count": 27,
+        "iqr_ns": 36.24154650000037,
+        "mad_ns": 15.37298600000031,
+        "max_ns": 2312.65741,
+        "mean_ns": 2253.423461888889,
+        "median_ns": 2257.718933,
+        "min_ns": 2207.650635,
+        "p95_ns": 2277.8872131000003,
+        "relative_mad_percent": 0.6809078745498702,
+        "stdev_ns": 26.128588001417445
+      },
+      "benchmark": "grid.dense_full_scan",
+      "candidate": {
+        "count": 27,
+        "iqr_ns": 45.45022549999976,
+        "mad_ns": 19.643615999999838,
+        "max_ns": 2405.085999,
+        "mean_ns": 2349.3434062962965,
+        "median_ns": 2340.4552,
+        "min_ns": 2308.976074,
+        "p95_ns": 2404.0605100999996,
+        "relative_mad_percent": 0.8393074988147536,
+        "stdev_ns": 31.93447501494663
+      },
+      "effective_threshold_percent": 5.0,
+      "median_change_percent": 3.664595525629122,
+      "noise_percent": 1.6365268156660597,
+      "p95_change_percent": 5.53904935566536,
+      "status": "within_noise"
+    }
+  ],
+  "candidate_run_id": "20261023T114640.355135Z-optimized-control-0ebfaae8",
+  "has_regression": true,
+  "noise_multiplier": 3.0,
+  "schema_version": 1,
+  "threshold_percent": 5.0
+}

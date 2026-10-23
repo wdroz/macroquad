@@ -1,0 +1,34 @@
+--- a/src/math/uniform_grid.rs
++++ b/src/math/uniform_grid.rs
+@@ -1,6 +1,6 @@
+ //! A caller-indexed, world-space uniform grid.
+ 
+-use std::collections::{BTreeMap, BTreeSet, HashMap};
++use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+ 
+ use super::{Aabb, Ray};
+ 
+@@ -243,16 +243,20 @@
+ 
+     fn query(&self, range: Option<CellRange>, intersects: impl Fn(&Aabb) -> bool) -> Vec<u32> {
+         if let Some(range) = range {
+-            let mut candidates = self.fallback.clone();
++            // Deduplicate while collecting, so boxes spanning many cells use
++            // memory proportional to distinct candidates, not cell memberships.
++            let mut candidates: HashSet<u32> = self.fallback.iter().copied().collect();
+             range.visit(|cell| {
+                 if let Some(indices) = self.cells.get(&cell) {
+                     candidates.extend(indices);
+                 }
+             });
+-            candidates
++            let mut result: Vec<_> = candidates
+                 .into_iter()
+                 .filter(|index| intersects(&self.entries[index].bounds))
+-                .collect()
++                .collect();
++            result.sort_unstable();
++            result
+         } else {
+             self.entries
+                 .iter()

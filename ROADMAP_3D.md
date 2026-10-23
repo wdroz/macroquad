@@ -8,6 +8,8 @@ Next round: normal
 
 Source of truth for the fork experiment and its unattended enhancement rounds. Make small 3D and 2D games easier to build with macroquad, including menus, HUDs and tools. Keep a thin, beginner-friendly API over the existing renderer and `glam`, with reusable engine features rather than game-specific behavior.
 
+Performance is part of this goal: maintain reproducible benchmarks and an append-only history that connects measurements to exact source, workloads, dependencies, toolchains and machines. Establish a baseline before optimization, measure the same workloads afterwards, and preserve evidence of improvements, regressions and inconclusive results. Correctness tests and resource counters alone do not establish performance.
+
 The filename stays `ROADMAP_3D.md` so existing prompts and automation keep working. Completed specifications, dated game pain points and the full round log through the AABB/capsule sweep are preserved in [roadmap history](docs/roadmap-history.md). The unchecked list under **Priorities** is the only implementation queue.
 
 ## Current state
@@ -37,6 +39,28 @@ A user-requested roadmap cleanup outside this cycle does not consume a round or 
 - Verify engine rounds on the VM with `cargo build`, `cargo test`, `cargo clippy`, and `cargo build --example <name>` for each new example, including affected optional features. Use headless tests for pure logic and small native/WebGL fixtures for rendering/input changes. State untested platforms and distinguish upload/allocation counts from measured performance. No new CI or GitHub Actions. Push round commits straight to `master`; never force-push.
 - Keep test/example assets small, original and self-contained. Exploratory game-round assets and Coffee Break sources/assets stay outside this fork. Check queued resource lifetime, alpha compositing and state restoration when touching UI or 2D rendering.
 - A documentation-only maintenance edit needs link, queue, counter and diff checks; it does not require rebuilding or deploying the game.
+
+### Performance evidence for every round
+
+- Follow [the performance guide](docs/performance.md). For an engine behavior change, run the maintained release CPU suite before and after the change on the same otherwise idle machine, with identical features, toolchain, dependencies and benchmark settings. Preserve raw repeated samples and the comparison together with the round evidence; commit the compact run records under `benchmarks/history/` so the history survives local artifact cleanup.
+- Use the runner's source manifest and hashes, Git revision and dirty patch to identify the actual measured code. A Git revision alone is insufficient for uncommitted changes. Retain the exact lockfile and benchmark inputs. Never overwrite a previous result or silently rebaseline after a regression.
+- Compare only compatible workloads, harness, machine/backend, toolchain and build settings. When these change, preserve the old series, establish a named new baseline and explain the discontinuity. Keep medians, tail samples and dispersion; investigate repeatable regressions above the configured threshold. Report noisy results as inconclusive rather than claiming a speedup from one sample.
+- Extend the suite when new hot paths land. CPU timings cover math, spatial queries and glTF computation; they are not frame rate, GPU time, browser latency or memory measurements. Rendering/input/loading changes additionally need a fixed native/WebGL scenario with recorded viewport, DPR, backend, pacing, frame-time distribution and memory scope. Keep hardware and software renderers in separate series and state platforms not measured.
+- Planning/documentation-only rounds may cite unchanged measured source and the latest compatible run without rerunning timings. Fixer/game rounds review the available trend and promote observed bottlenecks into the existing queue. Record benchmark result paths, compatibility, numerical changes and remaining gaps in each applicable round log. This requirement does not change round counters, add CI, or authorize deployment.
+
+### Performance maintenance — 2026-10-23
+
+User-requested work outside the scheduled cycle adds 14 deterministic CPU workloads,
+immutable source/environment/sample records, strict compatible comparisons and
+versioned [performance history](benchmarks/history/2026-10-23/README.md). The measured
+bounded grid candidate collection preserves query results while improving sparse,
+dense and heavily overlapping workloads. A HashSet trial was rejected for ordinary
+query regressions. An unchanged full-scan control remains about 11% slower, including
+isolated diagnostics; its cause is unresolved and its regression flag is preserved.
+All engine/tooling validation passes, but this is not an all-green performance
+comparison or a game-FPS claim. Counters remain N=5, M=0, D=2; the scheduled fixer
+and implementation queue are unchanged. Local evidence is in
+`experiments/macroquad-coffee-break/artifacts/performance-oct23/validation.json`.
 
 ## Priorities
 

@@ -9,6 +9,8 @@
 
 The [fork roadmap](ROADMAP_3D.md) covers 3D, UI and 2D work in one ordered queue.
 Completed milestones and round evidence are in [roadmap history](docs/roadmap-history.md).
+Reproducible CPU benchmarks and performance history are described in the
+[performance guide](docs/performance.md).
 The [UI and 2D guide](docs/ui-2d-guide.md) covers the current widgets, logical
 coordinates, `Camera2D`, sprite regions and caller-timed sprite animation.
 
