@@ -8,6 +8,9 @@ measurements, source patches and the dependency lockfile.
 
 The fork's CPU benchmark is a reproducible measurement lane for collision math,
 uniform-grid queries and rebuilds, animation sampling, and glTF skin deformation.
+The `macroquad-cpu-v2` suite additionally covers small-scene wide grid queries,
+same-cell updates, triangle surfaces, large animation clips, morphing and pose
+updates. It starts a new measurement series; v1 and v2 are not directly comparable.
 It measures CPU work in nanoseconds per operation. It does not measure GPU time,
 rendering throughput, frame pacing, or the complete game's FPS. These require
 separate future render and end-to-end lanes with their own scene and backend
@@ -72,6 +75,8 @@ contains:
 
 - `run.json`: source identity, environment, workload identities, every raw sample
   grouped by execution, median, p95, mean, standard deviation, MAD, and IQR.
+- `run.md`: an automatically saved Markdown table for every complete run,
+  including baselines without a comparison; links to its full JSON evidence.
 - `source.zip`: exact build-relevant sources, benchmark harness, manifests, and
   fixtures, including untracked files. The `run.json` file hashes are the index.
   All crate `src/` files and literal Rust `include!`, `include_str!`, and

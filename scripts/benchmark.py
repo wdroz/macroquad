@@ -393,6 +393,45 @@ def comparison_text(comparison):
     return "\n".join(lines) + "\n"
 
 
+def markdown_value(value):
+    return str(value).replace("\\", "\\\\").replace("|", "\\|").replace("`", "\\`").replace("\r", " ").replace("\n", " ").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def run_text(artifact):
+    """Human-readable companion; raw samples and provenance remain in run.json."""
+    options = artifact["options"]
+    host = artifact["host"]
+    lines = [
+        "# CPU benchmark run", "",
+        f"Run: {markdown_value(artifact['run_id'])}", "",
+        f"Source commit: {markdown_value(artifact['git']['head'])}", "",
+        f"Exact source SHA-256: {artifact['source']['sha256']}", "",
+        f"Host: {markdown_value(host['hostname'])}; {markdown_value(host['system'])} "
+        f"{markdown_value(host['release'])}; {markdown_value(', '.join(host['cpu_models']))}.", "",
+        f"Features: {markdown_value(', '.join(options['features']) or '(default)')}; "
+        f"target: {markdown_value(options['target'])}; default features disabled: {options['no_default_features']}.", "",
+        f"Sampling: {options['repeats']} process executions, {options['samples']} samples each, "
+        f"{options['warmup_ms']} ms warmup, {options['sample_ms']} ms target batch duration.", "",
+        "| Benchmark | Median ns/op | p95 ns/op | MAD | Samples |", "|---|---:|---:|---:|---:|",
+    ]
+    for item in artifact["benchmarks"]:
+        repeat_medians(item)  # Verify originals before presenting derived summaries.
+        stats = summarize(item["samples_ns"])
+        lines.append(f"| {markdown_value(item['benchmark'])} | {stats['median_ns']:.2f} | {stats['p95_ns']:.2f} | {stats['relative_mad_percent']:.2f}% | {stats['count']} |")
+    lines += ["", "These are batch-average CPU timings; p95 is across those averages. "
+              "They do not measure individual-operation tail latency, GPU time, memory use or game FPS.", "",
+              "[Raw samples and complete provenance](run.json) include fixture/output checksums, "
+              "compiler, affinity, build options and exact source-file hashes. "
+              "The source archive and lockfile accompany this report. Compare only compatible runs."]
+    return "\n".join(lines) + "\n"
+
+
+def write_run_markdown(directory, artifact):
+    report = run_text(artifact)
+    with (Path(directory) / "run.md").open("x", encoding="utf-8", newline="\n") as stream:
+        stream.write(report)
+
+
 def captured_command(argv, directory, name, timeout):
     start = time.monotonic()
     with (directory / f"{name}.stdout.log").open("xb") as stdout, (directory / f"{name}.stderr.log").open("xb") as stderr:
@@ -527,6 +566,7 @@ def run_with_compiler(args, compiler):
         if not (directory / "run.json").exists():
             write_json(directory / "run.json", artifact)
         raise
+    write_run_markdown(directory, artifact)
     for item in artifact["benchmarks"]:
         stats = item["statistics"]
         print(f"{item['benchmark']}: median {stats['median_ns']:.2f} ns/op; p95 {stats['p95_ns']:.2f}; MAD {stats['relative_mad_percent']:.2f}%")

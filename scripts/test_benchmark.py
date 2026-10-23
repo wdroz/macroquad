@@ -266,6 +266,41 @@ class ProvenanceTests(unittest.TestCase):
         self.assertTrue((self.root / "slow.stderr.log").exists())
 
 
+class MarkdownReportTests(unittest.TestCase):
+    def record(self):
+        record = artifact((10, 20, 30))
+        record.update({
+            "options": {"features": ["gltf"], "target": "host", "no_default_features": False,
+                        "repeats": 2, "samples": 3, "warmup_ms": 75, "sample_ms": 30},
+            "host": {"hostname": "host|name", "system": "Linux", "release": "test", "cpu_models": ["CPU"]},
+            "git": {"head": "example-commit"},
+        })
+        return record
+
+    def test_summary_uses_original_samples_and_escapes_table_metadata(self):
+        record = self.record()
+        record["benchmarks"][0]["statistics"]["median_ns"] = 999
+        report = bench.run_text(record)
+        self.assertIn("| grid.sparse | 20.00 | 30.00 | 50.00% | 6 |", report)
+        self.assertIn("host\\|name", report)
+        self.assertIn("(run.json)", report)
+        self.assertIn("do not measure", report)
+        record["benchmarks"][0]["samples_ns"][0] = 99
+        with self.assertRaisesRegex(bench.BenchmarkError, "aggregate samples differ"):
+            bench.run_text(record)
+
+    def test_markdown_report_never_overwrites_existing_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            record = self.record()
+            bench.write_run_markdown(directory, record)
+            path = Path(directory) / "run.md"
+            original = path.read_bytes()
+            record["run_id"] = "different"
+            with self.assertRaises(FileExistsError):
+                bench.write_run_markdown(directory, record)
+            self.assertEqual(path.read_bytes(), original)
+
+
 class CompilerBindingTests(unittest.TestCase):
     def test_explicit_compiler_is_inherited_by_child_commands_and_restored(self):
         args = SimpleNamespace(rustc=sys.executable)

@@ -11,7 +11,15 @@ use std::{
 #[path = "support/animation_fixture.rs"]
 mod animation_fixture;
 
-const SUITE_VERSION: &str = "macroquad-cpu-v1";
+#[cfg(feature = "gltf")]
+#[path = "support/gltf_workloads.rs"]
+mod gltf_workloads;
+#[path = "support/grid_workloads.rs"]
+mod grid_workloads;
+#[path = "support/mesh_workloads.rs"]
+mod mesh_workloads;
+
+const SUITE_VERSION: &str = "macroquad-cpu-v2";
 
 struct Settings {
     samples: usize,
@@ -738,10 +746,13 @@ fn gltf_cases(settings: &Settings) -> usize {
 fn main() {
     let settings = Settings::parse();
     println!("{{\"event\":\"suite\",\"schema_version\":1,\"suite_version\":\"{SUITE_VERSION}\",\"backend\":\"cpu\",\"gltf\":{},\"samples\":{},\"warmup_ms\":{},\"sample_ms\":{}}}", cfg!(feature = "gltf"), settings.samples, settings.warmup_ms, settings.sample_ms);
-    let mut selected = math_cases(&settings) + grid_cases(&settings);
+    let mut selected = math_cases(&settings)
+        + grid_cases(&settings)
+        + grid_workloads::cases(&settings)
+        + mesh_workloads::cases(&settings);
     #[cfg(feature = "gltf")]
     {
-        selected += gltf_cases(&settings);
+        selected += gltf_cases(&settings) + gltf_workloads::cases(&settings);
     }
     #[cfg(not(feature = "gltf"))]
     {
